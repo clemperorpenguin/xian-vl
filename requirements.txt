@@ -1,0 +1,7 @@
+PyQt6
+torch
+vllm>=0.11
+pynvml
+Pillow
+imagehash
+lmdb
