@@ -28,6 +28,11 @@ Xian is a PyQt6-based translation overlay designed for Linux Wayland (specifical
     - L0 Cache: dHash perceptual caching to avoid re-processing identical frames
     - L1 Cache: Persistent LMDB storage for cross-session translation reuse
     - Significant performance improvement for static or slowly-changing content
+- **Context-Aware Visual Reconstruction**:
+    - Automatic text style detection (font, size, color, orientation)
+    - Background inpainting and reconstruction
+    - Style-matched text rendering for seamless integration
+    - Preserves original text appearance while translating content
 - **Flexible Hardware Support**:
     - Qwen3-VL-8B for high-end GPUs (24GB+ VRAM)
     - Qwen3-VL-4B for mid-range GPUs (12-24GB VRAM)
