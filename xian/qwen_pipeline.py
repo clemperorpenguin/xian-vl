@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class VLConfig:
     """Configuration for Vision-Language processing"""
-    model_name: str = "Qwen3-VL-8B-Thinking"  # Default model
-    model_size: str = "auto"  # "auto", "4b", "8b" for Qwen models, ignored for TranslateGemma
-    thinking_mode: bool = False
+    model_name: str = "Qwen3.5-9B (Auto-select)"  # Default model
+    model_size: str = "auto"  # "auto", "4b", "9b" for Qwen models, ignored for TranslateGemma
+    thinking_mode: bool = True  # Thinking mode enabled by default for Qwen3.5
     max_tokens: int = 1024
     temperature: float = 0.1
     gpu_memory_utilization: float = 0.85
@@ -90,8 +90,8 @@ class VLProcessor:
             if "12b" in model_name:
                 if vram_gb >= 20:
                     return "google/translategemma-12b-it"
-                elif vram_gb >= 12 and "4b" in model_name:
-                    # Fallback to 4B if specified in model name
+                elif vram_gb >= 12:
+                    # Fallback to 4B if VRAM insufficient
                     return "google/translategemma-4b-it"
                 else:
                     # Even if VRAM is low, try to use the 4B model as a last resort
@@ -114,18 +114,30 @@ class VLProcessor:
                         f"Minimum requirement is approximately 10GB."
                     )
         else:
-            # Handle Qwen3-VL models
-            if self.config.model_size == "8b":
-                return "Qwen/Qwen3-VL-8B-Thinking" if self.config.thinking_mode else "Qwen/Qwen3-VL-8B-Instruct"
+            # Handle Qwen3.5 models
+            if self.config.model_size == "9b":
+                if vram_gb >= 18:
+                    return "Qwen/Qwen3.5-9B"
+                else:
+                    raise RuntimeError(
+                        f"Not enough VRAM ({vram_gb}GB) for Qwen3.5-9B. "
+                        f"Minimum requirement is approximately 18GB."
+                    )
             elif self.config.model_size == "4b":
-                return "Qwen/Qwen3-VL-4B-Thinking" if self.config.thinking_mode else "Qwen/Qwen3-VL-4B-Instruct"
+                if vram_gb >= 10:
+                    return "Qwen/Qwen3.5-4B"
+                else:
+                    raise RuntimeError(
+                        f"Not enough VRAM ({vram_gb}GB) for Qwen3.5-4B. "
+                        f"Minimum requirement is approximately 10GB."
+                    )
             else:  # auto
-                if vram_gb >= 24:
-                    model_id = "Qwen/Qwen3-VL-8B-Thinking" if self.config.thinking_mode else "Qwen/Qwen3-VL-8B-Instruct"
-                    logger.info(f"Auto-selected 8B model based on {vram_gb}GB VRAM")
+                if vram_gb >= 20:
+                    model_id = "Qwen/Qwen3.5-9B"
+                    logger.info(f"Auto-selected Qwen3.5-9B based on {vram_gb}GB VRAM")
                 elif vram_gb >= 12:
-                    model_id = "Qwen/Qwen3-VL-4B-Thinking" if self.config.thinking_mode else "Qwen/Qwen3-VL-4B-Instruct"
-                    logger.info(f"Auto-selected 4B model based on {vram_gb}GB VRAM")
+                    model_id = "Qwen/Qwen3.5-4B"
+                    logger.info(f"Auto-selected Qwen3.5-4B based on {vram_gb}GB VRAM")
                 elif vram_gb >= 10:
                     # Fallback to TranslateGemma-4B if Qwen models don't fit
                     logger.info(f"Fallback to TranslateGemma-4B due to limited VRAM ({vram_gb}GB)")
@@ -144,7 +156,7 @@ class VLProcessor:
         
         # If no GPU detected, warn user but allow proceeding
         if vram_gb == 0:
-            logger.warning("No GPU detected. Qwen3-VL will run on CPU, which will be slow.")
+            logger.warning("No GPU detected. Vision-language model will run on CPU, which will be slow.")
             # For CPU, we'll use a different approach or warn
             # For now, let's assume we have a GPU or the user knows the implications
         
@@ -152,14 +164,23 @@ class VLProcessor:
         
         logger.info(f"Initializing vision-language engine with model: {self.model_id}")
         
-        engine_args = AsyncEngineArgs(
-            model=self.model_id,
-            trust_remote_code=True,
-            max_model_len=8192,
-            gpu_memory_utilization=self.config.gpu_memory_utilization,
-            dtype=self.config.dtype,
-            enforce_eager=True,  # Avoids CUDA graph capture overhead for single images
-        )
+        # Prepare engine args with thinking mode toggle for Qwen3.5
+        engine_kwargs = {
+            "model": self.model_id,
+            "trust_remote_code": True,
+            "max_model_len": 8192,
+            "gpu_memory_utilization": self.config.gpu_memory_utilization,
+            "dtype": self.config.dtype,
+            "enforce_eager": True,  # Avoids CUDA graph capture overhead for single images
+        }
+        
+        # Add thinking mode toggle for Qwen3.5 models
+        if not self.is_translategemma:
+            engine_kwargs["chat_template_kwargs"] = {
+                "enable_thinking": self.config.thinking_mode
+            }
+        
+        engine_args = AsyncEngineArgs(**engine_kwargs)
         
         self.engine = await AsyncLLMEngine.from_engine_args(engine_args)
         logger.info("Vision-language engine initialized successfully")
@@ -167,7 +188,7 @@ class VLProcessor:
     def preprocess_image(self, image_data: bytes) -> Image.Image:
         """
         Preprocess image for vision-language model input.
-        For Qwen3-VL: max dimension 1344px maintaining aspect ratio.
+        For Qwen3.5: max dimension 1024px maintaining aspect ratio.
         For TranslateGemma: normalize to 896x896 as specified.
         """
         image = Image.open(io.BytesIO(image_data))
@@ -176,8 +197,8 @@ class VLProcessor:
             # For TranslateGemma, normalize to 896x896 as specified
             image = image.resize((896, 896), Image.Resampling.LANCZOS)
         else:
-            # For Qwen3-VL, maintain aspect ratio, max dimension 1344px
-            max_dimension = 1344
+            # For Qwen3.5, maintain aspect ratio, max dimension 1024px
+            max_dimension = 1024
             width, height = image.size
             
             if width > max_dimension or height > max_dimension:
@@ -211,30 +232,8 @@ Rules:
 - Ignore decorative/artistic text without semantic meaning
 - If text is ambiguous due to image quality, indicate uncertainty"""
         else:
-            # Qwen3-VL-specific prompt
-            if thinking_mode:
-                prompt = f"""[OCR][/OCR][Translate]Extract all visible text from this image in its original language, then provide a natural translation to {target_lang}. Think step by step:
-
-1. First, carefully examine the image and identify all text elements
-2. Extract the original text with approximate positioning
-3. Then translate each element appropriately to {target_lang}
-
-Format your response as:
-
-ORIGINAL TEXT:
-[line-by-line extracted text with approximate positioning]
-
-TRANSLATION:
-[fluent translation preserving context and layout intent]
-
-Rules:
-- Preserve line breaks and approximate spatial grouping
-- For UI elements/buttons: translate naturally while preserving function
-- For proper nouns/place names: keep original unless commonly localized
-- Ignore decorative/artistic text without semantic meaning
-- If text is ambiguous due to image quality, indicate uncertainty[/Translate]"""
-            else:
-                prompt = f"""Extract all visible text from this image in its original language, then provide a natural translation to {target_lang}. Format your response as:
+            # Qwen3.5-specific prompt (thinking handled by chat_template_kwargs)
+            prompt = f"""Extract all visible text from this image in its original language, then provide a natural translation to {target_lang}. Format your response as:
 
 ORIGINAL TEXT:
 [line-by-line extracted text with approximate positioning]
@@ -308,7 +307,7 @@ Rules:
                             multi_modal_data=inputs.get("multi_modal_data")
                         )
                     else:
-                        # For Qwen3-VL
+                        # For Qwen3.5
                         inputs = {
                             "prompt": prompt,
                             "multi_modal_data": {"image": image},

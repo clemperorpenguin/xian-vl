@@ -339,15 +339,13 @@ class MainWindow(QMainWindow):
 
         self.api_model_edit = QComboBox()
         self.api_model_edit.setEditable(True)
-        # Suggested defaults (editable) - Updated for both Qwen3-VL and TranslateGemma
-        self.api_model_edit.addItem("Qwen3-VL-8B-Thinking (Auto-select)")
-        self.api_model_edit.addItem("Qwen3-VL-4B-Thinking")
-        self.api_model_edit.addItem("Qwen3-VL-8B-Thinking")
-        self.api_model_edit.addItem("Qwen3-VL-4B-Instruct")
-        self.api_model_edit.addItem("Qwen3-VL-8B-Instruct")
+        # Suggested defaults (editable) - Updated for Qwen3.5 and TranslateGemma
+        self.api_model_edit.addItem("Qwen3.5-9B (Auto-select)")
+        self.api_model_edit.addItem("Qwen3.5-9B")
+        self.api_model_edit.addItem("Qwen3.5-4B")
         self.api_model_edit.addItem("TranslateGemma-12B (High Quality)")
         self.api_model_edit.addItem("TranslateGemma-4B (Lower Resource)")
-        self.api_model_edit.setToolTip("Vision-Language model (Qwen3-VL or TranslateGemma)")
+        self.api_model_edit.setToolTip("Vision-Language model (Qwen3.5 or TranslateGemma)")
         self.api_status_label = QLabel("Checking...")
 
         translator_layout.addRow("Model:", self.api_model_edit)
@@ -355,8 +353,8 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(translator_group)
 
-        # Qwen3-VL specific settings
-        qwen_group = QGroupBox("Qwen3-VL Settings")
+        # Qwen3.5 specific settings
+        qwen_group = QGroupBox("Qwen3.5 Settings")
         qwen_layout = QFormLayout(qwen_group)
 
         # Thinking mode toggle
@@ -458,7 +456,7 @@ class MainWindow(QMainWindow):
         self.redaction_margin_spin.valueChanged.connect(self.save_settings)
         self.minimize_on_start_checkbox.toggled.connect(self.save_settings)
         
-        # Connect Qwen3-VL specific settings
+        # Connect Qwen3.5 specific settings
         self.thinking_mode_checkbox.toggled.connect(self._on_thinking_mode_changed)
         self.max_tokens_slider.valueChanged.connect(self._on_max_tokens_changed)
         self.model_size_combo.currentTextChanged.connect(self._on_model_size_changed)
@@ -785,19 +783,19 @@ class MainWindow(QMainWindow):
         # Set the model in the processor based on the selection
         self.qwen_processor.config.model_name = model_selection
         
-        # Set model size for Qwen models, or mark as TranslateGemma
+        # Set model size for Qwen3.5 models
         if "translategemma" in model_selection.lower():
             # For TranslateGemma, we don't use model_size, just the model name
             pass
+        elif "9b" in model_selection.lower():
+            self.qwen_processor.config.model_size = "9b"
         elif "4b" in model_selection.lower():
             self.qwen_processor.config.model_size = "4b"
-        elif "8b" in model_selection.lower():
-            self.qwen_processor.config.model_size = "8b"
         else:
             self.qwen_processor.config.model_size = "auto"
 
-        # Update thinking mode based on settings
-        self.qwen_processor.config.thinking_mode = "thinking" in model_selection.lower()
+        # Thinking mode is now controlled by checkbox, not model name
+        # The thinking mode checkbox state is already synced via _on_thinking_mode_changed
 
         self._pending_translation_start = {
             "mode": mode,
@@ -812,7 +810,7 @@ class MainWindow(QMainWindow):
         # Warmup model before starting OCR/translation loop
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(False)
-        self.header_status.setText("Loading Qwen3-VL model...")
+        self.header_status.setText("Loading Qwen3.5 model...")
         self.translation_overlay.control_panel.status_label.setText("Loading model...")
         self.model_warmup_worker.start()
 
@@ -823,7 +821,7 @@ class MainWindow(QMainWindow):
             self.stop_button.setEnabled(False)
             self.translation_overlay.control_panel.set_running(False)
             self.tray_toggle_action.setText("Start Translation")
-            detailed = error or "Qwen3-VL model failed to load"
+            detailed = error or "Qwen3.5 model failed to load"
             msg = f"Model load failed: {detailed}" if detailed else "Model load failed"
             self.header_status.setText(msg)
             self.translation_overlay.control_panel.status_label.setText("Load failed")
@@ -903,7 +901,7 @@ class MainWindow(QMainWindow):
 
     def load_settings(self):
         """Load application settings"""
-        self.api_model_edit.setCurrentText(self.settings.value("api_model", "Qwen3-VL-8B-Thinking (Auto-select)"))
+        self.api_model_edit.setCurrentText(self.settings.value("api_model", "Qwen3.5-9B (Auto-select)"))
         self.source_lang_combo.setCurrentText(self.settings.value("source_lang", "auto"))
         self.target_lang_combo.setCurrentText(self.settings.value("target_lang", "English"))
         self.interval_spinbox.setValue(int(self.settings.value("interval", 2000)))
@@ -912,7 +910,7 @@ class MainWindow(QMainWindow):
         self.debug_mode_checkbox.setChecked(self.settings.value("debug_mode", "false") == "true")
         self.minimize_on_start_checkbox.setChecked(self.settings.value("minimize_on_start", "true") == "true")
 
-        # Load Qwen3-VL specific settings
+        # Load Qwen3.5 specific settings
         self.thinking_mode_checkbox.setChecked(self.settings.value("thinking_mode", "true") == "true")
         self.max_tokens_slider.setValue(int(self.settings.value("max_tokens", 1024)))
         self.model_size_combo.setCurrentText(self.settings.value("model_size_override", "Auto-detect"))
@@ -947,19 +945,19 @@ class MainWindow(QMainWindow):
         model_text = self.api_model_edit.currentText()
         self.qwen_processor.config.model_name = model_text
         
-        # Set model size for Qwen models, or mark as TranslateGemma
+        # Set model size for Qwen3.5 models
         if "translategemma" in model_text.lower():
             # For TranslateGemma, we don't use model_size, just the model name
             pass
+        elif "9b" in model_text.lower():
+            self.qwen_processor.config.model_size = "9b"
         elif "4b" in model_text.lower():
             self.qwen_processor.config.model_size = "4b"
-        elif "8b" in model_text.lower():
-            self.qwen_processor.config.model_size = "8b"
         else:
             self.qwen_processor.config.model_size = "auto"
 
         # Update thinking mode based on settings
-        self.qwen_processor.config.thinking_mode = "thinking" in model_text.lower() or self.thinking_mode_checkbox.isChecked()
+        self.qwen_processor.config.thinking_mode = self.thinking_mode_checkbox.isChecked()
         self.qwen_processor.config.max_tokens = self.max_tokens_slider.value()
 
         # Apply model size override if set
@@ -997,7 +995,7 @@ class MainWindow(QMainWindow):
             mode_str = "region_select"
         self.settings.setValue("translation_mode", mode_str)
 
-        # Save Qwen3-VL specific settings
+        # Save Qwen3.5 specific settings
         self.settings.setValue("thinking_mode", "true" if self.thinking_mode_checkbox.isChecked() else "false")
         self.settings.setValue("max_tokens", self.max_tokens_slider.value())
         self.settings.setValue("model_size_override", self.model_size_combo.currentText())

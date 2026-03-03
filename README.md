@@ -17,13 +17,13 @@ Xian is a PyQt6-based translation overlay designed for Linux Wayland (specifical
     - **Region Selection**: Allows you to define specific areas of the screen for targeted translation.
 - **Click-Through Overlay**: The translation overlay is transparent to mouse input, allowing you to play games or browse websites uninterrupted.
 - **Unified Vision-Language Pipeline**:
-    - Supports both Qwen3-VL and TranslateGemma models with integrated OCR and translation in a single inference pass.
-    - Qwen3-VL supports 32 languages with robustness to blur, tilt, and low light conditions.
+    - Supports both Qwen3.5 and TranslateGemma models with integrated OCR and translation in a single inference pass.
+    - Qwen3.5 supports 32 languages with robustness to blur, tilt, and low light conditions.
     - TranslateGemma offers high-quality translation with optimized performance.
     - No separate OCR or translation models needed.
 - **Smart Model Selection**:
-    - Automatically detects available VRAM and selects appropriate model (Qwen3-VL or TranslateGemma).
-    - Option to enable "Thinking" mode for complex layouts.
+    - Automatically detects available VRAM and selects appropriate model (Qwen3.5 or TranslateGemma).
+    - Toggleable thinking mode for complex layouts (Qwen3.5 only).
 - **Advanced Caching System**:
     - L0 Cache: dHash perceptual caching to avoid re-processing identical frames
     - L1 Cache: Persistent LMDB storage for cross-session translation reuse
@@ -34,8 +34,8 @@ Xian is a PyQt6-based translation overlay designed for Linux Wayland (specifical
     - Style-matched text rendering for seamless integration
     - Preserves original text appearance while translating content
 - **Flexible Hardware Support**:
-    - Qwen3-VL-8B for high-end GPUs (24GB+ VRAM)
-    - Qwen3-VL-4B for mid-range GPUs (12-24GB VRAM)
+    - Qwen3.5-9B for high-end GPUs (20GB+ VRAM)
+    - Qwen3.5-4B for mid-range GPUs (12-20GB VRAM)
     - TranslateGemma-12B for high-quality translation (20GB+ VRAM)
     - TranslateGemma-4B as failover for lower-resource systems (10GB+ VRAM)
 - **Persistent Settings**:
@@ -91,13 +91,13 @@ Xian is a PyQt6-based translation overlay designed for Linux Wayland (specifical
 
 | GPU               | Recommended Model | Expected Latency |
 |-------------------|-------------------|------------------|
-| ≥24GB (4090/3090) | Qwen3-VL-8B       | ~600ms           |
+| ≥20GB (4090/3090) | Qwen3.5-9B        | ~500ms           |
+| 12-20GB (3060+)   | Qwen3.5-4B        | ~800ms           |
 | 20-24GB           | TranslateGemma-12B| ~700ms           |
-| 12-20GB (3060+)   | Qwen3-VL-4B       | ~900ms           |
 | 10-12GB           | TranslateGemma-4B | ~1200ms          |
 | <10GB             | Not supported*    | -                |
 
-*Models require at least 10GB VRAM for the smallest models. CPU inference is possible but extremely slow.
+*Models require at least 10GB VRAM. CPU inference is possible but extremely slow.
 
 ## Usage
 

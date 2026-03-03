@@ -1,4 +1,4 @@
-"""Qwen3-VL Translation Workers for handling translation tasks."""
+"""Vision-Language Translation Workers for handling translation tasks."""
 
 import time
 import logging
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class QwenTranslationWorker(QThread):
-    """Worker thread for handling translations using Qwen3-VL"""
+    """Worker thread for handling translations using vision-language models"""
 
     translation_ready = pyqtSignal(list, object)  # list of results, optional QRect of the updated area
     status_update = pyqtSignal(str)  # Status message for the UI
@@ -106,7 +106,7 @@ class QwenTranslationWorker(QThread):
             self.request_hide_overlay.emit()
 
             try:
-                # Use Qwen3-VL for all modes
+                # Use vision-language model for all modes
                 self._translate_with_qwen()
 
                 # Calculate remaining sleep time
@@ -127,7 +127,7 @@ class QwenTranslationWorker(QThread):
         logger.info("Qwen translation worker thread stopped")
 
     def _translate_with_qwen(self):
-        """Capture screen, perform OCR and translation with Qwen3-VL"""
+        """Capture screen, perform OCR and translation with vision-language model"""
         workflow_start = time.time()
 
         self.status_update.emit("Capturing screen...")
@@ -347,15 +347,15 @@ class QwenTranslatorStatusWorker(QThread):
         self.qwen_processor = qwen_processor
 
     def run(self):
-        # For Qwen3-VL, we can check if the engine is initialized
+        # For vision-language models, we can check if the engine is initialized
         # For now, just return True to indicate the processor is available
         is_available = True  # Placeholder - actual implementation would check if model is loaded
-        models = ["Qwen3-VL-4B", "Qwen3-VL-8B", "Qwen3-VL-4B-Thinking", "Qwen3-VL-8B-Thinking"]
+        models = ["Qwen3.5-4B", "Qwen3.5-9B", "TranslateGemma-4B", "TranslateGemma-12B"]
         self.status_changed.emit(is_available, models)
 
 
 class QwenModelWarmupWorker(QThread):
-    """Worker thread to initialize the Qwen3-VL model before translation starts."""
+    """Worker thread to initialize the vision-language model before translation starts."""
 
     warmup_finished = pyqtSignal(bool, str)
 
@@ -381,5 +381,5 @@ class QwenModelWarmupWorker(QThread):
                 
             self.warmup_finished.emit(ok, err)
         except Exception as e:
-            logger.error(f"Qwen3-VL model warmup error: {e}")
+            logger.error(f"Vision-language model warmup error: {e}")
             self.warmup_finished.emit(False, str(e))

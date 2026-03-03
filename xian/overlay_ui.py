@@ -177,11 +177,9 @@ class OverlayControlPanel(QWidget):
         # Model
         self.model_combo = QComboBox()
         self.model_combo.addItems([
-            "Qwen3-VL-8B-Thinking (Auto-select)",
-            "Qwen3-VL-4B-Thinking",
-            "Qwen3-VL-8B-Thinking",
-            "Qwen3-VL-4B-Instruct",
-            "Qwen3-VL-8B-Instruct",
+            "Qwen3.5-9B (Auto-select)",
+            "Qwen3.5-9B",
+            "Qwen3.5-4B",
             "TranslateGemma-12B (High Quality)",
             "TranslateGemma-4B (Lower Resource)",
         ])
@@ -278,7 +276,7 @@ class OverlayControlPanel(QWidget):
             "Full Screen" if s.value("translation_mode", "full_screen") == "full_screen" else "Region Selection")
         self.source_lang_combo.setCurrentText(s.value("source_lang", "auto"))
         self.target_lang_combo.setCurrentText(s.value("target_lang", "English"))
-        self.model_combo.setCurrentText(s.value("model_name", "Qwen3-VL-8B-Thinking (Auto-select)"))
+        self.model_combo.setCurrentText(s.value("model_name", "Qwen3.5-9B (Auto-select)"))
         self.interval_spin.setValue(int(s.value("interval", 2000)))
         self.opacity_slider.setValue(int(s.value("opacity", 80)))
         self.margin_spin.setValue(int(s.value("redaction_margin", 15)))
