@@ -2,7 +2,7 @@
 
 <img width="768" height="768" alt="xian" src="https://github.com/user-attachments/assets/7b9498fd-4786-481f-b2c9-e29632b2ec24" />
 
-Xian is a PyQt6-based translation overlay designed for Linux Wayland (specifically KDE Plasma). It uses Qwen3-VL Thinking models for unified OCR and translation to provide real-time translations of video games or websites directly on your screen.
+Xian is a PyQt6-based translation overlay designed for Linux Wayland (specifically KDE Plasma). It uses Qwen3.5 models for unified OCR and translation to provide real-time translations of video games or websites directly on your screen.
 
 ## Screenshots
 
