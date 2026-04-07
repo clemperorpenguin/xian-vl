@@ -7,6 +7,8 @@ from typing import Optional, Tuple
 from PyQt6.QtGui import QImage, QGuiApplication
 from PyQt6.QtCore import QBuffer, QIODevice, Qt, QRect
 
+from . import constants
+
 logger = logging.getLogger(__name__)
 
 def _check_screenshot_available():
@@ -235,21 +237,21 @@ class ScreenCapture:
 
     @staticmethod
     def preprocess_image(image_data: bytes) -> bytes:
-        """Enhance image for better vision-language model processing results"""
+        """Enhance image for better vision-language model processing results.
+
+        Returns the original image data (VLMs handle their own preprocessing).
+        Style detection requires full color information.
+        """
         image = QImage.fromData(image_data)
         if image.isNull():
             return image_data
 
-        # 1. Convert to Grayscale to simplify and improve contrast focus
-        image = image.convertToFormat(QImage.Format.Format_Grayscale8)
-
-        # 2. Simple contrast enhancement: Normalize
-        # We find the min/max pixel values and stretch the range
-        # Note: In a real app we might use something like histogram equalization,
-        # but for VLMs, clear grayscale with good contrast is often enough.
-
-        # This is a basic way to "normalize" using QImage if we don't want OpenCV
-        # For efficiency, we just return the grayscale image for now which already helps
+        # Convert to RGB32 to ensure full color information is available
+        # for style detection and VLM processing.
+        # Grayscale conversion is avoided because:
+        # 1. Style detection needs color for text/background color detection
+        # 2. Modern VLMs perform their own optimal preprocessing
+        image = image.convertToFormat(QImage.Format.Format_RGB32)
 
         buffer = QBuffer()
         buffer.open(QIODevice.OpenModeFlag.WriteOnly)
@@ -278,7 +280,7 @@ class ScreenCapture:
 
     @staticmethod
     def calculate_hash(image_input) -> str:
-        """Calculate a simple perceptual hash for change detection"""
+        """Calculate a simple perceptual hash for change detection."""
         if isinstance(image_input, bytes):
             image = QImage.fromData(image_input)
         else:
@@ -286,14 +288,15 @@ class ScreenCapture:
 
         if not image or image.isNull():
             return ""
-        
+
         # Downsample to a very small size to ignore minor noise/flicker
-        small = image.scaled(16, 16, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
+        size = constants.IMAGE_HASH_SIZE
+        small = image.scaled(size, size, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
         small = small.convertToFormat(QImage.Format.Format_Grayscale8)
-        
+
         bits = []
-        for y in range(16):
-            for x in range(16):
+        for y in range(size):
+            for x in range(size):
                 # Using a simple bitmask based on average pixel value
                 bits.append(str(small.pixelColor(x, y).red()))
         

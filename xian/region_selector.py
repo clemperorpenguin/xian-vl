@@ -2,8 +2,11 @@ from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import pyqtSignal, QRect, QPoint, Qt
 from PyQt6.QtGui import QMouseEvent, QPaintEvent, QKeyEvent, QGuiApplication, QPainter, QPen, QColor
 
+from . import constants
+
+
 class RegionSelector(QWidget):
-    """Widget for selecting screen regions"""
+    """Widget for selecting screen regions."""
 
     region_selected = pyqtSignal(QRect)
 
@@ -37,7 +40,7 @@ class RegionSelector(QWidget):
 
             # Calculate selection rectangle
             rect = QRect(self.start_pos, self.current_pos).normalized()
-            if rect.width() > 10 and rect.height() > 10:
+            if rect.width() > constants.REGION_MIN_SIZE and rect.height() > constants.REGION_MIN_SIZE:
                 self.region_selected.emit(rect)
 
             self.close()

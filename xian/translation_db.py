@@ -2,10 +2,12 @@
 
 import json
 import logging
-import pickle
-from typing import Optional, Dict, Any
+import shutil
+from typing import Optional, Dict, Any, List
 import lmdb
 import threading
+
+from . import constants
 
 logger = logging.getLogger(__name__)
 
@@ -14,16 +16,16 @@ class TranslationDB:
     
     def __init__(self, db_path: str = "./translation_cache.lmdb"):
         self.db_path = db_path
-        # Set map_size to 1GB initially, can grow as needed
+        # Set map_size from constants
         self.env = lmdb.open(
             self.db_path,
-            map_size=1024*1024*1024,  # 1GB
-            writemap=True,  # Use memory-mapped writes for better performance
-            metasync=False,  # Disable meta sync for better performance
-            sync=False,      # Disable sync for better performance
-            map_async=True   # Use asynchronous flushes
+            map_size=constants.DB_MAP_SIZE_BYTES,
+            writemap=True,
+            metasync=False,
+            sync=False,
+            map_async=True
         )
-        self.lock = threading.RLock()  # Thread-safe access
+        self.lock = threading.RLock()
     
     def put_translation(self, dhash: str, translation_data: Dict[str, Any]) -> bool:
         """Store a translation in the database."""
@@ -61,11 +63,18 @@ class TranslationDB:
         """Clear all entries from the database."""
         try:
             with self.lock:
-                with self.env.begin(write=True) as txn:
-                    cursor = txn.cursor()
-                    count = cursor.delete()
-                    logger.info(f"Cleared {count} entries from translation DB")
-                    return count
+                self.env.close()
+                shutil.rmtree(self.db_path, ignore_errors=True)
+                self.env = lmdb.open(
+                    self.db_path,
+                    map_size=constants.DB_MAP_SIZE_BYTES,
+                    writemap=True,
+                    metasync=False,
+                    sync=False,
+                    map_async=True
+                )
+                logger.info("Cleared translation DB")
+                return 0
         except Exception as e:
             logger.error(f"Error clearing translation DB: {e}")
             return 0

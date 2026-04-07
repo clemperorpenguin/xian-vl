@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QRect, QPoint, QSettings, QObject, pyqtSignal, QSize
 from PyQt6.QtGui import QPainter, QColor, QFont, QGuiApplication, QMouseEvent, QPaintEvent, QFontMetrics, QRegion, QIcon
 from .models import TranslationResult, TranslationMode
+from . import constants
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class OverlayControlPanel(QWidget):
         self._overlay_visible = True
         self.dragging = False
         self.drag_start_pos = QPoint()
-        self.settings = QSettings("Xian", "VideoGameTranslator")
+        self.settings = QSettings(constants.ORGANIZATION_NAME, constants.APPLICATION_NAME)
 
         root = QWidget(self)
         root.setObjectName("PanelRoot")
@@ -121,7 +122,7 @@ class OverlayControlPanel(QWidget):
 
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setMaximumBlockCount(500)
+        self.log_view.setMaximumBlockCount(constants.LOG_BLOCK_MAX_COUNT)
         self.log_view.setStyleSheet(
             "color: #ddd; background: rgba(0,0,0,80); border: 1px solid rgba(255,255,255,20); font-family: monospace; font-size: 10px;"
         )
@@ -271,19 +272,20 @@ class OverlayControlPanel(QWidget):
         self.settings_btn.setText("Logs" if checked else "Settings")
 
     def _load_panel_settings(self):
+        """Load panel settings from persistent storage."""
         s = self.settings
         self.mode_combo.setCurrentText(
-            "Full Screen" if s.value("translation_mode", "full_screen") == "full_screen" else "Region Selection")
-        self.source_lang_combo.setCurrentText(s.value("source_lang", "auto"))
-        self.target_lang_combo.setCurrentText(s.value("target_lang", "English"))
-        self.model_combo.setCurrentText(s.value("model_name", "Qwen3.5-9B (Auto-select)"))
-        self.interval_spin.setValue(int(s.value("interval", 2000)))
-        self.opacity_slider.setValue(int(s.value("opacity", 80)))
-        self.margin_spin.setValue(int(s.value("redaction_margin", 15)))
-        self.debug_check.setChecked(s.value("debug_mode", "false") == "true")
-        self.combine_check.setChecked(s.value("combine_paragraphs", "true") == "true")
-        self.show_full_check.setChecked(s.value("show_full_text", "true") == "true")
-        self.show_link_check.setChecked(s.value("show_link_on_click", "false") == "true")
+            "Full Screen" if s.value("translation_mode", constants.DEFAULT_TRANSLATION_MODE) == "full_screen" else "Region Selection")
+        self.source_lang_combo.setCurrentText(s.value("source_lang", constants.DEFAULT_SOURCE_LANG))
+        self.target_lang_combo.setCurrentText(s.value("target_lang", constants.DEFAULT_TARGET_LANG))
+        self.model_combo.setCurrentText(s.value("model_name", constants.DEFAULT_MODEL))
+        self.interval_spin.setValue(int(s.value("interval", constants.DEFAULT_INTERVAL_MS)))
+        self.opacity_slider.setValue(int(s.value("opacity", constants.DEFAULT_OPACITY)))
+        self.margin_spin.setValue(int(s.value("redaction_margin", constants.DEFAULT_REDACT_MARGIN_PANEL)))
+        self.debug_check.setChecked(s.value("debug_mode", str(constants.DEFAULT_DEBUG_MODE)) == "true")
+        self.combine_check.setChecked(s.value("combine_paragraphs", str(constants.DEFAULT_COMBINE_PARAGRAPHS)) == "true")
+        self.show_full_check.setChecked(s.value("show_full_text", str(constants.DEFAULT_SHOW_FULL_TEXT)) == "true")
+        self.show_link_check.setChecked(s.value("show_link_on_click", str(constants.DEFAULT_SHOW_LINK_ON_CLICK)) == "true")
 
     def _save_panel_settings(self):
         self.apply_opacity(self.opacity_slider.value())
@@ -655,7 +657,8 @@ class TranslationBubble(QWidget):
         self.collapsed_label.setStyleSheet(style_sheet)
         self.expanded_label.setStyleSheet(style_sheet)
 
-    def _get_truncated_text(self, text, word_limit=8):
+    def _get_truncated_text(self, text: str, word_limit: int = constants.TRUNCATION_WORD_LIMIT) -> str:
+        """Truncate text to a specified number of words for collapsed view."""
         words = text.split()
         if len(words) <= word_limit:
             return text
@@ -668,18 +671,19 @@ class TranslationBubble(QWidget):
         self.expanded_label.setText(full_text)
 
     def update_geometry(self):
+        """Calculate and apply the bubble's position and size based on content."""
         # Calculate size based on text
         font = QFont("Arial", 12, QFont.Weight.Bold)
         metrics = QFontMetrics(font)
 
-        padding = 20
+        padding = constants.BUBBLE_PADDING
         if not self.expanded:
             text = self.collapsed_label.text()
             # `TranslationResult` coordinates/sizes may be floats.
             # Qt geometry APIs require ints.
-            measure_width = max(150.0, float(self.result.width) + padding * 2)
-            if measure_width > 350:
-                measure_width = 350.0
+            measure_width = max(float(constants.BUBBLE_MEASURE_MIN_WIDTH), float(self.result.width) + padding * 2)
+            if measure_width > constants.BUBBLE_MAX_COLLAPSED_WIDTH:
+                measure_width = constants.BUBBLE_MAX_COLLAPSED_WIDTH
 
             measure_width_i = int(round(measure_width))
             content_width_i = max(1, measure_width_i - padding * 2)
@@ -693,12 +697,12 @@ class TranslationBubble(QWidget):
             box_height = int(text_rect.height() + padding * 2 + 10)
         else:
             # Expanded mode size
-            box_width = 400
-            box_height = 250
+            box_width = constants.BUBBLE_EXPANDED_WIDTH
+            box_height = constants.BUBBLE_EXPANDED_HEIGHT
 
         # Apply min sizes
-        box_width = max(box_width, 100)
-        box_height = max(box_height, 40)
+        box_width = max(box_width, constants.BUBBLE_MIN_WIDTH)
+        box_height = max(box_height, constants.BUBBLE_MIN_HEIGHT)
 
         self.setFixedSize(box_width, box_height)
 
@@ -716,8 +720,8 @@ class TranslationBubble(QWidget):
         target_y = self.result.y + (self.result.height - box_height) // 2
 
         # Constraint to parent bounds
-        x = max(parent_geo.left() + 10, min(target_x, parent_geo.right() - box_width - 10))
-        y = max(parent_geo.top() + 10, min(target_y, parent_geo.bottom() - box_height - 10))
+        x = max(parent_geo.left() + constants.BUBBLE_MARGIN, min(target_x, parent_geo.right() - box_width - constants.BUBBLE_MARGIN))
+        y = max(parent_geo.top() + constants.BUBBLE_MARGIN, min(target_y, parent_geo.bottom() - box_height - constants.BUBBLE_MARGIN))
 
         # When moving a child widget, it's relative to the parent's (0,0).
         # Since OverlayWindow covers the whole virtual desktop, we need to adjust
@@ -738,7 +742,7 @@ class TranslationBubble(QWidget):
             parent.update_mask_during_drag()
 
     def update_content(self, result: TranslationResult):
-        """Update bubble with new translation result"""
+        """Update bubble with new translation result."""
         if self.result.translated_text != result.translated_text:
             self.result = result
             self._update_text_displays()
@@ -748,17 +752,18 @@ class TranslationBubble(QWidget):
             # Just update coordinates if they changed significantly
             old_pos = QPoint(int(self.result.x), int(self.result.y))
             new_pos = QPoint(int(result.x), int(result.y))
-            if (old_pos - new_pos).manhattanLength() > 5:
+            if (old_pos - new_pos).manhattanLength() > constants.BUBBLE_COORDINATE_SNAP_THRESHOLD:
                 self.result = result
                 self.update_geometry()
 
     def _pulse(self):
-        """Briefly highlight the bubble when updated"""
+        """Briefly highlight the bubble when updated."""
         target = self.expanded_label if self.expanded else self.collapsed_label
         target.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 15px; background: transparent;")
-        QTimer.singleShot(500, self._reset_style)
+        QTimer.singleShot(constants.PULSE_HIGHLIGHT_DURATION_MS, self._reset_style)
 
     def _reset_style(self):
+        """Reset bubble style to default after pulse highlight."""
         if not sip.isdeleted(self):
             style = "color: white; font-weight: bold; font-size: 14px; background: transparent;"
             self.collapsed_label.setStyleSheet(style)
@@ -831,7 +836,7 @@ class TranslationBubble(QWidget):
         if self.dragging:
             # Check for click vs drag
             curr_pos = event.globalPosition().toPoint()
-            if (curr_pos - self.press_pos).manhattanLength() < 5:
+            if (curr_pos - self.press_pos).manhattanLength() < constants.BUBBLE_DRAG_THRESHOLD:
                 # Toggle expansion and link visualization on click
                 self.toggle_expansion()
                 self.show_link = not self.show_link
@@ -862,8 +867,8 @@ class TranslationOverlay(QObject):
         self.control_panel = OverlayControlPanel(self.overlay_window)
 
         # Persisted settings
-        self.settings = QSettings("Xian", "VideoGameTranslator")
-        self.opacity = int(self.settings.value("opacity", 80))
+        self.settings = QSettings(constants.ORGANIZATION_NAME, constants.APPLICATION_NAME)
+        self.opacity = int(self.settings.value("opacity", constants.DEFAULT_OPACITY))
         self._supports_window_opacity = self._detect_window_opacity_support()
 
         self.control_panel.request_clear.connect(self.clear_translations)
@@ -879,9 +884,8 @@ class TranslationOverlay(QObject):
         self.set_opacity(self.opacity)
 
         # Keep overlay above other windows by periodically re-raising.
-        # This helps on Wayland/KWin when other windows steal the topmost layer.
         self._keep_on_top_timer = QTimer(self)
-        self._keep_on_top_timer.setInterval(2000)
+        self._keep_on_top_timer.setInterval(constants.KEEP_ON_TOP_INTERVAL_MS)
         self._keep_on_top_timer.timeout.connect(self._ensure_on_top)
         self._keep_on_top_timer.start()
 
@@ -982,9 +986,9 @@ class TranslationOverlay(QObject):
             return
 
         # Limit the number of input translations to prevent O(N^2) hangs
-        if len(translations) > 50:
-            logger.warning(f"Too many translations received ({len(translations)}), limiting to 50")
-            translations = translations[:50]
+        if len(translations) > constants.BUBBLE_MAX_COUNT:
+            logger.warning(f"Too many translations received ({len(translations)}), limiting to {constants.BUBBLE_MAX_COUNT}")
+            translations = translations[:constants.BUBBLE_MAX_COUNT]
 
         logger.info(
             f"Updating overlay with {len(translations)} results" + (f" in area {updated_area}" if updated_area else ""))
@@ -1003,12 +1007,12 @@ class TranslationOverlay(QObject):
                 y_diff = abs(existing.y - res.y)
                 x_diff = res.x - (existing.x + existing.width)
 
-                if y_diff < 20:
-                    if res.translated_text.strip() == existing.translated_text.strip() and abs(x_diff) < 50:
+                if y_diff < constants.MERGE_Y_DIFF_THRESHOLD:
+                    if res.translated_text.strip() == existing.translated_text.strip() and abs(x_diff) < constants.MERGE_DUPLICATE_X_THRESHOLD:
                         found_group = True
                         break
 
-                    if -20 < x_diff < 40:
+                    if constants.MERGE_X_DIFF_MIN < x_diff < constants.MERGE_X_DIFF_MAX:
                         if res.translated_text.strip().lower() not in existing.translated_text.lower():
                             existing.translated_text += " " + res.translated_text
 
@@ -1043,12 +1047,13 @@ class TranslationOverlay(QObject):
                 for cl in clusters:
                     rect: QRect = cl["rect"]
                     # proximity thresholds
-                    vert_close = abs(res.y - (rect.y() + rect.height() / 2)) < 28 or (
-                                rect.top() - 30 <= res.y <= rect.bottom() + 30)
+                    vert_close = abs(res.y - (rect.y() + rect.height() / 2)) < constants.CLUSTER_VERTICAL_PROXIMITY or (
+                                rect.top() - constants.CLUSTER_VERTICAL_PROXIMITY <= res.y <= rect.bottom() + constants.CLUSTER_VERTICAL_PROXIMITY)
                     # horizontal overlap check
                     res_rect = QRect(int(res.x), int(res.y), int(res.width), int(res.height))
+                    min_overlap = min(rect.width(), res_rect.width()) * constants.CLUSTER_HORIZONTAL_OVERLAP_MIN_RATIO
                     overlap = rect.intersects(res_rect) or (
-                                res_rect.left() <= rect.right() + 20 and res_rect.right() >= rect.left() - 20)
+                                res_rect.left() <= rect.right() + constants.CLUSTER_VERTICAL_PROXIMITY and res_rect.right() >= rect.left() - constants.CLUSTER_VERTICAL_PROXIMITY)
                     if vert_close and overlap:
                         # add to cluster
                         cl["items"].append(res)
@@ -1110,8 +1115,8 @@ class TranslationOverlay(QObject):
                     vert_gap = new_source_rect.top() - ex_source_rect.bottom()
                     horiz_overlap = min(ex_source_rect.right(), new_source_rect.right()) - max(ex_source_rect.left(),
                                                                                                new_source_rect.left())
-                    min_overlap = min(ex_source_rect.width(), new_source_rect.width()) * 0.3
-                    if 0 <= vert_gap <= 36 and horiz_overlap >= min_overlap:
+                    min_overlap = min(ex_source_rect.width(), new_source_rect.width()) * constants.APPEND_HORIZONTAL_OVERLAP_MIN_RATIO
+                    if 0 <= vert_gap <= constants.APPEND_VERTICAL_GAP_MAX and horiz_overlap >= min_overlap:
                         append_below_target = bubble
                 except Exception:
                     pass
@@ -1124,14 +1129,14 @@ class TranslationOverlay(QObject):
 
                 if ex_text_norm == result_text_norm or ex_text_norm in result_text_norm or result_text_norm in ex_text_norm:
                     dist = abs(ex.x - result.x) + abs(ex.y - result.y)
-                    if dist < 500:
-                        score = 0.7 + (1.0 - min(1.0, dist / 500)) * 0.3
+                    if dist < constants.TEXT_MATCH_SCORE_MAX_DIST:
+                        score = constants.TEXT_MATCH_SCORE_BASE + (1.0 - min(1.0, dist / constants.TEXT_MATCH_SCORE_MAX_DIST)) * 0.3
 
                 score = max(score, iou)
 
                 c_dist = (ex_source_rect.center() - new_source_rect.center()).manhattanLength()
-                if c_dist < 100:
-                    score = max(score, (1.0 - c_dist / 100) * 0.6)
+                if c_dist < constants.CENTER_DISTANCE_THRESHOLD:
+                    score = max(score, (1.0 - c_dist / constants.CENTER_DISTANCE_THRESHOLD) * 0.6)
 
                 if score > highest_score:
                     highest_score = score
@@ -1160,7 +1165,7 @@ class TranslationOverlay(QObject):
                 except Exception:
                     pass
 
-            if best_match and highest_score > 0.4:
+            if best_match and highest_score > constants.IOU_MATCH_THRESHOLD:
                 try:
                     best_match.update_content(result)
                     matched_bubble_ids.add(id(best_match))
@@ -1208,12 +1213,10 @@ class TranslationOverlay(QObject):
                         bubble.close()
 
         # 4. Limit total number of bubbles to prevent performance issues/crashes
-        MAX_BUBBLES = 50
-        if len(self.bubbles) > MAX_BUBBLES:
-            # Sort by age (oldest first - bubbles are appended, so early ones are older)
-            # Actually, bubbles might be updated, but new ones are at the end.
+        if len(self.bubbles) > constants.BUBBLE_MAX_COUNT:
+            # Sort by age (oldest first - bubbles are appended, so early ones are older).
             # Let's just remove the oldest ones that weren't just matched.
-            num_to_remove = len(self.bubbles) - MAX_BUBBLES
+            num_to_remove = len(self.bubbles) - constants.BUBBLE_MAX_COUNT
             removed_count = 0
             for i in range(len(self.bubbles)):
                 bubble = self.bubbles[i]
@@ -1250,7 +1253,7 @@ class TranslationOverlay(QObject):
         self.overlay_window.setMask(mask)
         self.overlay_window.update()
 
-    def _resolve_overlaps(self, margin: int = 8):
+    def _resolve_overlaps(self, margin: int = constants.BUBBLE_MARGIN):
         """Nudge bubbles so they don't overlap each other or the control panel.
 
         Operates in the overlay's coordinate space; bubbles/control panel are children
@@ -1277,7 +1280,7 @@ class TranslationOverlay(QObject):
             attempt = 0
 
             # Iteratively nudge down/right to avoid intersections
-            while attempt < 80:
+            while attempt < constants.OVERLAP_RESOLUTION_MAX_ATTEMPTS:
                 collision = False
                 for obstacle in placed:
                     if rect.intersects(obstacle):
@@ -1288,15 +1291,15 @@ class TranslationOverlay(QObject):
 
                 # Wrap if we ran off the bottom; shift right and reset to top margin
                 if rect.bottom() > work_area.bottom():
-                    rect.moveTop(work_area.top() + margin)
-                    rect.moveLeft(rect.left() + rect.width() + margin)
+                    rect.moveTop(work_area.top() + constants.OVERLAP_WRAP_MARGIN)
+                    rect.moveLeft(rect.left() + rect.width() + constants.OVERLAP_WRAP_MARGIN)
                     collision = True
 
                 # Clamp horizontally inside the work area
                 if rect.right() > work_area.right():
-                    rect.moveLeft(max(work_area.left() + margin, work_area.right() - rect.width() - margin))
+                    rect.moveLeft(max(work_area.left() + constants.OVERLAP_WRAP_MARGIN, work_area.right() - rect.width() - constants.OVERLAP_WRAP_MARGIN))
                 if rect.left() < work_area.left():
-                    rect.moveLeft(work_area.left() + margin)
+                    rect.moveLeft(work_area.left() + constants.OVERLAP_WRAP_MARGIN)
 
                 if not collision:
                     break
@@ -1304,8 +1307,8 @@ class TranslationOverlay(QObject):
                 attempt += 1
 
             # Final clamp to ensure on-screen
-            rect.moveLeft(max(work_area.left() + margin, min(rect.left(), work_area.right() - rect.width() - margin)))
-            rect.moveTop(max(work_area.top() + margin, min(rect.top(), work_area.bottom() - rect.height() - margin)))
+            rect.moveLeft(max(work_area.left() + constants.OVERLAP_WRAP_MARGIN, min(rect.left(), work_area.right() - rect.width() - constants.OVERLAP_WRAP_MARGIN)))
+            rect.moveTop(max(work_area.top() + constants.OVERLAP_WRAP_MARGIN, min(rect.top(), work_area.bottom() - rect.height() - constants.OVERLAP_WRAP_MARGIN)))
 
             try:
                 bubble.move(rect.topLeft())

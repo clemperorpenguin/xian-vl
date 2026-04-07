@@ -3,7 +3,6 @@
 import asyncio
 import io
 import logging
-import os
 import re
 import time
 from typing import List, Dict, Optional, Tuple
@@ -21,6 +20,7 @@ except ImportError:
 
 from .models import TranslationResult, TextStyle
 from .style_detection import StyleDetector, BackgroundReconstructor
+from . import constants
 
 logger = logging.getLogger(__name__)
 
@@ -56,97 +56,110 @@ class VLProcessor:
             )
     
     def detect_vram(self) -> int:
-        """Detect total VRAM in GB using pynvml."""
+        """Detect total VRAM in GB using torch.cuda first, then pynvml as fallback."""
+        # Try torch.cuda first (works with both NVIDIA and AMD ROCm)
+        try:
+            if torch.cuda.is_available():
+                total_vram_bytes = 0
+                for i in range(torch.cuda.device_count()):
+                    props = torch.cuda.get_device_properties(i)
+                    total_vram_bytes += props.total_memory
+
+                total_vram_gb = total_vram_bytes // (1024**3)
+                logger.info(f"Detected {total_vram_gb}GB of total VRAM via torch.cuda across {torch.cuda.device_count()} GPU(s)")
+                return total_vram_gb
+        except Exception as e:
+            logger.debug(f"torch.cuda VRAM detection failed: {e}")
+
+        # Fallback to pynvml (NVIDIA only)
         try:
             pynvml.nvmlInit()
             device_count = pynvml.nvmlDeviceGetCount()
-            
+
             if device_count == 0:
-                logger.warning("No NVIDIA GPUs detected, falling back to CPU")
+                logger.warning("No NVIDIA GPUs detected via pynvml")
                 return 0
-            
+
             total_vram_bytes = 0
             for i in range(device_count):
                 handle = pynvml.nvmlDeviceGetHandleByIndex(i)
                 mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
                 total_vram_bytes += mem_info.total
-            
-            # Convert to GB
+
             total_vram_gb = total_vram_bytes // (1024**3)
-            logger.info(f"Detected {total_vram_gb}GB of total VRAM across {device_count} GPU(s)")
+            logger.info(f"Detected {total_vram_gb}GB of total VRAM via pynvml across {device_count} GPU(s)")
             return total_vram_gb
-            
+
         except Exception as e:
-            logger.warning(f"Could not detect VRAM via pynvml: {e}. Falling back to CPU.")
-            return 0
+            logger.warning(f"Could not detect VRAM via pynvml: {e}")
+
+        logger.warning("No GPU detected. Vision-language model will run on CPU, which will be slow.")
+        return 0
     
     def select_model(self, vram_gb: int) -> str:
         """Select appropriate model based on VRAM and configuration."""
         model_name = self.config.model_name.lower()
-        
+
         # Check if using TranslateGemma models
         if "translategemma" in model_name:
             self.is_translategemma = True
             if "12b" in model_name:
-                if vram_gb >= 20:
-                    return "google/translategemma-12b-it"
-                elif vram_gb >= 12:
-                    # Fallback to 4B if VRAM insufficient
-                    return "google/translategemma-4b-it"
+                if vram_gb >= constants.VRAM_THRESHOLD_TRANSLATEGEMMA_12B:
+                    return constants.MODEL_TRANSLATEGEMMA_12B
                 else:
-                    # Even if VRAM is low, try to use the 4B model as a last resort
-                    return "google/translategemma-4b-it"
+                    # Fallback to 4B if VRAM insufficient
+                    return constants.MODEL_TRANSLATEGEMMA_4B
             elif "4b" in model_name:
-                if vram_gb >= 10:
-                    return "google/translategemma-4b-it"
+                if vram_gb >= constants.VRAM_THRESHOLD_TRANSLATEGEMMA_4B:
+                    return constants.MODEL_TRANSLATEGEMMA_4B
                 else:
                     raise RuntimeError(
                         f"Not enough VRAM ({vram_gb}GB) to run TranslateGemma-4B. "
-                        f"Minimum requirement is approximately 10GB."
+                        f"Minimum requirement is approximately {constants.VRAM_THRESHOLD_TRANSLATEGEMMA_4B}GB."
                     )
             else:
                 # Default to 4B if specific size not mentioned
-                if vram_gb >= 10:
-                    return "google/translategemma-4b-it"
+                if vram_gb >= constants.VRAM_THRESHOLD_TRANSLATEGEMMA_4B:
+                    return constants.MODEL_TRANSLATEGEMMA_4B
                 else:
                     raise RuntimeError(
                         f"Not enough VRAM ({vram_gb}GB) to run TranslateGemma models. "
-                        f"Minimum requirement is approximately 10GB."
+                        f"Minimum requirement is approximately {constants.VRAM_THRESHOLD_TRANSLATEGEMMA_4B}GB."
                     )
         else:
             # Handle Qwen3.5 models
             if self.config.model_size == "9b":
-                if vram_gb >= 18:
-                    return "Qwen/Qwen3.5-9B"
+                if vram_gb >= constants.VRAM_THRESHOLD_9B:
+                    return constants.MODEL_QWEN_9B
                 else:
                     raise RuntimeError(
                         f"Not enough VRAM ({vram_gb}GB) for Qwen3.5-9B. "
-                        f"Minimum requirement is approximately 18GB."
+                        f"Minimum requirement is approximately {constants.VRAM_THRESHOLD_9B}GB."
                     )
             elif self.config.model_size == "4b":
-                if vram_gb >= 10:
-                    return "Qwen/Qwen3.5-4B"
+                if vram_gb >= constants.VRAM_THRESHOLD_4B:
+                    return constants.MODEL_QWEN_4B
                 else:
                     raise RuntimeError(
                         f"Not enough VRAM ({vram_gb}GB) for Qwen3.5-4B. "
-                        f"Minimum requirement is approximately 10GB."
+                        f"Minimum requirement is approximately {constants.VRAM_THRESHOLD_4B}GB."
                     )
             else:  # auto
-                if vram_gb >= 20:
-                    model_id = "Qwen/Qwen3.5-9B"
+                if vram_gb >= constants.VRAM_AUTO_SELECT_9B:
+                    model_id = constants.MODEL_QWEN_9B
                     logger.info(f"Auto-selected Qwen3.5-9B based on {vram_gb}GB VRAM")
-                elif vram_gb >= 12:
-                    model_id = "Qwen/Qwen3.5-4B"
+                elif vram_gb >= constants.VRAM_AUTO_SELECT_4B:
+                    model_id = constants.MODEL_QWEN_4B
                     logger.info(f"Auto-selected Qwen3.5-4B based on {vram_gb}GB VRAM")
-                elif vram_gb >= 10:
+                elif vram_gb >= constants.VRAM_THRESHOLD_4B:
                     # Fallback to TranslateGemma-4B if Qwen models don't fit
                     logger.info(f"Fallback to TranslateGemma-4B due to limited VRAM ({vram_gb}GB)")
                     self.is_translategemma = True
-                    return "google/translategemma-4b-it"
+                    return constants.MODEL_TRANSLATEGEMMA_4B
                 else:
                     raise RuntimeError(
                         f"Not enough VRAM ({vram_gb}GB) to run vision-language models. "
-                        f"Minimum requirement is approximately 10GB for fallback models."
+                        f"Minimum requirement is approximately {constants.VRAM_THRESHOLD_4B}GB for fallback models."
                     )
             return model_id
     
@@ -188,19 +201,20 @@ class VLProcessor:
     def preprocess_image(self, image_data: bytes) -> Image.Image:
         """
         Preprocess image for vision-language model input.
-        For Qwen3.5: max dimension 1024px maintaining aspect ratio.
-        For TranslateGemma: normalize to 896x896 as specified.
+        For Qwen3.5: max dimension defined in constants, maintaining aspect ratio.
+        For TranslateGemma: normalize to dimension defined in constants.
         """
         image = Image.open(io.BytesIO(image_data))
-        
+
         if self.is_translategemma:
-            # For TranslateGemma, normalize to 896x896 as specified
-            image = image.resize((896, 896), Image.Resampling.LANCZOS)
+            # For TranslateGemma, normalize to configured dimension
+            dim = constants.TRANSLATEGEMMA_DIMENSION
+            image = image.resize((dim, dim), Image.Resampling.LANCZOS)
         else:
-            # For Qwen3.5, maintain aspect ratio, max dimension 1024px
-            max_dimension = 1024
+            # For Qwen3.5, maintain aspect ratio, max dimension from constants
+            max_dimension = constants.QWEN_MAX_DIMENSION
             width, height = image.size
-            
+
             if width > max_dimension or height > max_dimension:
                 if width > height:
                     new_width = max_dimension
@@ -208,9 +222,9 @@ class VLProcessor:
                 else:
                     new_height = max_dimension
                     new_width = int((width * max_dimension) / height)
-                    
+
                 image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        
+
         return image
     
     def create_prompt(self, target_lang: str, thinking_mode: bool = False) -> str:
@@ -326,14 +340,14 @@ Rules:
                 
                 # Run with timeout
                 try:
-                    final_output = await asyncio.wait_for(generate_task(), timeout=15.0)  # 15 second timeout for larger models
+                    final_output = await asyncio.wait_for(generate_task(), timeout=constants.INFERENCE_TIMEOUT_SECONDS)
                 except asyncio.TimeoutError:
                     logger.error("Timeout during vision-language model inference")
                     return []
-                
+
                 # Parse the response to extract original text and translation
                 original_text, translated_text = self.parse_response(final_output)
-                
+
                 # If no text was detected, return empty list
                 if not translated_text.strip():
                     logger.debug("No text detected in image")
@@ -343,10 +357,10 @@ Rules:
                 # Use the center region of the image as a representative sample
                 img_width, img_height = image.size
                 style_bbox = (
-                    img_width * 0.25,
-                    img_height * 0.25,
-                    img_width * 0.5,
-                    img_height * 0.5
+                    img_width * constants.STYLE_DETECT_CENTER_REGION[0],
+                    img_height * constants.STYLE_DETECT_CENTER_REGION[1],
+                    img_width * constants.STYLE_DETECT_CENTER_REGION[2],
+                    img_height * constants.STYLE_DETECT_CENTER_REGION[3],
                 )
                 detected_style = self.style_detector.detect_style(image, style_bbox)
                 

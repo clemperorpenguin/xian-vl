@@ -7,13 +7,14 @@ from PyQt6.QtWidgets import (
     QApplication
 )
 from PyQt6.QtCore import Qt, QTimer, QRect, QSettings, pyqtSlot
-from PyQt6.QtGui import QIcon, QShortcut, QKeySequence
+from PyQt6.QtGui import QIcon, QShortcut, QKeySequence, QCloseEvent
 
 from .qwen_pipeline import VLProcessor, VLConfig
 from .qwen_translation_workers import QwenTranslationWorker, QwenTranslatorStatusWorker, QwenModelWarmupWorker
 from .overlay_ui import TranslationOverlay
 from .region_selector import RegionSelector
 from .models import TranslationMode, TranslationRegion
+from . import constants
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,12 @@ class MainWindow(QMainWindow):
         self.translation_overlay = TranslationOverlay(self)
         self.region_selector = None
         self.regions = []
-        self.settings = QSettings("Xian", "VideoGameTranslator")
+        self.settings = QSettings(constants.ORGANIZATION_NAME, constants.APPLICATION_NAME)
 
         # Debounce timer for API status checks
         self.api_check_timer = QTimer()
         self.api_check_timer.setSingleShot(True)
-        self.api_check_timer.setInterval(1000)  # 1 second debounce
+        self.api_check_timer.setInterval(constants.API_CHECK_DEBOUNCE_MS)
         self.api_check_timer.timeout.connect(self._do_api_status_check)
 
         self.setup_ui()
@@ -376,7 +377,7 @@ class MainWindow(QMainWindow):
 
         # Model size override
         self.model_size_combo = QComboBox()
-        self.model_size_combo.addItems(["Auto-detect", "4B", "8B"])
+        self.model_size_combo.addItems(["Auto-detect", "4B", "9B"])
         self.model_size_combo.setToolTip("Override automatic model size selection based on VRAM")
         qwen_layout.addRow("Model Size Override:", self.model_size_combo)
 
@@ -500,8 +501,8 @@ class MainWindow(QMainWindow):
         """Handle model size combo change"""
         if text == "4B":
             self.qwen_processor.config.model_size = "4b"
-        elif text == "8B":
-            self.qwen_processor.config.model_size = "8b"
+        elif text == "9B":
+            self.qwen_processor.config.model_size = "9b"
         else:  # Auto-detect
             self.qwen_processor.config.model_size = "auto"
         self.save_settings()
@@ -619,10 +620,10 @@ class MainWindow(QMainWindow):
         # Optionally refresh API status to reflect new model selection
         self.check_api_status()
 
-    def add_log(self, message):
-        """Add message to activity log"""
+    def add_log(self, message: str) -> None:
+        """Add message to activity log, keeping only the most recent entries."""
         self.log_list.insertItem(0, message)
-        if self.log_list.count() > 50:
+        if self.log_list.count() > constants.LOG_MAX_ENTRIES:
             self.log_list.takeItem(self.log_list.count() - 1)
 
     def on_translation_worker_capture_prepare(self):
@@ -670,8 +671,8 @@ class MainWindow(QMainWindow):
             self.api_status_label.setText("✗ Disconnected")
             self.api_status_label.setStyleSheet("color: #f44336")
 
-    def toggle_overlay_visibility(self, visible):
-        """Toggle translation overlay visibility"""
+    def toggle_overlay_visibility(self, visible: bool) -> None:
+        """Toggle translation overlay visibility."""
         if visible:
             self.translation_overlay.hide_overlay_window()
             self.header_status.setText("Translations Hidden")
@@ -679,8 +680,8 @@ class MainWindow(QMainWindow):
             self.translation_overlay.show_overlay_window()
             self.header_status.setText("Translations Visible")
 
-    def on_mode_changed(self):
-        """Handle translation mode change"""
+    def on_mode_changed(self) -> None:
+        """Handle translation mode change."""
         sender = self.sender()
         if not sender.isChecked():
             # If everything is unchecked, re-check full screen
@@ -697,14 +698,14 @@ class MainWindow(QMainWindow):
         
         self.save_settings()
 
-    def add_region(self):
-        """Add new translation region"""
+    def add_region(self) -> None:
+        """Add new translation region."""
         self.region_selector = RegionSelector()
         self.region_selector.region_selected.connect(self.on_region_selected)
         self.region_selector.show()
 
-    def on_region_selected(self, rect: QRect):
-        """Handle new region selection"""
+    def on_region_selected(self, rect: QRect) -> None:
+        """Handle new region selection."""
         region = TranslationRegion(
             rect.x(), rect.y(), rect.width(), rect.height(),
             f"Region {len(self.regions) + 1}"
@@ -712,23 +713,23 @@ class MainWindow(QMainWindow):
         self.regions.append(region)
         self.update_regions_list()
 
-    def remove_region(self):
-        """Remove selected region"""
+    def remove_region(self) -> None:
+        """Remove selected region."""
         current_row = self.regions_list.currentRow()
         if 0 <= current_row < len(self.regions):
             del self.regions[current_row]
             self.update_regions_list()
 
-    def test_region(self):
-        """Test translation on selected region"""
+    def test_region(self) -> None:
+        """Test translation on selected region."""
         current_row = self.regions_list.currentRow()
         if 0 <= current_row < len(self.regions):
             region = self.regions[current_row]
-            # TODO: Implement region testing
             logger.info(f"Testing region: {region.name}")
+            # Region testing would require a one-shot capture and translation
 
-    def update_regions_list(self):
-        """Update regions list display"""
+    def update_regions_list(self) -> None:
+        """Update regions list display."""
         self.regions_list.clear()
         for region in self.regions:
             item_text = f"{region.name} ({region.x}, {region.y}, {region.width}x{region.height})"
@@ -737,21 +738,21 @@ class MainWindow(QMainWindow):
             item.setCheckState(Qt.CheckState.Checked if region.enabled else Qt.CheckState.Unchecked)
             self.regions_list.addItem(item)
 
-    def clear_all_translations(self):
-        """Clear all translations and reset hashes to force new analysis"""
+    def clear_all_translations(self) -> None:
+        """Clear all translations and reset hashes to force new analysis."""
         self.translation_overlay.clear_translations()
         self.translation_worker.clear_hashes()
         self.header_status.setText("Translations Cleared")
 
-    def toggle_translation(self):
-        """Toggle translation process start/stop"""
+    def toggle_translation(self) -> None:
+        """Toggle translation process start/stop."""
         if self.translation_worker.running:
             self.stop_translation()
         else:
             self.start_translation()
 
-    def start_translation(self):
-        """Start translation process"""
+    def start_translation(self) -> None:
+        """Start translation process."""
         # For QwenVLProcessor, model selection is handled differently
         model_selection = self.translation_overlay.control_panel.model_combo.currentText()
 
@@ -861,8 +862,8 @@ class MainWindow(QMainWindow):
         if cfg.get("minimize"):
             self.hide()
 
-    def stop_translation(self):
-        """Stop translation process"""
+    def stop_translation(self) -> None:
+        """Stop translation process."""
         if self.model_warmup_worker.isRunning():
             # Best-effort cancel; avoids starting OCR while the model is still loading
             self._pending_translation_start = None
@@ -878,8 +879,8 @@ class MainWindow(QMainWindow):
         self.tray_toggle_action.setText("Start Translation")
         self.header_status.setText("Ready")
 
-    def reset_settings(self):
-        """Reset all settings to default values"""
+    def reset_settings(self) -> None:
+        """Reset all settings to default values."""
         from PyQt6.QtWidgets import QMessageBox
         
         reply = QMessageBox.question(
@@ -899,24 +900,24 @@ class MainWindow(QMainWindow):
             self.check_api_status()
             self.header_status.setText("Settings Reset")
 
-    def load_settings(self):
-        """Load application settings"""
-        self.api_model_edit.setCurrentText(self.settings.value("api_model", "Qwen3.5-9B (Auto-select)"))
-        self.source_lang_combo.setCurrentText(self.settings.value("source_lang", "auto"))
-        self.target_lang_combo.setCurrentText(self.settings.value("target_lang", "English"))
-        self.interval_spinbox.setValue(int(self.settings.value("interval", 2000)))
-        self.overlay_opacity_slider.setValue(int(self.settings.value("opacity", 80)))
-        self.redaction_margin_spin.setValue(int(self.settings.value("redaction_margin", 15)))
+    def load_settings(self) -> None:
+        """Load application settings from persistent storage."""
+        self.api_model_edit.setCurrentText(self.settings.value("api_model", constants.DEFAULT_MODEL))
+        self.source_lang_combo.setCurrentText(self.settings.value("source_lang", constants.DEFAULT_SOURCE_LANG))
+        self.target_lang_combo.setCurrentText(self.settings.value("target_lang", constants.DEFAULT_TARGET_LANG))
+        self.interval_spinbox.setValue(int(self.settings.value("interval", constants.DEFAULT_INTERVAL_MS)))
+        self.overlay_opacity_slider.setValue(int(self.settings.value("opacity", constants.DEFAULT_OPACITY)))
+        self.redaction_margin_spin.setValue(int(self.settings.value("redaction_margin", constants.DEFAULT_REDACTION_MARGIN)))
         self.debug_mode_checkbox.setChecked(self.settings.value("debug_mode", "false") == "true")
         self.minimize_on_start_checkbox.setChecked(self.settings.value("minimize_on_start", "true") == "true")
 
         # Load Qwen3.5 specific settings
-        self.thinking_mode_checkbox.setChecked(self.settings.value("thinking_mode", "true") == "true")
-        self.max_tokens_slider.setValue(int(self.settings.value("max_tokens", 1024)))
+        self.thinking_mode_checkbox.setChecked(self.settings.value("thinking_mode", str(constants.DEFAULT_THINKING_MODE)) == "true")
+        self.max_tokens_slider.setValue(int(self.settings.value("max_tokens", constants.DEFAULT_MAX_TOKENS)))
         self.model_size_combo.setCurrentText(self.settings.value("model_size_override", "Auto-detect"))
 
         # Load mode
-        mode_str = self.settings.value("translation_mode", "full_screen")
+        mode_str = self.settings.value("translation_mode", constants.DEFAULT_TRANSLATION_MODE)
         self.full_screen_radio.setChecked(mode_str == "full_screen")
         self.region_select_radio.setChecked(mode_str != "full_screen")
 
@@ -941,7 +942,6 @@ class MainWindow(QMainWindow):
             pass
 
         # Sync VLProcessor object
-        # For VLProcessor, model selection is handled differently
         model_text = self.api_model_edit.currentText()
         self.qwen_processor.config.model_name = model_text
         
@@ -964,8 +964,8 @@ class MainWindow(QMainWindow):
         override_size = self.model_size_combo.currentText()
         if override_size == "4B":
             self.qwen_processor.config.model_size = "4b"
-        elif override_size == "8B":
-            self.qwen_processor.config.model_size = "8b"
+        elif override_size == "9B":
+            self.qwen_processor.config.model_size = "9b"
 
         # Load regions
         regions_json = self.settings.value("regions", "")
@@ -977,8 +977,8 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logger.error(f"Error loading regions: {e}")
 
-    def save_settings(self):
-        """Save application settings"""
+    def save_settings(self) -> None:
+        """Save application settings."""
         self.settings.setValue("api_model", self.api_model_edit.currentText())
         self.settings.setValue("source_lang", self.source_lang_combo.currentText())
         self.settings.setValue("target_lang", self.target_lang_combo.currentText())
@@ -1014,8 +1014,8 @@ class MainWindow(QMainWindow):
         ]
         self.settings.setValue("regions", json.dumps(regions_data))
 
-    def closeEvent(self, event):
-        """Handle application close"""
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Handle application close."""
         self.stop_translation()
         self.save_settings()
         event.accept()
