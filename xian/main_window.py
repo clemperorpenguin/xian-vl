@@ -13,7 +13,7 @@ from .qwen_pipeline import VLProcessor, VLConfig
 from .qwen_translation_workers import QwenTranslationWorker, QwenTranslatorStatusWorker, QwenModelWarmupWorker
 from .overlay_ui import TranslationOverlay
 from .region_selector import RegionSelector
-from .models import TranslationMode, TranslationRegion
+from .models import TranslationMode, TranslationRegion, OCRMode, OutputMode
 from . import constants
 
 logger = logging.getLogger(__name__)
@@ -221,12 +221,9 @@ class MainWindow(QMainWindow):
 
     def show_overlay_settings_panel(self):
         """Bring the overlay control panel to the front and open Settings view."""
-        try:
-            self.translation_overlay.show()
-            self.translation_overlay.control_panel.show_settings_view()
-            self.translation_overlay.control_panel.raise_()
-        except Exception:
-            pass
+        self.translation_overlay.show()
+        self.translation_overlay.control_panel.show_settings_view()
+        self.translation_overlay.control_panel.raise_()
 
     def _create_general_tab(self) -> QWidget:
         """Create general settings tab"""
@@ -245,6 +242,29 @@ class MainWindow(QMainWindow):
         mode_layout.addWidget(self.region_select_radio)
 
         layout.addWidget(mode_group)
+
+        # OCR Mode
+        ocr_group = QGroupBox("OCR Mode")
+        ocr_layout = QVBoxLayout(ocr_group)
+
+        self.ocr_translate_radio = QCheckBox("OCR + Translate")
+        self.ocr_only_radio = QCheckBox("OCR Only (Extract Text)")
+        self.ocr_translate_radio.setChecked(True)
+
+        ocr_layout.addWidget(self.ocr_translate_radio)
+        ocr_layout.addWidget(self.ocr_only_radio)
+
+        layout.addWidget(ocr_group)
+
+        # Output Mode
+        output_group = QGroupBox("Output Destination")
+        output_layout = QVBoxLayout(output_group)
+
+        self.output_combo = QComboBox()
+        self.output_combo.addItems(["Overlay", "Clipboard", "File", "Overlay + Clipboard"])
+        output_layout.addWidget(self.output_combo)
+
+        layout.addWidget(output_group)
 
         # Language settings
         lang_group = QGroupBox("Languages")
@@ -344,6 +364,7 @@ class MainWindow(QMainWindow):
         self.api_model_edit.addItem("Qwen3.5-9B (Auto-select)")
         self.api_model_edit.addItem("Qwen3.5-9B")
         self.api_model_edit.addItem("Qwen3.5-4B")
+        self.api_model_edit.addItem("Qwen3.5-2B (Recommended for CPU)")
         self.api_model_edit.addItem("TranslateGemma-12B (High Quality)")
         self.api_model_edit.addItem("TranslateGemma-4B (Lower Resource)")
         self.api_model_edit.setToolTip("Vision-Language model (Qwen3.5 or TranslateGemma)")
@@ -377,7 +398,7 @@ class MainWindow(QMainWindow):
 
         # Model size override
         self.model_size_combo = QComboBox()
-        self.model_size_combo.addItems(["Auto-detect", "4B", "9B"])
+        self.model_size_combo.addItems(["Auto-detect", "2B", "4B", "9B"])
         self.model_size_combo.setToolTip("Override automatic model size selection based on VRAM")
         qwen_layout.addRow("Model Size Override:", self.model_size_combo)
 
@@ -439,6 +460,8 @@ class MainWindow(QMainWindow):
 
         self.full_screen_radio.toggled.connect(self.on_mode_changed)
         self.region_select_radio.toggled.connect(self.on_mode_changed)
+        self.ocr_translate_radio.toggled.connect(self.on_ocr_mode_changed)
+        self.ocr_only_radio.toggled.connect(self.on_ocr_mode_changed)
 
         self.api_model_edit.editTextChanged.connect(self.check_api_status)
         # Keep overlay panel and translator in sync when main model changes
@@ -484,6 +507,9 @@ class MainWindow(QMainWindow):
         self.translation_overlay.control_panel.request_stop.connect(self.stop_translation)
         self.translation_overlay.control_panel.request_reset_settings.connect(self.reset_settings)
         self.translation_overlay.control_panel.settings_changed.connect(self._sync_settings_from_panel)
+        self.translation_overlay.control_panel.add_region_btn.clicked.connect(self.add_region)
+        self.translation_overlay.control_panel.remove_region_btn.clicked.connect(self.remove_region)
+        logger.info("Region buttons connected")
 
         self.model_warmup_worker.warmup_finished.connect(self._on_model_warmup_finished)
 
@@ -499,7 +525,9 @@ class MainWindow(QMainWindow):
 
     def _on_model_size_changed(self, text: str):
         """Handle model size combo change"""
-        if text == "4B":
+        if text == "2B":
+            self.qwen_processor.config.model_size = "2b"
+        elif text == "4B":
             self.qwen_processor.config.model_size = "4b"
         elif text == "9B":
             self.qwen_processor.config.model_size = "9b"
@@ -698,24 +726,53 @@ class MainWindow(QMainWindow):
         
         self.save_settings()
 
+    def on_ocr_mode_changed(self) -> None:
+        """Handle OCR mode change."""
+        sender = self.sender()
+        if not sender.isChecked():
+            if not self.ocr_translate_radio.isChecked() and \
+               not self.ocr_only_radio.isChecked():
+                self.ocr_translate_radio.setChecked(True)
+            return
+
+        if sender == self.ocr_translate_radio:
+            self.ocr_only_radio.setChecked(False)
+        elif sender == self.ocr_only_radio:
+            self.ocr_translate_radio.setChecked(False)
+
+        self.save_settings()
+
     def add_region(self) -> None:
         """Add new translation region."""
-        self.region_selector = RegionSelector()
-        self.region_selector.region_selected.connect(self.on_region_selected)
-        self.region_selector.show()
+        logger.info("Add Region button clicked, creating RegionSelector...")
+        try:
+            self.region_selector = RegionSelector(parent=None)
+            self.region_selector.region_selected.connect(self.on_region_selected)
+            self.region_selector.show()
+            logger.info("RegionSelector shown")
+        except Exception as e:
+            logger.error(f"Failed to create RegionSelector: {e}")
 
-    def on_region_selected(self, rect: QRect) -> None:
+    def on_region_selected(self, rect: QRect, name: str) -> None:
         """Handle new region selection."""
         region = TranslationRegion(
             rect.x(), rect.y(), rect.width(), rect.height(),
-            f"Region {len(self.regions) + 1}"
+            name or f"Region {len(self.regions) + 1}"
         )
         self.regions.append(region)
         self.update_regions_list()
 
     def remove_region(self) -> None:
         """Remove selected region."""
-        current_row = self.regions_list.currentRow()
+        # Try overlay panel first, fallback to legacy list
+        try:
+            current_row = self.translation_overlay.control_panel.regions_list_widget.currentRow()
+        except Exception:
+            current_row = -1
+        
+        if current_row < 0:
+            current_row = self.regions_list.currentRow()
+        
         if 0 <= current_row < len(self.regions):
             del self.regions[current_row]
             self.update_regions_list()
@@ -731,12 +788,26 @@ class MainWindow(QMainWindow):
     def update_regions_list(self) -> None:
         """Update regions list display."""
         self.regions_list.clear()
+        
+        try:
+            overlay_list = self.translation_overlay.control_panel.regions_list_widget
+            overlay_list.clear()
+        except AttributeError:
+            overlay_list = None
+            
         for region in self.regions:
             item_text = f"{region.name} ({region.x}, {region.y}, {region.width}x{region.height})"
+            
             item = QListWidgetItem(item_text)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if region.enabled else Qt.CheckState.Unchecked)
             self.regions_list.addItem(item)
+            
+            if overlay_list is not None:
+                item_ovl = QListWidgetItem(item_text)
+                item_ovl.setFlags(item_ovl.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item_ovl.setCheckState(Qt.CheckState.Checked if region.enabled else Qt.CheckState.Unchecked)
+                overlay_list.addItem(item_ovl)
 
     def clear_all_translations(self) -> None:
         """Clear all translations and reset hashes to force new analysis."""
@@ -762,7 +833,9 @@ class MainWindow(QMainWindow):
             return
 
         # Configure worker (deferred until model warmup completes)
-        if self.full_screen_radio.isChecked():
+        # Read mode from overlay panel, not legacy main window
+        panel_mode = self.translation_overlay.control_panel.mode_combo.currentText()
+        if panel_mode == "Full Screen":
             mode = TranslationMode.FULL_SCREEN
         else:
             mode = TranslationMode.REGION_SELECT
@@ -772,13 +845,10 @@ class MainWindow(QMainWindow):
         tgt_lang = self.translation_overlay.control_panel.target_lang_combo.currentText()
 
         # Log current selections for diagnostics
-        try:
-            logger.debug(
-                "Starting translation with model=%s, source=%s, target=%s",
-                model_selection, src_lang, tgt_lang
-            )
-        except Exception:
-            pass
+        logger.info(
+            f"Starting translation with mode={mode.value}, model={model_selection}, "
+            f"source={src_lang}, target={tgt_lang}, regions={len(self.regions)}"
+        )
 
         # For VLProcessor, we don't need hint_source_lang/hint_target_lang
         # Set the model in the processor based on the selection
@@ -786,12 +856,13 @@ class MainWindow(QMainWindow):
         
         # Set model size for Qwen3.5 models
         if "translategemma" in model_selection.lower():
-            # For TranslateGemma, we don't use model_size, just the model name
             pass
         elif "9b" in model_selection.lower():
             self.qwen_processor.config.model_size = "9b"
         elif "4b" in model_selection.lower():
             self.qwen_processor.config.model_size = "4b"
+        elif "2b" in model_selection.lower():
+            self.qwen_processor.config.model_size = "2b"
         else:
             self.qwen_processor.config.model_size = "auto"
 
@@ -921,6 +992,15 @@ class MainWindow(QMainWindow):
         self.full_screen_radio.setChecked(mode_str == "full_screen")
         self.region_select_radio.setChecked(mode_str != "full_screen")
 
+        # Load OCR mode
+        ocr_mode_str = self.settings.value("ocr_mode", constants.DEFAULT_OCR_MODE)
+        self.ocr_translate_radio.setChecked(ocr_mode_str != "ocr_only")
+        self.ocr_only_radio.setChecked(ocr_mode_str == "ocr_only")
+
+        # Load output mode
+        output_mode_str = self.settings.value("output_mode", constants.DEFAULT_OUTPUT_MODE)
+        self.output_combo.setCurrentText(output_mode_str)
+
         # Sync with panel if it's already initialized
         try:
             panel = self.translation_overlay.control_panel
@@ -947,12 +1027,13 @@ class MainWindow(QMainWindow):
         
         # Set model size for Qwen3.5 models
         if "translategemma" in model_text.lower():
-            # For TranslateGemma, we don't use model_size, just the model name
             pass
         elif "9b" in model_text.lower():
             self.qwen_processor.config.model_size = "9b"
         elif "4b" in model_text.lower():
             self.qwen_processor.config.model_size = "4b"
+        elif "2b" in model_text.lower():
+            self.qwen_processor.config.model_size = "2b"
         else:
             self.qwen_processor.config.model_size = "auto"
 
@@ -976,6 +1057,13 @@ class MainWindow(QMainWindow):
                 self.update_regions_list()
             except Exception as e:
                 logger.error(f"Error loading regions: {e}")
+        else:
+            # Clear both lists if no saved regions
+            self.regions_list.clear()
+            try:
+                self.translation_overlay.control_panel.regions_list_widget.clear()
+            except Exception:
+                pass
 
     def save_settings(self) -> None:
         """Save application settings."""
@@ -994,6 +1082,16 @@ class MainWindow(QMainWindow):
         else:
             mode_str = "region_select"
         self.settings.setValue("translation_mode", mode_str)
+
+        # Save OCR mode
+        if self.ocr_translate_radio.isChecked():
+            ocr_mode_str = "ocr_translate"
+        else:
+            ocr_mode_str = "ocr_only"
+        self.settings.setValue("ocr_mode", ocr_mode_str)
+
+        # Save output mode
+        self.settings.setValue("output_mode", self.output_combo.currentText())
 
         # Save Qwen3.5 specific settings
         self.settings.setValue("thinking_mode", "true" if self.thinking_mode_checkbox.isChecked() else "false")

@@ -7,16 +7,19 @@ APPLICATION_NAME = "VideoGameTranslator"
 # Model identifiers
 MODEL_QWEN_9B = "Qwen/Qwen3.5-9B"
 MODEL_QWEN_4B = "Qwen/Qwen3.5-4B"
+MODEL_QWEN_2B = "Qwen/Qwen3.5-2B"
 MODEL_TRANSLATEGEMMA_12B = "google/translategemma-12b-it"
 MODEL_TRANSLATEGEMMA_4B = "google/translategemma-4b-it"
 
 # VRAM thresholds (in GB)
 VRAM_THRESHOLD_9B = 18
 VRAM_THRESHOLD_4B = 10
+VRAM_THRESHOLD_2B = 6
 VRAM_THRESHOLD_TRANSLATEGEMMA_12B = 20
 VRAM_THRESHOLD_TRANSLATEGEMMA_4B = 10
 VRAM_AUTO_SELECT_9B = 20
 VRAM_AUTO_SELECT_4B = 12
+VRAM_AUTO_SELECT_2B = 8
 
 # UI timing
 API_CHECK_DEBOUNCE_MS = 1000
@@ -63,6 +66,8 @@ WORKFLOW_TARGET_INTERVAL_MS = 1000
 WORKFLOW_MIN_SLEEP_MS = 1
 WORKFLOW_ERROR_SLEEP_MS = 1000
 INFERENCE_TIMEOUT_SECONDS = 15.0
+CPU_TIMEOUT_BASE_SECONDS = 180  # Base timeout for CPU inference
+CPU_TIMEOUT_PER_TOKEN = 1.5  # Seconds per token budget (for ~1 tok/s on aarch64)
 
 # Caching
 IMAGE_CACHE_MAX_SIZE = 8
@@ -72,7 +77,13 @@ DB_MAP_SIZE_BYTES = 1024 * 1024 * 1024  # 1GB
 # Image processing
 IMAGE_HASH_SIZE = 16  # 16x16 for perceptual hash
 QWEN_MAX_DIMENSION = 1024
+CPU_MAX_DIMENSION = 384  # Aggressive downscale for CPU — vision cost is O(n²) in pixels
 TRANSLATEGEMMA_DIMENSION = 896
+
+# Adaptive token limits for CPU based on image size
+CPU_MAX_TOKENS_SMALL = 128   # Images < 256px: a few words/lines
+CPU_MAX_TOKENS_MEDIUM = 192  # Images 256-400px: a paragraph
+CPU_MAX_TOKENS_LARGE = 256   # Images > 400px: multiple paragraphs
 
 # Style detection
 STYLE_DETECT_CENTER_REGION = (0.25, 0.25, 0.5, 0.5)  # (x%, y%, w%, h%)
@@ -106,6 +117,8 @@ DEFAULT_MODEL = "Qwen3.5-9B (Auto-select)"
 DEFAULT_SOURCE_LANG = "auto"
 DEFAULT_TARGET_LANG = "English"
 DEFAULT_TRANSLATION_MODE = "full_screen"
+DEFAULT_OCR_MODE = "ocr_translate"  # "ocr_only" or "ocr_translate"
+DEFAULT_OUTPUT_MODE = "Overlay"  # "Overlay", "Clipboard", "File", "Overlay + Clipboard"
 DEFAULT_MINIMIZE_ON_START = True
 DEFAULT_DEBUG_MODE = False
 DEFAULT_COMBINE_PARAGRAPHS = True
