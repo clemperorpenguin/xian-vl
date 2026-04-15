@@ -1,3 +1,6 @@
+# DEPRECATED: Use pyproject.toml with uv instead
+# Install with: uv pip install -e ".[cuda]"
+#
 PyQt6>=6.6
 torch>=2.1
 vllm>=0.11

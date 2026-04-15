@@ -6,6 +6,18 @@ class TranslationMode(Enum):
     FULL_SCREEN = "full_screen"
     REGION_SELECT = "region_select"
 
+class OCRMode(Enum):
+    """Mode for OCR/Translation pipeline"""
+    OCR_ONLY = "ocr_only"  # Extract text only, no translation
+    TRANSLATE = "translate"  # OCR + translation
+
+class OutputMode(Enum):
+    """Output destination for extracted text"""
+    OVERLAY = "overlay"  # Display on screen overlay
+    CLIPBOARD = "clipboard"  # Copy to clipboard
+    FILE = "file"  # Save to file
+    OVERLAY_AND_CLIPBOARD = "overlay_clipboard"  # Both overlay and clipboard
+
 @dataclass
 class TextStyle:
     """Text style information for rendering"""

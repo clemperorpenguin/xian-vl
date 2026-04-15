@@ -9,9 +9,8 @@ import imagehash
 from PIL import Image
 import io
 
-from PyQt6.QtCore import QThread, pyqtSignal, QRect, QElapsedTimer
+from PyQt6.QtCore import QThread, pyqtSignal, QRect, QElapsedTimer, QThreadPool, QRunnable
 from PyQt6.QtGui import QImage, QPainter, QColor, QGuiApplication
-from PyQt6.QtWidgets import QThreadPool, QRunnable
 
 from .models import TranslationMode, TranslationRegion, TranslationResult
 from .screen_capture import ScreenCapture
@@ -102,6 +101,7 @@ class QwenTranslationWorker(QThread):
         """Main worker loop"""
         from PyQt6.QtCore import QElapsedTimer
         timer = QElapsedTimer()
+        logger.info(f"Worker run started, interval={self.interval}ms")
 
         while self.running:
             timer.start()
@@ -114,9 +114,10 @@ class QwenTranslationWorker(QThread):
 
                 # Calculate remaining sleep time
                 elapsed = timer.elapsed()
-                # Use 1 second interval as requested
-                target_interval = constants.WORKFLOW_TARGET_INTERVAL_MS
+                target_interval = self.interval  # Use configured interval
                 remaining = target_interval - elapsed
+
+                logger.debug(f"Worker iteration: {elapsed}ms elapsed, {remaining}ms remaining")
 
                 if remaining > 0:
                     self.msleep(int(remaining))
@@ -132,33 +133,153 @@ class QwenTranslationWorker(QThread):
     def _translate_with_qwen(self):
         """Capture screen, perform OCR and translation with vision-language model."""
         workflow_start = time.time()
+        logger.info(f"_translate_with_qwen called, mode={self.mode}, regions={len(self.regions)}")
 
         # Step 1: Capture
         self.status_update.emit("Capturing screen...")
         image_data = self._capture_screen()
         if not image_data:
+            logger.info("Capture returned None")
             return
+        logger.info(f"Screen captured, size={len(image_data)} bytes")
 
         # Step 2: Redact existing translations
         image_data, _redact_time = self._redact_active_geometries(image_data)
         self._redact_time = _redact_time  # Store for logging in _process_and_emit
 
-        # Step 3: Preprocess and hash
+        # Step 3: Region mode — process each region individually for speed
+        if self.mode == TranslationMode.REGION_SELECT and self.regions:
+            self._translate_regions_individually(image_data, workflow_start)
+            return
+        elif self.mode == TranslationMode.REGION_SELECT and not self.regions:
+            self.status_update.emit("No regions defined")
+            logger.info("No regions defined, skipping")
+            return
+
+        # Full-screen mode: process the entire capture
+        # Step 4: Preprocess and hash
         image_data = ScreenCapture.preprocess_image(image_data)
         pil_image = Image.open(io.BytesIO(image_data))
         dhash = str(imagehash.dhash(pil_image))
+        logger.info(f"Preprocessed image, dhash={dhash}")
 
-        # Step 4: Check caches
+        # Step 5: Check caches
         if self._check_and_emit_cached(dhash):
+            logger.info("Cache hit, returning early")
             return
 
-        # Step 5: Check image hash for no-change
+        # Step 6: Check image hash for no-change
         image_hash = ScreenCapture.calculate_hash(image_data)
         if self._should_skip_unchanged_image(image_hash):
+            logger.info("Image unchanged, skipping")
             return
 
-        # Step 6: Process with VLM
+        # Step 7: Process with VLM
+        logger.info("Calling _process_and_emit")
         self._process_and_emit(image_data, image_hash, dhash, workflow_start)
+
+    def _translate_regions_individually(self, full_image_data: bytes, workflow_start: float):
+        """Process each region as a separate small image for CPU speed.
+        
+        Instead of compositing all regions into one wide image (slow: large composite
+        = more vision encoder work), we crop each region individually and run inference
+        per-region. For typical 400x300 regions on ARM64, this means:
+        - Each crop is small -> fast vision encoding
+        - Correct coordinates per-region without hacky offset fixup
+        - JPEG encoding for intermediate crops (faster than PNG)
+        """
+        full_image = Image.open(io.BytesIO(full_image_data))
+        all_results = []
+        is_cpu = getattr(self.qwen_processor, 'use_cpu_mode', False)
+
+        for i, region in enumerate(self.regions):
+            if not self.running:
+                logger.info("Worker stopped during region processing")
+                return
+
+            region_start = time.time()
+            self.status_update.emit(f"Processing region {i+1}/{len(self.regions)}: {region.name}...")
+            logger.info(f"Processing region {i+1}/{len(self.regions)}: {region.name} ({region.x},{region.y} {region.width}x{region.height})")
+
+            # Crop the region from the full capture
+            box = (region.x, region.y, region.x + region.width, region.y + region.height)
+            region_image = full_image.crop(box)
+
+            # Encode as JPEG for speed (PNG is slow to encode/decode)
+            buffer = io.BytesIO()
+            # Convert to RGB (screen captures are often RGBA; JPEG doesn't support alpha)
+            if region_image.mode != "RGB":
+                region_image = region_image.convert("RGB")
+            region_image.save(buffer, format="JPEG", quality=85)
+            region_bytes = buffer.getvalue()
+            logger.info(f"Region crop: {region_image.size}, JPEG size={len(region_bytes)} bytes")
+
+            # Check per-region cache using dhash
+            region_pil = Image.open(io.BytesIO(region_bytes))
+            region_dhash = str(imagehash.dhash(region_pil))
+
+            if region_dhash in self.perceptual_cache:
+                logger.info(f"Region {i+1} cache hit (dhash)")
+                cached = self.perceptual_cache[region_dhash]
+                all_results.extend(cached)
+                continue
+
+            db_cached = self.translation_db.get_translation(region_dhash)
+            if db_cached:
+                logger.info(f"Region {i+1} DB cache hit")
+                cached_results = [TranslationResult(**item) for item in db_cached]
+                self.perceptual_cache[region_dhash] = cached_results
+                all_results.extend(cached_results)
+                continue
+
+            # Run VLM inference on the small region crop
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    region_results = loop.run_until_complete(
+                        self.qwen_processor.process_frame(region_bytes, self.target_lang)
+                    )
+                finally:
+                    loop.close()
+            except Exception as e:
+                logger.error(f"VLM error on region {i+1}: {e}")
+                continue
+
+            region_time = time.time() - region_start
+            logger.info(f"Region {i+1} inference took {region_time:.1f}s, got {len(region_results)} results")
+
+            # Map coordinates back to screen space
+            for res in region_results:
+                res.x = float(region.x)
+                res.y = float(region.y)
+                res.width = float(region.width)
+                res.height = float(region.height)
+
+            # Cache per-region results
+            self.perceptual_cache[region_dhash] = region_results
+            db_data = [r.__dict__ for r in region_results]
+            self.translation_db.put_translation(region_dhash, db_data)
+
+            all_results.extend(region_results)
+
+        # Emit all region results together
+        workflow_total = time.time() - workflow_start
+        logger.info(f"All regions done: {len(all_results)} results in {workflow_total:.1f}s")
+
+        if not all_results:
+            self.status_update.emit("No text detected in regions")
+            self._last_translation_signature = self._empty_signature
+            return
+
+        signature = self._fingerprint_translations(all_results)
+        if signature == self._last_translation_signature:
+            logger.debug("Translation signature unchanged; suppressing overlay refresh")
+            return
+        self._last_translation_signature = signature
+
+        self.translation_ready.emit(all_results, None)
+        self.status_update.emit(f"Translation complete ({workflow_total:.0f}s)")
 
     def _capture_screen(self) -> Optional[bytes]:
         """Capture the screen and return image bytes or None."""
@@ -235,6 +356,7 @@ class QwenTranslationWorker(QThread):
     def _process_and_emit(self, image_data: bytes, image_hash: str, dhash: str,
                           workflow_start: float) -> None:
         """Process the frame with the VLM and emit results."""
+        logger.info("Starting VLM inference...")
         self.status_update.emit("Processing with vision-language model...")
         vl_start = time.time()
         try:
@@ -249,6 +371,7 @@ class QwenTranslationWorker(QThread):
 
             vl_time = time.time() - vl_start
             workflow_total = time.time() - workflow_start
+            logger.info(f"VLM inference took {vl_time:.2f}s, total workflow {workflow_total:.2f}s")
 
             if not translated_results:
                 logger.info(f"Vision-language model finished in {vl_time:.2f}s: No text detected")
@@ -385,20 +508,25 @@ class QwenModelWarmupWorker(QThread):
 
     def run(self):
         try:
+            logger.info("Starting model warmup...")
             # Initialize the engine
             import asyncio
+            import traceback
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
                 loop.run_until_complete(self.qwen_processor.init_engine())
+                logger.info("Engine initialized successfully")
                 ok = True
                 err = ""
             except Exception as e:
+                logger.error(f"Engine initialization failed: {e}")
+                logger.error(traceback.format_exc())
                 ok = False
                 err = str(e)
             finally:
                 loop.close()
-                
+
             self.warmup_finished.emit(ok, err)
         except Exception as e:
             logger.error(f"Vision-language model warmup error: {e}")

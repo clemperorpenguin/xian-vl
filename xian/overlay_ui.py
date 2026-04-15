@@ -16,10 +16,12 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QSlider,
     QFormLayout,
+    QListWidget,
+    QListWidgetItem,
 )
 from PyQt6.QtCore import Qt, QTimer, QRect, QPoint, QSettings, QObject, pyqtSignal, QSize
 from PyQt6.QtGui import QPainter, QColor, QFont, QGuiApplication, QMouseEvent, QPaintEvent, QFontMetrics, QRegion, QIcon
-from .models import TranslationResult, TranslationMode
+from .models import TranslationResult, TranslationMode, OCRMode, OutputMode
 from . import constants
 
 logger = logging.getLogger(__name__)
@@ -103,11 +105,30 @@ class OverlayControlPanel(QWidget):
         self.stop_btn.hide()
         header.addWidget(self.stop_btn)
 
-        self.settings_btn = QPushButton("Settings")
-        self.settings_btn.setCheckable(True)
-        self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.settings_btn.clicked.connect(self._toggle_settings)
-        header.addWidget(self.settings_btn)
+        # Navigation tabs for the control panel
+        self.nav_tabs = QHBoxLayout()
+        self.nav_tabs.setSpacing(2)
+        
+        self.logs_tab_btn = QPushButton("Logs")
+        self.logs_tab_btn.setCheckable(True)
+        self.logs_tab_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.logs_tab_btn.clicked.connect(lambda: self._switch_page(0))
+        self.nav_tabs.addWidget(self.logs_tab_btn)
+
+        self.regions_tab_btn = QPushButton("Regions")
+        self.regions_tab_btn.setCheckable(True)
+        self.regions_tab_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.regions_tab_btn.clicked.connect(lambda: self._switch_page(1))
+        self.nav_tabs.addWidget(self.regions_tab_btn)
+
+        self.settings_tab_btn = QPushButton("Settings")
+        self.settings_tab_btn.setCheckable(True)
+        self.settings_tab_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_tab_btn.clicked.connect(lambda: self._switch_page(2))
+        self.nav_tabs.addWidget(self.settings_tab_btn)
+
+        header.addLayout(self.nav_tabs)
+        header.addStretch()
 
         layout.addLayout(header)
 
@@ -149,7 +170,33 @@ class OverlayControlPanel(QWidget):
 
         self.stack.addWidget(log_container)
 
-        # Page 2: Settings
+        # Page 2: Regions
+        regions_container = QWidget()
+        regions_layout = QVBoxLayout(regions_container)
+
+        self.regions_list_widget = QListWidget()
+        self.regions_list_widget.setStyleSheet(
+            "color: #ddd; background: rgba(0,0,0,80); border: 1px solid rgba(255,255,255,20); font-size: 11px;"
+        )
+        regions_layout.addWidget(QLabel("Translation Regions:"))
+        regions_layout.addWidget(self.regions_list_widget)
+
+        regions_controls = QHBoxLayout()
+        self.add_region_btn = QPushButton("Add Region")
+        self.add_region_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_region_btn.setToolTip("Click to select a region on screen")
+        self.remove_region_btn = QPushButton("Remove Selected")
+        self.remove_region_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        regions_controls.addWidget(self.add_region_btn)
+        regions_controls.addWidget(self.remove_region_btn)
+        regions_controls.addStretch()
+        regions_layout.addLayout(regions_controls)
+
+        logger.info("Region buttons created")
+
+        self.stack.addWidget(regions_container)
+
+        # Page 3: Settings
         settings_container = QWidget()
         settings_scroll = QScrollArea()
         settings_scroll.setWidgetResizable(True)
@@ -166,6 +213,18 @@ class OverlayControlPanel(QWidget):
         self.mode_combo.addItems(["Full Screen", "Region Selection"])
         settings_layout.addRow("Mode:", self.mode_combo)
 
+        # OCR Mode
+        self.ocr_mode_combo = QComboBox()
+        self.ocr_mode_combo.addItems(["OCR + Translate", "OCR Only"])
+        self.ocr_mode_combo.setToolTip("OCR Only extracts text without translation")
+        settings_layout.addRow("OCR Mode:", self.ocr_mode_combo)
+
+        # Output Mode
+        self.output_mode_combo = QComboBox()
+        self.output_mode_combo.addItems(["Overlay", "Clipboard", "File", "Overlay + Clipboard"])
+        self.output_mode_combo.setToolTip("Where to send the extracted text")
+        settings_layout.addRow("Output:", self.output_mode_combo)
+
         # Language
         self.source_lang_combo = QComboBox()
         self.source_lang_combo.addItems(["auto", "Japanese", "Korean", "Chinese", "Spanish", "French", "English"])
@@ -181,6 +240,7 @@ class OverlayControlPanel(QWidget):
             "Qwen3.5-9B (Auto-select)",
             "Qwen3.5-9B",
             "Qwen3.5-4B",
+            "Qwen3.5-2B (Recommended for CPU)",
             "TranslateGemma-12B (High Quality)",
             "TranslateGemma-4B (Lower Resource)",
         ])
@@ -234,9 +294,8 @@ class OverlayControlPanel(QWidget):
         self._move_to_default_position()
         self._load_panel_settings()
         self.apply_opacity(self.opacity_slider.value())
-        # Default to the Settings view so the app opens directly into overlay settings.
-        self.settings_btn.setChecked(True)
-        self._toggle_settings(True)
+        # Default to the Settings view
+        self._switch_page(2)
         self._connect_internal_signals()
 
         # Wire python logging -> Qt
@@ -251,11 +310,20 @@ class OverlayControlPanel(QWidget):
 
     def show_settings_view(self):
         """Switch to the Settings view and ensure the button state matches."""
-        self.settings_btn.setChecked(True)
-        self._toggle_settings(True)
+        self._switch_page(2)  # Settings is now page 2
+
+    def _switch_page(self, index: int):
+        """Switch to the specified page (0=Logs, 1=Regions, 2=Settings)."""
+        self.stack.setCurrentIndex(index)
+        # Update tab button states
+        self.logs_tab_btn.setChecked(index == 0)
+        self.regions_tab_btn.setChecked(index == 1)
+        self.settings_tab_btn.setChecked(index == 2)
 
     def _connect_internal_signals(self):
         self.mode_combo.currentIndexChanged.connect(self._save_panel_settings)
+        self.ocr_mode_combo.currentIndexChanged.connect(self._save_panel_settings)
+        self.output_mode_combo.currentIndexChanged.connect(self._save_panel_settings)
         self.source_lang_combo.currentIndexChanged.connect(self._save_panel_settings)
         self.target_lang_combo.currentIndexChanged.connect(self._save_panel_settings)
         self.model_combo.currentTextChanged.connect(self._save_panel_settings)
@@ -276,6 +344,10 @@ class OverlayControlPanel(QWidget):
         s = self.settings
         self.mode_combo.setCurrentText(
             "Full Screen" if s.value("translation_mode", constants.DEFAULT_TRANSLATION_MODE) == "full_screen" else "Region Selection")
+        self.ocr_mode_combo.setCurrentText(
+            "OCR Only" if s.value("ocr_mode", "ocr_translate") == "ocr_only" else "OCR + Translate")
+        self.output_mode_combo.setCurrentText(
+            s.value("output_mode", constants.DEFAULT_OUTPUT_MODE))
         self.source_lang_combo.setCurrentText(s.value("source_lang", constants.DEFAULT_SOURCE_LANG))
         self.target_lang_combo.setCurrentText(s.value("target_lang", constants.DEFAULT_TARGET_LANG))
         self.model_combo.setCurrentText(s.value("model_name", constants.DEFAULT_MODEL))
@@ -292,6 +364,9 @@ class OverlayControlPanel(QWidget):
         s = self.settings
         s.setValue("translation_mode",
                    "full_screen" if self.mode_combo.currentText() == "Full Screen" else "region_select")
+        s.setValue("ocr_mode",
+                   "ocr_only" if self.ocr_mode_combo.currentText() == "OCR Only" else "ocr_translate")
+        s.setValue("output_mode", self.output_mode_combo.currentText())
         s.setValue("source_lang", self.source_lang_combo.currentText())
         s.setValue("target_lang", self.target_lang_combo.currentText())
         s.setValue("model_name", self.model_combo.currentText())
@@ -501,11 +576,13 @@ class OverlayWindow(QWidget):
 
     def update_mask_during_drag(self):
         """Recalculate mask from all children during a drag operation"""
-        mask = QRegion()
+        # Base mask with tiny 1x1 region to prevent full Wayland unmapping
+        mask = QRegion(0, 0, 1, 1)
+        
         # Base mask: all visible child widgets (bubbles + control panel)
         for child in self.findChildren(QWidget):
-            if child.isVisible() and not child.isWindow():
-                mask += child.geometry()
+            if not child.isHidden() and not child.isWindow():
+                mask = mask.united(QRegion(child.geometry()))
 
         # If link visualization is enabled, include source rects and a thin band along connectors
         show_links_enabled = False
@@ -520,13 +597,13 @@ class OverlayWindow(QWidget):
             try:
                 bubbles = self.findChildren(TranslationBubble)
                 for b in bubbles:
-                    if sip.isdeleted(b) or not b.isVisible():
+                    if sip.isdeleted(b) or b.isHidden():
                         continue
                     if not getattr(b, "show_link", False):
                         continue
                     r = b.result
                     src_rect = QRect(int(r.x), int(r.y), int(r.width), int(r.height))
-                    mask += src_rect
+                    mask = mask.united(QRegion(src_rect))
 
                     # Add a thin series of rectangles along the line from bubble center to src center
                     b_center = b.geometry().center()
@@ -538,7 +615,7 @@ class OverlayWindow(QWidget):
                         t = i / steps
                         x = int(b_center.x() + dx * t)
                         y = int(b_center.y() + dy * t)
-                        mask += QRect(x - 4, y - 4, 8, 8)
+                        mask = mask.united(QRegion(QRect(x - 4, y - 4, 8, 8)))
             except Exception:
                 pass
         self.setMask(mask)
@@ -1240,15 +1317,17 @@ class TranslationOverlay(QObject):
         if sip.isdeleted(self.overlay_window):
             return
 
-        mask = QRegion()
-        for bubble in self.bubbles:
-            if not sip.isdeleted(bubble) and bubble.isVisible():
-                # We use the bubble's geometry which is relative to the overlay_window
-                mask += bubble.geometry()
+        # Initialize with a tiny 1x1 region at origin to prevent Wayland KWin from fully unmapping an empty-masked window
+        mask = QRegion(0, 0, 1, 1)
 
-        # Include control panel in mask
-        if not sip.isdeleted(self.control_panel) and self.control_panel.isVisible():
-            mask += self.control_panel.geometry()
+        for bubble in self.bubbles:
+            if not sip.isdeleted(bubble) and not bubble.isHidden():
+                # We use the bubble's geometry which is relative to the overlay_window
+                mask = mask.united(QRegion(bubble.geometry()))
+
+        # Include control panel in mask, safely avoiding isVisible() races
+        if not sip.isdeleted(self.control_panel) and not self.control_panel.isHidden():
+            mask = mask.united(QRegion(self.control_panel.geometry()))
 
         self.overlay_window.setMask(mask)
         self.overlay_window.update()
