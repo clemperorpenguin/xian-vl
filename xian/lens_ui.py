@@ -3,6 +3,7 @@ from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton
 from PyQt6.QtCore import Qt, QRect, QPoint, QBuffer, QIODevice, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent, QPixmap, QImage, QGuiApplication
 from .screen_capture import ScreenCapture
+from .theme import accent_hex, accent_hover_hex, accent_qcolor
 
 logger = logging.getLogger(__name__)
 
@@ -17,23 +18,23 @@ class ActionBarWidget(QWidget):
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(5)
         
-        self.setStyleSheet("""
-            QWidget {
+        self.setStyleSheet(f"""
+            QWidget {{
                 background-color: rgba(30, 30, 30, 220);
                 border-radius: 8px;
-                border: 1px solid #4CAF50;
-            }
-            QPushButton {
+                border: 1px solid {accent_hex()};
+            }}
+            QPushButton {{
                 background-color: #333;
                 color: white;
                 border: none;
                 padding: 6px 12px;
                 border-radius: 4px;
                 font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #4CAF50;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {accent_hex()};
+            }}
         """)
         
         btn_translate = QPushButton("Translate")
@@ -197,7 +198,7 @@ class LensOverlayWindow(QWidget):
             painter.fillRect(rect.right() + 1, rect.top(), win_rect.width() - rect.right() - 1, rect.height() + 1, dim_color)
             
             # Draw border around selection
-            painter.setPen(QPen(QColor(76, 175, 80), 2))
+            painter.setPen(QPen(accent_qcolor(), 2))
             painter.drawRect(rect)
         else:
             painter.fillRect(self.rect(), dim_color)

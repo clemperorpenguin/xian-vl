@@ -4,6 +4,7 @@ import logging
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QPushButton, QHBoxLayout, QApplication
 from PyQt6.QtCore import Qt, QTimer, QRect, QPoint
 from PyQt6.QtGui import QFont, QGuiApplication
+from .theme import accent_hex
 
 logger = logging.getLogger(__name__)
 
@@ -34,25 +35,25 @@ class ResultBubble(QWidget):
         # --- layout -----------------------------------------------------------
         root = QWidget(self)
         root.setObjectName("BubbleRoot")
-        root.setStyleSheet("""
-            #BubbleRoot {
+        root.setStyleSheet(f"""
+            #BubbleRoot {{
                 background-color: rgba(20, 20, 20, 230);
-                border: 1px solid #4CAF50;
+                border: 1px solid {accent_hex()};
                 border-radius: 8px;
-            }
-            QLabel {
+            }}
+            QLabel {{
                 color: #eee;
                 font-size: 13px;
                 padding: 2px;
-            }
-            QPushButton {
+            }}
+            QPushButton {{
                 background: transparent;
                 color: #888;
                 border: none;
                 font-size: 11px;
                 padding: 2px 6px;
-            }
-            QPushButton:hover { color: #fff; }
+            }}
+            QPushButton:hover {{ color: #fff; }}
         """)
 
         outer = QVBoxLayout(self)
@@ -66,7 +67,7 @@ class ResultBubble(QWidget):
         # Header row with close button
         header = QHBoxLayout()
         title = QLabel("Xian — Translation")
-        title.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 11px;")
+        title.setStyleSheet(f"color: {accent_hex()}; font-weight: bold; font-size: 11px;")
         header.addWidget(title)
         header.addStretch()
 

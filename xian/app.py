@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSettings, QRect, QTimer
 from PyQt6.QtGui import QIcon, QAction
 
+from .theme import accent_hex, accent_hover_hex
+
 from .qwen_pipeline import VLProcessor, VLConfig
 from .workers import InferenceWorker, StatusWorker, ModelPullWorker
 from .lens_ui import LensOverlayWindow
@@ -79,18 +81,18 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(cancel_btn)
         layout.addRow(btn_row)
 
-        self.setStyleSheet("""
-            QDialog { background: #1e1e1e; color: #eee; }
-            QLabel { color: #ccc; }
-            QLineEdit, QComboBox, QSpinBox {
+        self.setStyleSheet(f"""
+            QDialog {{ background: #1e1e1e; color: #eee; }}
+            QLabel {{ color: #ccc; }}
+            QLineEdit, QComboBox, QSpinBox {{
                 background: #2a2a2a; color: #eee; border: 1px solid #555;
                 border-radius: 4px; padding: 4px;
-            }
-            QPushButton {
-                background: #4CAF50; color: white; border: none;
+            }}
+            QPushButton {{
+                background: {accent_hex()}; color: white; border: none;
                 padding: 6px 16px; border-radius: 4px; font-weight: bold;
-            }
-            QPushButton:hover { background: #45a049; }
+            }}
+            QPushButton:hover {{ background: {accent_hover_hex()}; }}
         """)
 
     def _save(self):

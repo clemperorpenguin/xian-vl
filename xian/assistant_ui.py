@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QRect
 from PyQt6.QtGui import QGuiApplication
 from .grounding_ui import GroundingHighlight
+from .theme import accent_hex, accent_hover_hex
 
 logger = logging.getLogger(__name__)
 
@@ -55,35 +56,35 @@ class ChatSidebar(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         
         # Style
-        self.setStyleSheet("""
-            QWidget {
+        self.setStyleSheet(f"""
+            QWidget {{
                 background-color: rgba(20, 20, 20, 240);
                 color: white;
-                border-left: 1px solid #4CAF50;
-            }
-            QTextEdit {
+                border-left: 1px solid {accent_hex()};
+            }}
+            QTextEdit {{
                 background-color: transparent;
                 border: none;
                 font-size: 14px;
-            }
-            QLineEdit {
+            }}
+            QLineEdit {{
                 background-color: #333;
                 border: 1px solid #555;
                 border-radius: 4px;
                 padding: 8px;
                 font-size: 14px;
-            }
-            QPushButton {
-                background-color: #4CAF50;
+            }}
+            QPushButton {{
+                background-color: {accent_hex()};
                 color: white;
                 border: none;
                 padding: 8px 12px;
                 border-radius: 4px;
                 font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {accent_hover_hex()};
+            }}
         """)
         
         # History
@@ -132,7 +133,7 @@ class ChatSidebar(QWidget):
         if not text: return
         
         self.input_field.clear()
-        self._append_message("You", text, "#4CAF50")
+        self._append_message("You", text, accent_hex())
         
         # Disable input while processing
         self.input_field.setEnabled(False)
