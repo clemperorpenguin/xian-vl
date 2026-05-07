@@ -1,4 +1,4 @@
-# Xian-VL: Stateful Wayland Assistant
+# Xian-VL: Stateful Desktop Assistant
 
 <img width="768" height="768" alt="xian" src="https://github.com/user-attachments/assets/7b9498fd-4786-481f-b2c9-e29632b2ec24" />
 
@@ -19,7 +19,7 @@ Xian-VL acts as a lightweight client powered by the **[Lemonade-SDK OmniRouter](
 
 ## Requirements
 
-- **Linux with Wayland** (Tested on KDE Plasma)
+- **Linux with Wayland** (Windows and MacOS are experimental but should work)
 - **Python 3.10+**
 - **Lemonade-SDK**: Assumes a local instance running at `http://localhost:13305`. (For remote nodes, see Configuration below).
 - **User Permissions**: Your user must be in the `input` group to read global hotkeys (`sudo usermod -aG input $USER`).
@@ -56,9 +56,10 @@ uv pip install -e .
 
 ## Roadmap
 
-1. Windows and MacOS support.
-2. Literary style selection.
-3. Oracle/chatbot.
+- Literary style selection
+- Game oracle/chatbot
+- Flatpak/SteamOS support
+- Expanded language support
 
 ## License
 
