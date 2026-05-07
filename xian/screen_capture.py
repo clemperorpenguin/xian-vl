@@ -1,4 +1,5 @@
 import logging
+import sys
 import os
 import subprocess
 import tempfile
@@ -24,53 +25,94 @@ class ScreenCapture:
     def capture_screen() -> Optional[bytes]:
         """Capture entire screen using best available method"""
 
-        # Try Wayland-specific methods first if on Wayland
-        is_wayland = os.environ.get("XDG_SESSION_TYPE") == "wayland"
-        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+        # Try Wayland-specific methods first if on Wayland (Linux only)
+        if sys.platform == "linux":
+            is_wayland = os.environ.get("XDG_SESSION_TYPE") == "wayland"
+            desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
-        if is_wayland:
-            logger.debug(f"Wayland detected, desktop: {desktop}")
-            # 1. KDE Plasma - Spectacle
-            if "kde" in desktop:
-                logger.debug("Trying Spectacle backend...")
-                data = ScreenCapture._capture_spectacle()
+            if is_wayland:
+                logger.debug(f"Wayland detected, desktop: {desktop}")
+                # 1. KDE Plasma - Spectacle
+                if "kde" in desktop:
+                    logger.debug("Trying Spectacle backend...")
+                    data = ScreenCapture._capture_spectacle()
+                    if data: return data
+
+                # 2. GNOME - gnome-screenshot or DBus
+                if "gnome" in desktop:
+                    logger.debug("Trying GNOME backend...")
+                    data = ScreenCapture._capture_gnome()
+                    if data: return data
+
+                # 3. Generic Wayland - grim
+                logger.debug("Trying grim backend...")
+                data = ScreenCapture._capture_grim()
                 if data: return data
 
-            # 2. GNOME - gnome-screenshot or DBus
-            if "gnome" in desktop:
-                logger.debug("Trying GNOME backend...")
-                data = ScreenCapture._capture_gnome()
-                if data: return data
+        # Fallback to PyQt (works on X11, Windows, and macOS)
+        logger.debug("Using PyQt backend...")
+        data = ScreenCapture._capture_pyqt()
 
-            # 3. Generic Wayland - grim
-            logger.debug("Trying grim backend...")
-            data = ScreenCapture._capture_grim()
-            if data: return data
+        if data:
+            return data
 
-        # 4. Fallback to PyQt (works on X11, usually returns black on Wayland)
-        logger.debug("Falling back to PyQt backend...")
-        return ScreenCapture._capture_pyqt()
+        # Platform-specific guidance when capture fails
+        if sys.platform == "darwin":
+            logger.warning(
+                "Screen capture returned empty on macOS. "
+                "Please grant Screen Recording permission: "
+                "System Settings → Privacy & Security → Screen Recording. "
+                "You must add and enable the terminal or app running Xian-VL, "
+                "then restart it."
+            )
+        else:
+            logger.warning("Screen capture returned empty")
+
+        return None
 
     @staticmethod
     def _capture_pyqt() -> Optional[bytes]:
-        """Capture entire screen using PyQt (X11 only)"""
+        """Capture entire virtual desktop using PyQt (X11, Windows, macOS).
+
+        Composites all screens into a single image so multi-monitor setups
+        are fully captured.
+        """
         try:
-            screen = QGuiApplication.primaryScreen()
-            if screen:
+            screens = QGuiApplication.screens()
+            if not screens:
+                return None
+
+            total_geo = ScreenCapture.get_virtual_desktop_geometry()
+
+            from PyQt6.QtGui import QPixmap, QPainter, QColor
+            combined = QPixmap(total_geo.width(), total_geo.height())
+            combined.fill(QColor(0, 0, 0))
+
+            painter = QPainter(combined)
+            for screen in screens:
+                geo = screen.geometry()
                 pixmap = screen.grabWindow(0)
-                if pixmap.isNull():
-                    return None
+                if not pixmap.isNull():
+                    painter.drawPixmap(
+                        geo.x() - total_geo.x(),
+                        geo.y() - total_geo.y(),
+                        pixmap,
+                    )
+            painter.end()
 
-                buffer = QBuffer()
-                buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-                pixmap.save(buffer, "PNG")
-                data = bytes(buffer.buffer())
+            if combined.isNull():
+                return None
 
-                if ScreenCapture._is_image_empty(data):
-                    logger.debug("PyQt capture returned empty/black image")
-                    return None
+            buffer = QBuffer()
+            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+            combined.save(buffer, "PNG")
+            data = bytes(buffer.buffer())
 
-                return data
+            if ScreenCapture._is_image_empty(data):
+                logger.debug("PyQt capture returned empty/black image")
+                return None
+
+            return data
         except Exception as e:
             logger.debug(f"PyQt capture error: {e}")
         return None
