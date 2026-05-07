@@ -23,7 +23,7 @@ from .workers import InferenceWorker, StatusWorker, ModelPullWorker
 from .lens_ui import LensOverlayWindow
 from .assistant_ui import ChatSidebar
 from .result_bubble import ResultBubble
-from .hotkeys import EvdevHotkeyListener
+from .hotkeys import create_hotkey_listener
 from .dictionary import LocalDictionary
 from .context_manager import ContextManager
 from . import constants
@@ -126,7 +126,7 @@ class XianApp(QWidget):
         self.dictionary = LocalDictionary()
 
         # --- Hotkeys ---
-        self.hotkey_listener = EvdevHotkeyListener()
+        self.hotkey_listener = create_hotkey_listener()
         self.hotkey_listener.trigger_lens.connect(self.show_lens)
         self.hotkey_listener.trigger_chat.connect(self.toggle_chat)
         self.hotkey_listener.trigger_settings.connect(self._open_settings)
