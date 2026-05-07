@@ -11,6 +11,7 @@ Xian-VL acts as a lightweight client powered by the **[Lemonade-SDK OmniRouter](
 - **Global Interaction**: Seamlessly trigger actions via global Wayland hotkeys (requires `evdev`).
   - `Super+Shift+C`: Open the "Lens" overlay to freeze the screen and capture a specific region.
   - `Super+A`: Toggle the persistent Chat Sidebar.
+  - `Super+Shift+S`: Open the settings.
 - **Contextual Memory**: Xian-VL maintains a sliding-window memory of your recent screen captures and chat history, allowing you to ask follow-up questions about what you just captured.
 - **Visual Grounding**: Ask the assistant "where do I click?" and watch it highlight the UI element directly on your screen.
 - **Instant Dictionary Lookups**: Hover over translated text bubbles and press `Alt` for real-time CC-CEDICT dictionary breakdowns.
@@ -41,15 +42,7 @@ uv venv
 uv pip install -e .
 ```
 
-*Note: Xian-VL is a lightweight client. You do not need to install PyTorch, CUDA, or ROCm locally. Ensure your Lemonade Server is running with an appropriate model collection loaded.*
-
-## Configuration
-
-To connect to a **remote Lemonade Server** (e.g., if you are running inference on a separate workstation), set the `LEMONADE_API_URL` environment variable before launching the application:
-
-```bash
-export LEMONADE_API_URL="http://192.168.1.100:13305/v1"
-```
+*Note: Xian-VL is a lightweight client. You do not need to install PyTorch, CUDA, or ROCm locally. Ensure your Lemonade Server is running with an appropriate model collection loaded. The server will download a Qwen3.5-9B-GGUF model automatically, which requires about 6GB of spare VRAM to run.*
 
 ## Usage
 
@@ -60,6 +53,12 @@ export LEMONADE_API_URL="http://192.168.1.100:13305/v1"
    ```
 3. **Capture & Translate**: Press `Super+Shift+C` to freeze the screen. Drag to select a region, then use the action bar to Translate, Explain, or Chat about the selected area.
 4. **Chat Sidebar**: Press `Super+A` to open the sidebar and interact with the assistant based on your screen context.
+
+## Roadmap
+
+1. Windows and MacOS support.
+2. Literary style selection.
+3. Oracle/chatbot.
 
 ## License
 
