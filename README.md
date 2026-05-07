@@ -1,4 +1,4 @@
-# Xian-VL: Stateful Desktop Assistant
+# Xian-VL: Multilingual Assistant for Gaming Environments 🧙‍♂️
 
 <img width="768" height="768" alt="xian" src="https://github.com/user-attachments/assets/7b9498fd-4786-481f-b2c9-e29632b2ec24" />
 
