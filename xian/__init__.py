@@ -1,3 +1,3 @@
-"""Xian - Real-time Video Game Translation Overlay."""
+"""Xian-VL — Stateful Wayland Assistant."""
 
 __version__ = "1.0.0"
