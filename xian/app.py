@@ -11,7 +11,7 @@ import os
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QDialog, QFormLayout,
     QLineEdit, QComboBox, QSpinBox, QPushButton, QLabel, QVBoxLayout,
-    QHBoxLayout, QWidget,
+    QHBoxLayout, QWidget, QCheckBox
 )
 from PyQt6.QtCore import Qt, QSettings, QRect, QTimer
 from PyQt6.QtGui import QIcon, QAction
@@ -26,6 +26,7 @@ from .result_bubble import ResultBubble
 from .hotkeys import create_hotkey_listener
 from .dictionary import LocalDictionary
 from .context_manager import ContextManager
+from .command_osd import CommandOSD
 from . import constants
 
 logger = logging.getLogger(__name__)
@@ -58,11 +59,45 @@ class SettingsDialog(QDialog):
         self.model_combo.setCurrentText(settings.value("api_model", constants.DEFAULT_MODEL))
         layout.addRow("Model:", self.model_combo)
 
+        # Source language
+        self.source_lang_combo = QComboBox()
+        self.source_lang_combo.addItems(["English", "Chinese", "Vietnamese", "Japanese"])
+        self.source_lang_combo.setCurrentText(settings.value("source_lang", constants.DEFAULT_SOURCE_LANG))
+        layout.addRow("Source Language:", self.source_lang_combo)
+
         # Target language
         self.lang_combo = QComboBox()
-        self.lang_combo.addItems(["English", "Japanese", "Korean", "Chinese", "Spanish", "French"])
+        self.lang_combo.addItems(["English", "Vietnamese", "Chinese", "Japanese"])
         self.lang_combo.setCurrentText(settings.value("target_lang", constants.DEFAULT_TARGET_LANG))
         layout.addRow("Target Language:", self.lang_combo)
+
+        # Mode
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["Web", "Game"])
+        self.mode_combo.setCurrentText(settings.value("mode", constants.DEFAULT_MODE))
+        layout.addRow("Mode:", self.mode_combo)
+
+        # Leader Key
+        self.leader_combo = QComboBox()
+        self.leader_combo.addItems(["Shift+Space", "Ctrl+Space", "Alt+Space", "Super+Space"])
+        self.leader_combo.setCurrentText(settings.value("leader_key", constants.DEFAULT_LEADER_KEY))
+        layout.addRow("Leader Key:", self.leader_combo)
+
+        # Styles
+        style_layout = QVBoxLayout()
+        self.style_checkboxes = {}
+        saved_styles = settings.value("styles", constants.DEFAULT_STYLES)
+        if isinstance(saved_styles, str):
+            saved_styles = [s.strip() for s in saved_styles.split(",") if s.strip()]
+        elif not isinstance(saved_styles, list):
+            saved_styles = []
+        for style in ["Romance", "Wuxia", "Visual Novel", "MMORPG"]:
+            cb = QCheckBox(style)
+            if style in saved_styles:
+                cb.setChecked(True)
+            self.style_checkboxes[style] = cb
+            style_layout.addWidget(cb)
+        layout.addRow("Styles:", style_layout)
 
         # Max tokens
         self.tokens_spin = QSpinBox()
@@ -83,7 +118,7 @@ class SettingsDialog(QDialog):
 
         self.setStyleSheet(f"""
             QDialog {{ background: #1e1e1e; color: #eee; }}
-            QLabel {{ color: #ccc; }}
+            QLabel, QCheckBox {{ color: #ccc; }}
             QLineEdit, QComboBox, QSpinBox {{
                 background: #2a2a2a; color: #eee; border: 1px solid #555;
                 border-radius: 4px; padding: 4px;
@@ -98,8 +133,13 @@ class SettingsDialog(QDialog):
     def _save(self):
         self.settings.setValue("api_url", self.url_edit.text())
         self.settings.setValue("api_model", self.model_combo.currentText())
+        self.settings.setValue("source_lang", self.source_lang_combo.currentText())
         self.settings.setValue("target_lang", self.lang_combo.currentText())
+        self.settings.setValue("mode", self.mode_combo.currentText())
+        selected_styles = [s for s, cb in self.style_checkboxes.items() if cb.isChecked()]
+        self.settings.setValue("styles", selected_styles)
         self.settings.setValue("max_tokens", self.tokens_spin.value())
+        self.settings.setValue("leader_key", self.leader_combo.currentText())
         self.accept()
 
 
@@ -127,10 +167,30 @@ class XianApp(QWidget):
 
         # --- Hotkeys ---
         self.hotkey_listener = create_hotkey_listener()
+        
+        # Load and set initial leader key
+        initial_leader = self.settings.value("leader_key", constants.DEFAULT_LEADER_KEY)
+        if hasattr(self.hotkey_listener, "set_leader_key"):
+            self.hotkey_listener.set_leader_key(initial_leader)
+            
         self.hotkey_listener.trigger_lens.connect(self.show_lens)
         self.hotkey_listener.trigger_chat.connect(self.toggle_chat)
         self.hotkey_listener.trigger_settings.connect(self._open_settings)
+        self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
         self.hotkey_listener.start()
+
+        # --- Command OSD ---
+        self.osd = CommandOSD()
+        self.osd.initialize_settings(
+            source=self.settings.value("source_lang", constants.DEFAULT_SOURCE_LANG),
+            target=self.settings.value("target_lang", constants.DEFAULT_TARGET_LANG),
+            model=self.settings.value("api_model", constants.DEFAULT_MODEL)
+        )
+        self.osd.setting_changed.connect(self._on_osd_setting_changed)
+        
+        self.osd_timer = QTimer(self)
+        self.osd_timer.setSingleShot(True)
+        self.osd_timer.timeout.connect(self.osd.hide)
 
         # --- Chat sidebar (created once, toggled) ---
         self.chat_sidebar = ChatSidebar(self.processor)
@@ -163,15 +223,15 @@ class XianApp(QWidget):
         self.tray.setToolTip("Xian-VL — Lens & Chat Assistant")
 
         menu = QMenu()
-        capture_action = menu.addAction("📸 Capture (Super+Shift+C)")
+        capture_action = menu.addAction("📸 Capture (Leader+C)")
         capture_action.triggered.connect(self.show_lens)
 
-        chat_action = menu.addAction("💬 Chat (Super+A)")
+        chat_action = menu.addAction("💬 Chat (Leader+A)")
         chat_action.triggered.connect(self.toggle_chat)
 
         menu.addSeparator()
 
-        settings_action = menu.addAction("⚙ Settings… (Super+Shift+S)")
+        settings_action = menu.addAction("⚙ Settings… (Leader+S)")
         settings_action.triggered.connect(self._open_settings)
 
         menu.addSeparator()
@@ -184,11 +244,26 @@ class XianApp(QWidget):
 
         logger.info("System tray icon initialised")
 
+    def _on_command_mode_started(self):
+        self.osd.show_centered()
+        self.osd_timer.start(15000)
+        
+    def _on_osd_setting_changed(self, key: str, value: str):
+        """Handle quick-settings updates from the OSD."""
+        logger.info(f"OSD updated {key} to {value}")
+        self.settings.setValue(key, value)
+        if key == "api_model":
+            self.processor.config.model_name = value
+            self.processor.client = None
+            self._run_health_check()
+
     # ------------------------------------------------------------------
     # Lens
     # ------------------------------------------------------------------
     def show_lens(self):
         """Capture the screen and open the Lens overlay."""
+        self.osd.hide()
+        self.osd_timer.stop()
         logger.info("Opening Lens overlay")
         # Close any existing lens
         if self._lens is not None:
@@ -235,12 +310,25 @@ class XianApp(QWidget):
     # ------------------------------------------------------------------
     def _run_inference(self, image_data: bytes, action: str, anchor_rect: QRect):
         """Spawn an InferenceWorker for the given image crop."""
+        source_lang = self.settings.value("source_lang", constants.DEFAULT_SOURCE_LANG)
         target_lang = self.settings.value("target_lang", constants.DEFAULT_TARGET_LANG)
+        mode = self.settings.value("mode", constants.DEFAULT_MODE)
+        
+        saved_styles = self.settings.value("styles", constants.DEFAULT_STYLES)
+        if isinstance(saved_styles, str):
+            styles = [s.strip() for s in saved_styles.split(",") if s.strip()]
+        elif isinstance(saved_styles, list):
+            styles = saved_styles
+        else:
+            styles = []
 
         worker = InferenceWorker(
             self.processor,
             image_data=image_data,
+            source_lang=source_lang,
             target_lang=target_lang,
+            mode=mode,
+            styles=styles,
             action=action,
             anchor_rect=anchor_rect,
         )
@@ -320,6 +408,8 @@ class XianApp(QWidget):
     # ------------------------------------------------------------------
     def toggle_chat(self):
         """Toggle the chat sidebar visibility."""
+        self.osd.hide()
+        self.osd_timer.stop()
         if self.chat_sidebar.isVisible():
             self.chat_sidebar.hide()
         else:
@@ -339,6 +429,8 @@ class XianApp(QWidget):
         if available:
             logger.info(f"Lemonade server connected. Models: {models}")
             self._available_models = models
+            self.osd.update_models(models)
+            
             # Ensure the default model is pulled
             target_model = self.settings.value("api_model", constants.DEFAULT_MODEL)
             if target_model not in models and not self._model_pull_attempted:
@@ -368,6 +460,8 @@ class XianApp(QWidget):
     # Settings
     # ------------------------------------------------------------------
     def _open_settings(self):
+        self.osd.hide()
+        self.osd_timer.stop()
         dlg = SettingsDialog(self.settings, self._available_models)
         if dlg.exec():
             # Apply changed settings to processor
@@ -378,4 +472,10 @@ class XianApp(QWidget):
             self.processor.client = None
             # Re-run health check
             self._run_health_check()
+            
+            # Apply new leader key
+            new_leader = self.settings.value("leader_key", constants.DEFAULT_LEADER_KEY)
+            if hasattr(self.hotkey_listener, "set_leader_key"):
+                self.hotkey_listener.set_leader_key(new_leader)
+                
             logger.info("Settings updated and applied")

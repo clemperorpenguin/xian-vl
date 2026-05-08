@@ -26,12 +26,17 @@ class InferenceWorker(QThread):
     error = pyqtSignal(str)
 
     def __init__(self, processor, *, image_data: bytes = None,
-                 target_lang: str = "English", action: str = "translate",
+                 source_lang: str = "Chinese", target_lang: str = "English",
+                 mode: str = "Game", styles: list[str] = None,
+                 action: str = "translate",
                  chat_message: str = "", anchor_rect: QRect = None):
         super().__init__()
         self.processor = processor
         self.image_data = image_data
+        self.source_lang = source_lang
         self.target_lang = target_lang
+        self.mode = mode
+        self.styles = styles or []
         self.action = action
         self.chat_message = chat_message
         self.anchor_rect = anchor_rect or QRect()
@@ -51,7 +56,7 @@ class InferenceWorker(QThread):
                 self.chat_done.emit(response)
             else:
                 results = loop.run_until_complete(
-                    self.processor.process_frame(self.image_data, self.target_lang)
+                    self.processor.process_frame(self.image_data, self.source_lang, self.target_lang, self.mode, self.styles)
                 )
                 self.translation_done.emit(results, self.action)
         except Exception as e:
