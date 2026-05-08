@@ -80,12 +80,16 @@ class VLProcessor:
         image.save(buffered, format="JPEG")
         return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-    def create_prompt(self, target_lang: str) -> str:
-        """Create a terse OCR+Translation prompt that small models follow reliably."""
+    def create_prompt(self, source_lang: str, target_lang: str, mode: str, styles: list[str]) -> str:
+        """Create a terse OCR+Translation prompt tailored by user settings."""
+        mode_context = "a web interface" if mode == "Web" else "a video game interface"
+        style_context = f" Translate using a {', '.join(styles)} style/tone." if styles else ""
+        
         return (
-            f"OCR the text in this image, then translate it to {target_lang}.\n"
+            f"OCR the {source_lang} text from this image of {mode_context}, "
+            f"then translate it to {target_lang}.{style_context}\n"
             f"Reply ONLY with two sections, no commentary:\n"
-            f"ORIGINAL:\n<extracted text>\n\n"
+            f"ORIGINAL:\n<extracted {source_lang} text>\n\n"
             f"TRANSLATED:\n<{target_lang} translation>"
         )
 
@@ -130,7 +134,7 @@ class VLProcessor:
         logger.info("parse_response: using raw output as translation")
         return "", cleaned
 
-    async def process_frame(self, image_data: bytes, target_lang: str) -> List[TranslationResult]:
+    async def process_frame(self, image_data: bytes, source_lang: str, target_lang: str, mode: str, styles: list[str]) -> List[TranslationResult]:
         """
         Process a single frame with unified OCR and translation via OmniRouter.
         """
@@ -141,7 +145,7 @@ class VLProcessor:
         image = self.preprocess_image(image_data)
         self.context_manager.add_frame(image)
 
-        prompt = self.create_prompt(target_lang)
+        prompt = self.create_prompt(source_lang, target_lang, mode, styles)
         b64_image = self.encode_image(image)
 
         messages = [

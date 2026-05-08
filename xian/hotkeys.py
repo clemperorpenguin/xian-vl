@@ -1,6 +1,8 @@
 import sys
 import threading
 import logging
+import time
+import logging
 from PyQt6.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger(__name__)
@@ -10,11 +12,15 @@ class HotkeyListener(QObject):
     trigger_lens = pyqtSignal()
     trigger_chat = pyqtSignal()
     trigger_settings = pyqtSignal()
+    command_mode_started = pyqtSignal()
 
     def start(self):
         pass
 
     def stop(self):
+        pass
+
+    def set_leader_key(self, leader_string: str):
         pass
 
 if sys.platform == "linux":
@@ -30,6 +36,11 @@ if sys.platform == "linux":
             self.running = False
             self.devices = []
             self._threads = []
+            
+            self.leader_mod = 'shift'
+            self.leader_key = 57  # KEY_SPACE
+            self.command_mode_active = False
+            self.command_mode_end_time = 0.0
             
             # Track modifier states per device
             self.modifiers = {}
@@ -56,6 +67,12 @@ if sys.platform == "linux":
                             logger.info(f"EvdevListener: Found keyboard - {device.name} at {device.path}")
             except Exception as e:
                 logger.error(f"EvdevListener: Failed to find keyboards (are you in the 'input' group?): {e}")
+
+        def set_leader_key(self, leader_string: str):
+            parts = leader_string.lower().split('+')
+            if len(parts) == 2:
+                self.leader_mod = parts[0]
+                self.leader_key = 57  # space
 
         def start(self):
             """Start listening threads for all keyboards."""
@@ -105,27 +122,39 @@ if sys.platform == "linux":
             elif keycode in (56, 100):  # Alt
                 self.modifiers[device_path]['alt'] = is_pressed
                 
+            now = time.time()
+            if self.command_mode_active and now > self.command_mode_end_time:
+                self.command_mode_active = False
+                
             # Check hotkeys only on key down (1)
             if event.keystate == 1:
                 mods = self.modifiers[device_path]
                 
-                # Super + Shift + C -> Lens Overlay
-                # KEY_C is 46
-                if keycode == 46 and mods['super'] and mods['shift']:
-                    logger.info("EvdevListener: Triggered Lens (Super+Shift+C)")
-                    self.trigger_lens.emit()
-                    
-                # Super + A -> Chat Assistant
-                # KEY_A is 30
-                elif keycode == 30 and mods['super'] and not mods['shift']:
-                    logger.info("EvdevListener: Triggered Chat (Super+A)")
-                    self.trigger_chat.emit()
+                if keycode == self.leader_key and mods.get(self.leader_mod):
+                    self.command_mode_active = True
+                    self.command_mode_end_time = now + 15.0
+                    logger.info(f"EvdevListener: Command Mode ACTIVATED via {self.leader_mod}+space")
+                    self.command_mode_started.emit()
+                    return
+                
+                if self.command_mode_active:
+                    # KEY_C is 46
+                    if keycode == 46:
+                        logger.info("EvdevListener: Triggered Lens")
+                        self.trigger_lens.emit()
+                        self.command_mode_active = False
+                        
+                    # KEY_A is 30
+                    elif keycode == 30:
+                        logger.info("EvdevListener: Triggered Chat")
+                        self.trigger_chat.emit()
+                        self.command_mode_active = False
 
-                # Super + Shift + S -> Settings
-                # KEY_S is 31
-                elif keycode == 31 and mods['super'] and mods['shift']:
-                    logger.info("EvdevListener: Triggered Settings (Super+Shift+S)")
-                    self.trigger_settings.emit()
+                    # KEY_S is 31
+                    elif keycode == 31:
+                        logger.info("EvdevListener: Triggered Settings")
+                        self.trigger_settings.emit()
+                        self.command_mode_active = False
 
 else:
     from pynput import keyboard
@@ -139,28 +168,57 @@ else:
             super().__init__()
             self.listener = None
             self.current_keys = set()
+            self.leader_mod = 'shift'
+            self.command_mode_active = False
+            self.command_mode_end_time = 0.0
+
+        def set_leader_key(self, leader_string: str):
+            parts = leader_string.lower().split('+')
+            if len(parts) == 2:
+                self.leader_mod = parts[0]
             
         def on_press(self, key):
             self.current_keys.add(key)
             
-            has_super = keyboard.Key.cmd in self.current_keys or keyboard.Key.cmd_l in self.current_keys or keyboard.Key.cmd_r in self.current_keys
-            has_shift = keyboard.Key.shift in self.current_keys or keyboard.Key.shift_l in self.current_keys or keyboard.Key.shift_r in self.current_keys
-            
-            try:
-                # Check combinations
-                if hasattr(key, 'char') and key.char:
-                    char = key.char.lower()
-                    if has_super and has_shift and char == 'c':
-                        logger.info("PynputListener: Triggered Lens (Super+Shift+C)")
-                        self.trigger_lens.emit()
-                    elif has_super and not has_shift and char == 'a':
-                        logger.info("PynputListener: Triggered Chat (Super+A)")
-                        self.trigger_chat.emit()
-                    elif has_super and has_shift and char == 's':
-                        logger.info("PynputListener: Triggered Settings (Super+Shift+S)")
-                        self.trigger_settings.emit()
-            except Exception as e:
-                logger.debug(f"PynputListener error: {e}")
+            now = time.time()
+            if self.command_mode_active and now > self.command_mode_end_time:
+                self.command_mode_active = False
+
+            has_mod = False
+            if self.leader_mod == 'shift':
+                has_mod = keyboard.Key.shift in self.current_keys or keyboard.Key.shift_l in self.current_keys or keyboard.Key.shift_r in self.current_keys
+            elif self.leader_mod == 'ctrl':
+                has_mod = keyboard.Key.ctrl in self.current_keys or keyboard.Key.ctrl_l in self.current_keys or keyboard.Key.ctrl_r in self.current_keys
+            elif self.leader_mod == 'alt':
+                has_mod = keyboard.Key.alt in self.current_keys or keyboard.Key.alt_l in self.current_keys or keyboard.Key.alt_r in self.current_keys
+            elif self.leader_mod == 'super':
+                has_mod = keyboard.Key.cmd in self.current_keys or keyboard.Key.cmd_l in self.current_keys or keyboard.Key.cmd_r in self.current_keys
+
+            if has_mod and key == keyboard.Key.space:
+                self.command_mode_active = True
+                self.command_mode_end_time = now + 15.0
+                logger.info(f"PynputListener: Command Mode ACTIVATED via {self.leader_mod}+space")
+                self.command_mode_started.emit()
+                return
+
+            if self.command_mode_active:
+                try:
+                    if hasattr(key, 'char') and key.char:
+                        char = key.char.lower()
+                        if char == 'c':
+                            logger.info("PynputListener: Triggered Lens")
+                            self.trigger_lens.emit()
+                            self.command_mode_active = False
+                        elif char == 'a':
+                            logger.info("PynputListener: Triggered Chat")
+                            self.trigger_chat.emit()
+                            self.command_mode_active = False
+                        elif char == 's':
+                            logger.info("PynputListener: Triggered Settings")
+                            self.trigger_settings.emit()
+                            self.command_mode_active = False
+                except Exception as e:
+                    logger.debug(f"PynputListener error: {e}")
                 
         def on_release(self, key):
             try:
