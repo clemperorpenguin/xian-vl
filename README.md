@@ -54,6 +54,8 @@ uv pip install -e .
 
 ## Roadmap
 
+- Cinematic mode - Translate audio with on-screen context to English
+- Dialog mode - Keep an area selected, advance with a click (useful for VNs and story-based RPGs)
 - Game oracle/chatbot
 - Flatpak/SteamOS support
 
