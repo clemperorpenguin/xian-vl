@@ -8,10 +8,8 @@ Xian-MAGE acts as a lightweight client powered by the **[Lemonade-SDK OmniRouter
 
 ## Features
 
-- **Global Interaction**: Seamlessly trigger actions via global Wayland hotkeys (requires `evdev`).
-  - `Super+Shift+C`: Open the "Lens" overlay to freeze the screen and capture a specific region.
-  - `Super+A`: Toggle the persistent Chat Sidebar.
-  - `Super+Shift+S`: Open the settings.
+- **Configurable Action Key**: Seamlessly trigger actions via global Wayland hotkeys (requires `evdev`).
+  - `Shift+C`: Opens the Action Key menu.
 - **Contextual Memory**: Xian-MAGE maintains a sliding-window memory of your recent screen captures and chat history, allowing you to ask follow-up questions about what you just captured.
 - **Visual Grounding**: Ask the assistant "where do I click?" and watch it highlight the UI element directly on your screen.
 - **Instant Dictionary Lookups**: Hover over translated text bubbles and press `Alt` for real-time CC-CEDICT dictionary breakdowns.
@@ -51,15 +49,13 @@ uv pip install -e .
    ```bash
    uv run python main.py
    ```
-3. **Capture & Translate**: Press `Super+Shift+C` to freeze the screen. Drag to select a region, then use the action bar to Translate, Explain, or Chat about the selected area.
-4. **Chat Sidebar**: Press `Super+A` to open the sidebar and interact with the assistant based on your screen context.
+3. **Capture & Translate**: Press the Action Key (Shift+C) to open the assistant and press C to freeze the screen. Drag to select a region, then use the action bar to Translate, Explain, or Chat about the selected area.
+4. **Chat Sidebar**: Press the Action Key (Shift+C) and press A to open the sidebar and interact with the assistant based on your screen context.
 
 ## Roadmap
 
-- Literary style selection
 - Game oracle/chatbot
 - Flatpak/SteamOS support
-- Expanded language support
 
 ## License
 
