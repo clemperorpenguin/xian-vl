@@ -1,6 +1,6 @@
 # MASHA - Multilingual Access & Site Handling Assistant 🌐
 
-MASHA is a lightweight browser extension designed to provide real-time text translation on web pages. It integrates with the Lemonade Server to deliver powerful translation capabilities directly within your browser.
+MASHA is a lightweight browser extension designed to provide real-time text translation on web pages. She integrates with the Lemonade Server to deliver powerful translation capabilities directly within your browser, including asking for navigation help and additional context for translations.
 
 ## Features
 
