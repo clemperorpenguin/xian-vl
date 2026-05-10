@@ -1,5 +1,8 @@
 # Xian-MAGE — Multilingual Assistant for Gaming Environments 🧙‍♂️
 
+<img width="512" height="512" alt="xian" src="https://github.com/user-attachments/assets/48f853a3-da79-42e1-9861-8cc3ca22b53e" />
+
+
 Xian-MAGE is a persistent, stateful Wayland desktop assistant for Linux. It provides real-time OCR, translation, visual grounding, and interactive chat directly on top of your desktop.
 
 Xian-MAGE acts as a lightweight client powered by the **[Lemonade-SDK OmniRouter](https://lemonade-server.ai/)**, bringing powerful Vision-Language models to your screen. Because Lemonade handles the inference, **all major GPUs with sufficient VRAM should work with Vulkan.**
