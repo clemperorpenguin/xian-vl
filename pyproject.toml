@@ -1,21 +1,15 @@
 [project]
-name = "xian-vl"
-version = "1.0.0"
-description = "Screen OCR & Translation Tool - Real-time text extraction and translation from your screen"
+name = "xian-ecosystem"
+version = "2.0.0"
+description = "Hub-and-Spoke AI Translation Ecosystem — powered by Lemonade"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
 license = {text = "GPL-3.0-or-later"}
-dependencies = [
-    "PyQt6>=6.6",
-    "Pillow>=10.0",
-    "imagehash>=4.3",
-    "lmdb>=1.4",
-    "opencv-python-headless>=4.8",
-    "numpy>=1.24",
-    "evdev>=1.7.0; sys_platform == 'linux'",
-    "pynput>=1.7.6; sys_platform != 'linux'",
-    "openai>=1.0.0",
-]
 
-[project.scripts]
-xian = "main:main"
+[tool.uv.workspace]
+members = [
+    "apps/mage-client",
+    "apps/luduan-client",
+    "packages/xian-vl",
+    "packages/shared-types",
+]

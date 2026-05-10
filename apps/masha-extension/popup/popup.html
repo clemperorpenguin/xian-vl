@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Xian Translator</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>嫺 Xian</h1>
+    <p class="subtitle">Screen Translator</p>
+    <div class="status" id="status">Checking Lemonade…</div>
+    <button id="translate-btn" class="btn-primary" disabled>Translate Selection</button>
+    <div class="settings">
+      <label>
+        Source
+        <select id="source-lang">
+          <option value="Chinese" selected>Chinese</option>
+          <option value="Japanese">Japanese</option>
+          <option value="Korean">Korean</option>
+        </select>
+      </label>
+      <label>
+        Target
+        <select id="target-lang">
+          <option value="English" selected>English</option>
+          <option value="Spanish">Spanish</option>
+          <option value="French">French</option>
+        </select>
+      </label>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
