@@ -1,4 +1,4 @@
-# Xian-VL Monorepo 🇨🇳🇯🇵🇰🇷🎮🍋🪄
+# Xian-VL Monorepo 🇨🇳🇯🇵🇰🇷🎮📚🕸️🍋🪄
 
 Xian-VL is a hub-and-spoke monorepo containing applications and packages for vision-language tasks, real-time translation, and gaming assistance, all powered by the **[Lemonade Server](https://lemonade-server.ai/)**.
 
