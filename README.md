@@ -42,7 +42,7 @@ uv sync --all-packages
 - [ ] Cinematic mode — translate audio with on-screen context
 - [ ] Dialog mode — keep an area selected, advance with a click (VNs / story RPGs)
 - [ ] Game oracle / chatbot integration / complete LORE
-- [ ] UI and error localization
+- [ ] UI and documentation localized
 - [ ] Complete MASHA extension
 - [ ] Make everything pretty
 - [ ] Server benchmark to select best settings
