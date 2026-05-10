@@ -1,0 +1,3 @@
+[submodule "packages/xian-vl/src/xian/knowledge/jx3box-data"]
+	path = packages/xian-vl/src/xian/knowledge/jx3box-data
+	url = https://github.com/JX3BOX/jx3box-data.git
