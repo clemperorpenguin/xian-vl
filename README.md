@@ -8,9 +8,10 @@ This repository uses a `uv` workspace to manage multiple packages and applicatio
 
 ### Applications
 
-- **[MAGE Client](apps/mage-client/README.md)**: A PyQt6 gaming HUD for real-time OCR, translation, and visual grounding on Wayland.
-- **[MASHA Extension](apps/masha-extension/README.md)**: A browser extension for translating selected text on web pages.
-- **[Luduan Client](apps/luduan-client/README.md)**: A CLI tool for EPUB-to-Robobook translation and narration (currently a scaffold).
+- **[MAGE](apps/mage-client/README.md)**: A PyQt6 gaming HUD for real-time OCR, translation, and visual grounding on Wayland.
+- **[MASHA](apps/masha-extension/README.md)**: A browser extension for translating selected text on web pages.
+- **[LORE](apps/lore-client/README.md)**: Compiles collected information into a unified knowledge base. (on roadmap)
+- **[Luduan](apps/luduan-client/README.md)**: A CLI tool for EPUB-to-Robobook translation and narration (currently a scaffold).
 
 ### Packages
 
@@ -40,7 +41,10 @@ uv sync --all-packages
 - [x] Monorepo migration and workspace setup
 - [ ] Cinematic mode — translate audio with on-screen context
 - [ ] Dialog mode — keep an area selected, advance with a click (VNs / story RPGs)
-- [ ] Game oracle / chatbot integration
+- [ ] Game oracle / chatbot integration / complete LORE
+- [ ] Complete MASHA extension
+- [ ] Make everything pretty
+- [ ] Server benchmark to select best settings
 - [ ] Flatpak / SteamOS support for MAGE client
 
 ## License
