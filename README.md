@@ -38,7 +38,6 @@ uv sync --all-packages
 ## Roadmap
 
 - [x] Monorepo migration and workspace setup
-- [x] Code audit and remediation (37 issues resolved)
 - [ ] Cinematic mode — translate audio with on-screen context
 - [ ] Dialog mode — keep an area selected, advance with a click (VNs / story RPGs)
 - [ ] Game oracle / chatbot integration
