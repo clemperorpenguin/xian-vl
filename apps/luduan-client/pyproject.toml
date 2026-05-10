@@ -1,0 +1,28 @@
+[project]
+name = "luduan-client"
+version = "2.0.0"
+description = "Luduan — EPUB-to-Robobook translation and narration pipeline"
+requires-python = ">=3.10, <3.14"
+license = {text = "GPL-3.0-or-later"}
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.0",
+    "xian-vl",
+    "shared-types",
+    "ebooklib>=0.18",
+    "beautifulsoup4>=4.12.0",
+]
+
+[project.scripts]
+luduan = "luduan.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/luduan"]
+
+[tool.uv.sources]
+xian-vl = { workspace = true }
+shared-types = { workspace = true }
