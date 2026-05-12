@@ -8,17 +8,17 @@ This repository uses a `uv` workspace to manage multiple packages and applicatio
 
 ### Applications
 
-- **[MAGE](apps/mage-client/README.md)**: A PyQt6 gaming HUD for real-time OCR, translation, and visual grounding on Wayland.
-- **[MASHA](apps/masha-extension/README.md)**: A browser extension for translating selected text on web pages.
-- **[LORE](apps/lore-client/README.md)**: Compiles collected information into a unified knowledge base. (on roadmap)
-- **[Luduan](apps/luduan-client/README.md)**: A CLI tool for EPUB-to-Robobook translation and narration (currently a scaffold).
+- **[MAGE](apps/mage-client/README.md)**: A PyQt6 gaming HUD for real-time OCR, translation, and visual grounding on Wayland (Works!).
+- **[MASHA](apps/masha-extension/README.md)**: A browser extension for translating selected text on web pages (WIP).
+- **[LORE](apps/lore-client/README.md)**: Compiles collected information into a unified knowledge base. (WIP)
+- **[Luduan](apps/luduan-client/README.md)**: A CLI tool for EPUB-to-Robobook translation and narration (WIP).
 
 ### Packages
 
 - **`packages/shared-types`**: Canonical Pydantic models, enums, and constants used across the monorepo.
 - **`packages/xian-vl`**: Core engine handling prompt engineering, context management, and Lemonade API interactions.
 
-## Getting Startedcr
+## Getting Started
 
 ### Requirements
 
