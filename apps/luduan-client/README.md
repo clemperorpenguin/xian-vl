@@ -1,7 +1,5 @@
 # Luduan Client 🦤
 
-<img width="1024" height="1024" alt="luduan" src="https://github.com/user-attachments/assets/2785f66a-ce56-48c7-a37b-240fcc11ed42" />
-
 Luduan is a CLI tool for EPUB-to-Robobook translation and narration. It allows you to translate EPUB files and generate audiobooks using the Lemonade Server.
 
 ## Features

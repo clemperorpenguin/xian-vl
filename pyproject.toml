@@ -10,6 +10,7 @@ license = {text = "GPL-3.0-or-later"}
 members = [
     "apps/mage-client",
     "apps/luduan-client",
+    "apps/lore-client",
     "packages/xian-vl",
     "packages/shared-types",
 ]

@@ -1,0 +1,230 @@
+import asyncio
+import logging
+import sys
+import typer
+from rich.console import Console
+from rich.prompt import Prompt, IntPrompt
+from rich.table import Table
+from rich.status import Status
+
+# We'll assume shared_types is available in the workspace
+try:
+    from shared_types.constants import DEFAULT_API_URL
+except ImportError:
+    DEFAULT_API_URL = "http://localhost:8000/v1"
+
+from openai import AsyncOpenAI
+
+from lore.searcher import SearXNGSearcher
+from lore.scraper import PlaywrightScraper
+from lore.compiler import WikiCompiler
+
+app = typer.Typer(help="LORE — Interactive CLI tool for researching Chinese entities.")
+console = Console()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+# Suppress noisy logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("playwright").setLevel(logging.WARNING)
+
+
+async def translate_content(text: str, entity_name: str) -> str:
+    """Passes content to xian-vl via Lemonade for translation.
+    """
+    client = AsyncOpenAI(base_url=DEFAULT_API_URL, api_key="not-needed")
+    
+    system_prompt = (
+        "You are an expert Chinese-to-English translator specializing in game lore, "
+        "wuxia/xianxia terms, and Chinese encyclopedias (Baike). "
+        "Translate the following content accurately and naturally. "
+        "Preserve proper nouns. Use Obsidian-style links [[Entity]] for key concepts "
+        "if they appear in the text. Output ONLY the translated content."
+    )
+    
+    try:
+        response = await client.chat.completions.create(
+            model="qwen", # Default model or whatever Lemonade uses
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Entity: {entity_name}\n\nContent:\n{text}"},
+            ],
+            max_tokens=4096,
+        )
+        return response.choices[0].message.content or text
+    except Exception as e:
+        logger.error(f"Translation failed: {e}")
+        return text
+
+
+async def extract_and_translate_infobox(raw_html: str, entity_name: str) -> dict:
+    """Uses LLM or heuristics to extract and translate infobox data.
+    """
+    scraper = PlaywrightScraper()
+    heuristic_infobox = scraper.extract_infobox(raw_html)
+    
+    if not heuristic_infobox:
+        return {}
+        
+    # Translate the infobox keys and values
+    client = AsyncOpenAI(base_url=DEFAULT_API_URL, api_key="not-needed")
+    
+    infobox_str = "\n".join([f"{k}: {v}" for k, v in heuristic_infobox.items()])
+    
+    system_prompt = (
+        "You are an expert translator. Translate the following key-value pairs "
+        "from a Chinese encyclopedia infobox into English. "
+        "Return the result as a valid JSON object. "
+        "Example: {\"Name\": \"Value\"}"
+    )
+    
+    try:
+        response = await client.chat.completions.create(
+            model="qwen",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": infobox_str},
+            ],
+            response_format={"type": "json_object"},
+        )
+        import json
+        return json.loads(response.choices[0].message.content or "{}")
+    except Exception as e:
+        logger.error(f"Infobox translation failed: {e}")
+        # Return untranslated or best effort
+        return heuristic_infobox
+
+
+async def research_entity(entity_name: str):
+    """Main research loop: Search -> Select -> Ingest.
+    """
+    searcher = SearXNGSearcher()
+    scraper = PlaywrightScraper()
+    import os
+    wiki_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "wiki")
+    compiler = WikiCompiler(wiki_dir=wiki_dir)
+    
+    console.print(f"[bold green]Starting research for entity:[/bold green] {entity_name}")
+    
+    # 1. Discovery
+    with console.status("[bold blue]Discovering SearXNG instances...[/bold blue]"):
+        await searcher.discover_instances()
+        
+    # 2. Search
+    with console.status(f"[bold blue]Searching for '{entity_name}'...[/bold blue]"):
+        try:
+            results = await searcher.search(entity_name, num_results=10)
+        except Exception as e:
+            console.print(f"[bold red]Search failed:[/bold red] {e}")
+            return
+            
+    if not results:
+        console.print("[yellow]No results found.[/yellow]")
+        return
+        
+    # 3. Present Results
+    table = Table(title=f"Search Results for '{entity_name}'")
+    table.add_column("ID", justify="right", style="cyan")
+    table.add_column("Title", style="magenta")
+    table.add_column("URL", style="green")
+    
+    for i, res in enumerate(results):
+        table.add_row(str(i + 1), res.get("title", ""), res.get("url", ""))
+        
+    console.print(table)
+    
+    # 4. Selection
+    selection = Prompt.ask(
+        "Enter the ID to ingest, or 'all' to ingest top 3, or 'q' to quit",
+        default="1"
+    )
+    
+    if selection.lower() == 'q':
+        return
+        
+    to_ingest = []
+    if selection.lower() == 'all':
+        to_ingest = results[:3]
+    else:
+        try:
+            idx = int(selection) - 1
+            if 0 <= idx < len(results):
+                to_ingest = [results[idx]]
+            else:
+                console.print("[red]Invalid selection.[/red]")
+                return
+        except ValueError:
+            console.print("[red]Invalid input.[/red]")
+            return
+            
+    # 5. Ingest and Process
+    all_content = []
+    sources = []
+    translated_infobox = {}
+    
+    for item in to_ingest:
+        url = item.get("url")
+        title = item.get("title")
+        
+        with console.status(f"[bold blue]Scraping {url}...[/bold blue]"):
+            scraped_data = await scraper.scrape(url)
+            
+        if not scraped_data:
+            console.print(f"[red]Failed to scrape {url}[/red]")
+            continue
+            
+        console.print(f"[green]Successfully scraped {url}[/green]")
+        
+        # Extract and translate infobox from the first successful scrape (usually best source)
+        if not translated_infobox and scraped_data.get("raw_html"):
+            with console.status("[bold blue]Extracting and translating infobox...[/bold blue]"):
+                translated_infobox = await extract_and_translate_infobox(
+                    scraped_data["raw_html"], entity_name
+                )
+        
+        # Translate main content
+        with console.status(f"[bold blue]Translating content from {url}...[/bold blue]"):
+            translated_text = await translate_content(scraped_data["content"], entity_name)
+            
+        all_content.append(translated_text)
+        sources.append({"title": title, "url": url})
+        
+    if not all_content:
+        console.print("[bold red]No content was successfully processed.[/bold red]")
+        return
+        
+    # 6. Compile
+    with console.status("[bold blue]Compiling Wiki file...[/bold blue]"):
+        combined_content = "\n\n---\n\n".join(all_content)
+        
+        metadata = {
+            "original_names": [entity_name], # In real usage, could extract from infobox
+            "sources": sources,
+            "related_entities": [] # Could be filled by LLM extraction
+        }
+        
+        filepath = compiler.compile(
+            entity_name=entity_name,
+            content=combined_content,
+            metadata=metadata,
+            infobox=translated_infobox
+        )
+        
+    console.print(f"[bold green]Wiki compilation complete![/bold green] File saved to: {filepath}")
+    
+    await searcher.close()
+
+
+@app.command()
+def main(entity: str = typer.Argument(..., help="The Chinese entity name to research")):
+    """Research a Chinese entity and compile a localized English Wiki page.
+    """
+    asyncio.run(research_entity(entity))
+
+
+if __name__ == "__main__":
+    app()
