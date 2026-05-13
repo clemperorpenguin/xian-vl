@@ -40,7 +40,7 @@ uv sync --all-packages
 
 - [x] Monorepo migration and workspace setup
 - [ ] Cinematic mode — translate audio with on-screen context
-- [ ] Dialog mode — keep an area selected, advance with a click (VNs / story RPGs)
+- [x] Dialogue mode — keep an area selected, advance with a click (VNs / story RPGs)
 - [ ] Game oracle / chatbot integration / complete LORE
 - [ ] UI and documentation localized
 - [ ] Complete MASHA extension

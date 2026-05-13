@@ -1,0 +1,108 @@
+import sys
+import threading
+import logging
+import time
+from PyQt6.QtCore import QObject, pyqtSignal
+
+logger = logging.getLogger(__name__)
+
+class MouseListener(QObject):
+    """Base class for global mouse click listeners."""
+    left_click = pyqtSignal()
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+if sys.platform == "linux":
+    import evdev
+
+    class EvdevMouseListener(MouseListener):
+        """
+        Listens for global left clicks across Wayland/X11 using evdev.
+        Must be run as a user in the 'input' group.
+        """
+        def __init__(self):
+            super().__init__()
+            self.running = False
+            self.devices = []
+            self._threads = []
+            self._find_mice()
+            
+        def _find_mice(self):
+            """Find all mouse devices in /dev/input/"""
+            try:
+                devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
+                for device in devices:
+                    # Check if it has keys and specifically BTN_LEFT (272)
+                    if evdev.ecodes.EV_KEY in device.capabilities():
+                        keys = device.capabilities()[evdev.ecodes.EV_KEY]
+                        if evdev.ecodes.BTN_LEFT in keys:
+                            self.devices.append(device)
+                            logger.info(f"EvdevMouseListener: Found mouse - {device.name} at {device.path}")
+            except Exception as e:
+                logger.error(f"EvdevMouseListener: Failed to find mice: {e}")
+
+        def start(self):
+            if not self.devices:
+                logger.warning("EvdevMouseListener: No mice found to listen to.")
+                return
+                
+            self.running = True
+            for device in self.devices:
+                thread = threading.Thread(target=self._listen_device, args=(device,), daemon=True)
+                thread.start()
+                self._threads.append(thread)
+                
+            logger.info(f"EvdevMouseListener: Started listening on {len(self.devices)} devices.")
+
+        def stop(self):
+            self.running = False
+
+        def _listen_device(self, device: evdev.InputDevice):
+            try:
+                for event in device.read_loop():
+                    if not self.running:
+                        break
+                        
+                    if event.type == evdev.ecodes.EV_KEY:
+                        if event.code == evdev.ecodes.BTN_LEFT and event.value == 1: # 1 is down
+                            self.left_click.emit()
+            except Exception as e:
+                if self.running:
+                    logger.error(f"EvdevMouseListener: Error reading from {device.name}: {e}")
+
+else:
+    from pynput import mouse
+
+    class PynputMouseListener(MouseListener):
+        """
+        Listens for global mouse clicks using pynput.
+        Used on macOS and Windows.
+        """
+        def __init__(self):
+            super().__init__()
+            self.listener = None
+
+        def on_click(self, x, y, button, pressed):
+            if button == mouse.Button.left and pressed:
+                self.left_click.emit()
+
+        def start(self):
+            if not self.listener:
+                self.listener = mouse.Listener(on_click=self.on_click)
+                self.listener.start()
+                logger.info("PynputMouseListener: Started listening.")
+
+        def stop(self):
+            if self.listener:
+                self.listener.stop()
+                self.listener = None
+
+def create_mouse_listener() -> MouseListener:
+    if sys.platform == "linux":
+        return EvdevMouseListener()
+    else:
+        return PynputMouseListener()

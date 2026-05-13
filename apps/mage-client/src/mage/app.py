@@ -13,8 +13,8 @@ from PyQt6.QtWidgets import (
     QLineEdit, QComboBox, QSpinBox, QPushButton, QLabel, QVBoxLayout,
     QHBoxLayout, QWidget, QCheckBox
 )
-from PyQt6.QtCore import Qt, QSettings, QRect, QTimer
-from PyQt6.QtGui import QIcon, QAction
+from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, QBuffer, QIODevice
+from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap
 
 from mage.ui.theme import accent_hex, accent_hover_hex
 
@@ -24,6 +24,8 @@ from mage.ui.lens import LensOverlayWindow
 from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.result_bubble import ResultBubble
 from mage.capture.hotkeys import create_hotkey_listener
+from mage.capture.mouse import create_mouse_listener
+from mage.capture.screen import ScreenCapture
 from xian.dictionary import LocalDictionary
 from mage.ui.command_osd import CommandOSD
 from shared_types import constants
@@ -112,6 +114,13 @@ class SettingsDialog(QDialog):
         self.gpu_combo.setCurrentText(settings.value("gpu_memory_utilization", constants.DEFAULT_GPU_MEMORY_UTILIZATION))
         layout.addRow("GPU Memory Utilization:", self.gpu_combo)
 
+        # Dialogue Delay
+        self.delay_spin = QSpinBox()
+        self.delay_spin.setRange(100, 10000)
+        self.delay_spin.setSingleStep(100)
+        self.delay_spin.setValue(int(settings.value(KEY_DIALOGUE_DELAY, 1500)))
+        layout.addRow("Dialogue Delay (ms):", self.delay_spin)
+
         # Buttons
         btn_row = QHBoxLayout()
         save_btn = QPushButton("Save")
@@ -148,6 +157,7 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_MAX_TOKENS, self.tokens_spin.value())
         self.settings.setValue(KEY_LEADER_KEY, self.leader_combo.currentText())
         self.settings.setValue(KEY_GPU_UTIL, self.gpu_combo.currentText())
+        self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
         self.accept()
 
 
@@ -184,8 +194,18 @@ class XianApp(QWidget):
         self.hotkey_listener.trigger_lens.connect(self.show_lens)
         self.hotkey_listener.trigger_chat.connect(self.toggle_chat)
         self.hotkey_listener.trigger_settings.connect(self._open_settings)
+        self.hotkey_listener.trigger_dialogue_mode.connect(self.toggle_dialogue_mode)
         self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
         self.hotkey_listener.start()
+
+        # --- Dialogue Mode ---
+        self.dialogue_mode_active = False
+        self.dialogue_timer = QTimer(self)
+        self.dialogue_timer.setSingleShot(True)
+        self.dialogue_timer.timeout.connect(self.capture_dialogue)
+        self.mouse_listener = create_mouse_listener()
+        self.mouse_listener.left_click.connect(self.on_dialogue_click)
+        self.dialogue_bubble = None
 
         # --- Command OSD ---
         self.osd = CommandOSD()
@@ -390,13 +410,30 @@ class XianApp(QWidget):
                 )
                 translation_combined = dict_text
 
-        bubble = ResultBubble(
-            translation_combined,
-            original_text=original_combined,
-            anchor_rect=anchor,
-        )
-        self._bubbles = [b for b in self._bubbles if b.isVisible()]
-        self._bubbles.append(bubble)
+        if self.dialogue_mode_active:
+            if self.dialogue_bubble is None or not self.dialogue_bubble.isVisible():
+                self.dialogue_bubble = ResultBubble(
+                    translation_combined,
+                    original_text=original_combined,
+                    anchor_rect=anchor,
+                    auto_close_ms=0,  # Persistent
+                )
+            else:
+                self.dialogue_bubble.close()
+                self.dialogue_bubble = ResultBubble(
+                    translation_combined,
+                    original_text=original_combined,
+                    anchor_rect=anchor,
+                    auto_close_ms=0,
+                )
+        else:
+            bubble = ResultBubble(
+                translation_combined,
+                original_text=original_combined,
+                anchor_rect=anchor,
+            )
+            self._bubbles = [b for b in self._bubbles if b.isVisible()]
+            self._bubbles.append(bubble)
 
     def _on_inference_error(self, msg, worker):
         anchor = worker.anchor_rect
@@ -426,6 +463,70 @@ class XianApp(QWidget):
         else:
             self.chat_sidebar.show()
             self.chat_sidebar.raise_()
+
+    # ------------------------------------------------------------------
+    # Dialogue Mode
+    # ------------------------------------------------------------------
+    def toggle_dialogue_mode(self):
+        self.osd.hide()
+        self.osd_timer.stop()
+
+        if self.dialogue_mode_active:
+            self.dialogue_mode_active = False
+            self.mouse_listener.stop()
+            self.dialogue_timer.stop()
+            if self.dialogue_bubble:
+                self.dialogue_bubble.close()
+                self.dialogue_bubble = None
+            
+            bubble = ResultBubble("Dialogue Mode Disabled", auto_close_ms=3000)
+            self._bubbles = [b for b in self._bubbles if b.isVisible()]
+            self._bubbles.append(bubble)
+            logger.info("Dialogue Mode Deactivated")
+        else:
+            if LensOverlayWindow._last_rect is None or LensOverlayWindow._last_rect.isEmpty():
+                bubble = ResultBubble("Please use Lens (Leader+C) to select a dialogue area first.", auto_close_ms=5000)
+                self._bubbles = [b for b in self._bubbles if b.isVisible()]
+                self._bubbles.append(bubble)
+                return
+
+            self.dialogue_mode_active = True
+            self.mouse_listener.start()
+            
+            bubble = ResultBubble("Dialogue Mode ON", anchor_rect=LensOverlayWindow._last_rect, auto_close_ms=3000)
+            self._bubbles = [b for b in self._bubbles if b.isVisible()]
+            self._bubbles.append(bubble)
+            logger.info("Dialogue Mode Activated")
+
+    def on_dialogue_click(self):
+        if self.dialogue_mode_active:
+            delay = int(self.settings.value(KEY_DIALOGUE_DELAY, 1500))
+            self.dialogue_timer.start(delay)
+
+    def capture_dialogue(self):
+        if not self.dialogue_mode_active or LensOverlayWindow._last_rect is None or LensOverlayWindow._last_rect.isEmpty():
+            return
+
+        data = ScreenCapture.capture_screen()
+        if not data:
+            return
+
+        img = QImage.fromData(data)
+        pixmap = QPixmap.fromImage(img)
+        rect = LensOverlayWindow._last_rect
+        total_geo = ScreenCapture.get_virtual_desktop_geometry()
+        
+        safe_rect = rect.translated(-total_geo.left(), -total_geo.top())
+        safe_rect = safe_rect.intersected(pixmap.rect())
+        
+        cropped = pixmap.copy(safe_rect)
+        
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        cropped.save(buffer, "PNG")
+        cropped_data = bytes(buffer.buffer())
+        
+        self._run_inference(cropped_data, "translate", rect)
 
     # ------------------------------------------------------------------
     # Health check

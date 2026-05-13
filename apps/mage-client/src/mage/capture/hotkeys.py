@@ -11,6 +11,7 @@ class HotkeyListener(QObject):
     trigger_lens = pyqtSignal()
     trigger_chat = pyqtSignal()
     trigger_settings = pyqtSignal()
+    trigger_dialogue_mode = pyqtSignal()
     command_mode_started = pyqtSignal()
 
     def start(self):
@@ -156,6 +157,12 @@ if sys.platform == "linux":
                         self.trigger_settings.emit()
                         self.command_mode_active = False
 
+                    # KEY_O is 24
+                    elif keycode == 24:
+                        logger.info("EvdevListener: Triggered Dialogue Mode")
+                        self.trigger_dialogue_mode.emit()
+                        self.command_mode_active = False
+
 else:
     from pynput import keyboard
 
@@ -224,6 +231,10 @@ else:
                         elif char == 's':
                             logger.info("PynputListener: Triggered Settings")
                             self.trigger_settings.emit()
+                            self.command_mode_active = False
+                        elif char == 'o':
+                            logger.info("PynputListener: Triggered Dialogue Mode")
+                            self.trigger_dialogue_mode.emit()
                             self.command_mode_active = False
                 except Exception as e:
                     logger.debug(f"PynputListener error: {e}")
