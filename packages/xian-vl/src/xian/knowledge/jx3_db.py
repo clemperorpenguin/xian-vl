@@ -9,6 +9,8 @@ import json
 import threading
 from pathlib import Path
 
+_KNOWLEDGE_DIR = Path(__file__).parent
+
 class JX3Database:
     """Database manager for JX3 game data.
     
@@ -19,9 +21,8 @@ class JX3Database:
         self.conn = sqlite3.connect(":memory:", check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         
-        project_root = Path(__file__).parent.parent.parent
-        self.data_dir = Path(data_dir) if data_dir else project_root / "xian" / "knowledge" / "jx3box-data" / "data"
-        self.localization_file = Path(localization_file) if localization_file else project_root / "xian" / "knowledge" / "localization.json"
+        self.data_dir = Path(data_dir) if data_dir else _KNOWLEDGE_DIR / "jx3box-data" / "data"
+        self.localization_file = Path(localization_file) if localization_file else _KNOWLEDGE_DIR / "localization.json"
         
         self._init_schema()
         self._load_data()

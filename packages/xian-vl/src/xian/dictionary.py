@@ -1,10 +1,9 @@
-import pathlib
-import zipfile
-import urllib.request
-import logging
-import threading
 import hashlib
-from typing import Dict, List, Tuple
+import logging
+import pathlib
+import threading
+import urllib.request
+import zipfile
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +19,7 @@ class LocalDictionary:
         self.zip_url = "https://www.mdbg.net/chinese/export/cedict/cedict_1_0_ts_utf-8_mdbg.zip"
         
         # Maps simplified -> list of (traditional, pinyin, english)
-        self.entries: Dict[str, List[Tuple[str, str, str]]] = {}
+        self.entries: dict[str, list[tuple[str, str, str]]] = {}
         self.ready = False
         
         # Fix TOCTOU: use exist_ok=True
@@ -42,17 +41,16 @@ class LocalDictionary:
                     for member in zip_ref.namelist():
                         target = (data_dir_resolved / member).resolve()
                         if not target.is_relative_to(data_dir_resolved):
-                            raise ValueError(f"Zip member escapes target directory: {member}")
+                            raise ValueError("Zip member escapes target directory: %s" % member)
                     zip_ref.extractall(self.data_dir)
                 zip_path.unlink()
                 logger.info("CC-CEDICT downloaded and extracted.")
-                
-                # Verify integrity of the extracted file
-                self._verify_integrity()
-                
+
+            # Verify integrity on every load, not just after download
+            self._verify_integrity()
             self._parse_dict()
         except Exception as e:
-            logger.error(f"Failed to initialize dictionary: {e}")
+            logger.error("Failed to initialize dictionary: %s", e)
             
     def _verify_integrity(self):
         logger.info("Verifying CC-CEDICT integrity...")
@@ -63,7 +61,10 @@ class LocalDictionary:
         
         current_hash = hasher.hexdigest()
         if current_hash != CEDICT_EXTRACTED_SHA256:
-            logger.error(f"CC-CEDICT integrity check failed! Expected {CEDICT_EXTRACTED_SHA256}, got {current_hash}. Removing file.")
+            logger.error(
+                "CC-CEDICT integrity check failed! Expected %s, got %s. Removing file.",
+                CEDICT_EXTRACTED_SHA256, current_hash,
+            )
             self.dict_path.unlink(missing_ok=True)
             raise ValueError("Integrity check failed")
         logger.info("CC-CEDICT integrity verified.")
@@ -95,9 +96,9 @@ class LocalDictionary:
                 count += 1
                 
         self.ready = True
-        logger.info(f"CC-CEDICT parsed successfully. Loaded {count} entries.")
+        logger.info("CC-CEDICT parsed successfully. Loaded %d entries.", count)
         
-    def lookup(self, word: str) -> List[Tuple[str, str, str]]:
+    def lookup(self, word: str) -> list[tuple[str, str, str]]:
         if not self.ready:
             return []
         return self.entries.get(word, [])

@@ -1,11 +1,12 @@
 """Vision-Language Processing Pipeline for unified OCR and translation using Lemonade-SDK OmniRouter (OpenAI Compatible)."""
 
 import asyncio
+import base64
 import io
 import logging
-import re
 import os
-import base64
+import re
+from dataclasses import dataclass
 
 from PIL import Image
 from openai import AsyncOpenAI
@@ -15,9 +16,6 @@ from shared_types.models import TranslationResult, TextStyle
 from xian.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
-
-
-from dataclasses import dataclass
 
 
 @dataclass
@@ -327,8 +325,8 @@ class VLProcessor:
             return cleaned_output
 
         except Exception as e:
-            logger.error("Error during OpenAI chat inference: %s", e)
-            return f"Error communicating with the model: {e}"
+            logger.error("Error during OpenAI chat inference: %s", e, exc_info=True)
+            raise
 
     def _build_result(self, response: str, image: Image.Image) -> list[TranslationResult]:
         """Build TranslationResult from model response."""

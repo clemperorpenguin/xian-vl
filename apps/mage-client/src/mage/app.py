@@ -29,13 +29,25 @@ from mage.capture.screen import ScreenCapture
 from xian.dictionary import LocalDictionary
 from mage.ui.command_osd import CommandOSD
 from shared_types import constants
-from shared_types.enums import SourceLanguage, TargetLanguage, TranslationMode
-from mage.settings_keys import *
+from shared_types.enums import SourceLanguage, TargetLanguage, TranslationMode, TranslationStyle
+from mage.settings_keys import (
+    KEY_API_URL, KEY_API_MODEL, KEY_SOURCE_LANG, KEY_TARGET_LANG,
+    KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY,
+    KEY_GPU_UTIL, KEY_DIALOGUE_DELAY, KEY_CINEMATIC_TRIGGER,
+)
 
 logger = logging.getLogger(__name__)
 
 ORGANIZATION = constants.ORGANIZATION_NAME
 APP_NAME = constants.APPLICATION_NAME
+
+
+def _parse_styles(settings: QSettings) -> list[str]:
+    """Parse the styles QSettings value into a clean list of strings."""
+    raw = settings.value(KEY_STYLES, constants.DEFAULT_STYLES)
+    if isinstance(raw, str):
+        return [s.strip() for s in raw.split(",") if s.strip()]
+    return raw if isinstance(raw, list) else []
 
 
 class SettingsDialog(QDialog):
@@ -89,16 +101,12 @@ class SettingsDialog(QDialog):
         # Styles
         style_layout = QVBoxLayout()
         self.style_checkboxes = {}
-        saved_styles = settings.value(KEY_STYLES, constants.DEFAULT_STYLES)
-        if isinstance(saved_styles, str):
-            saved_styles = [s.strip() for s in saved_styles.split(",") if s.strip()]
-        elif not isinstance(saved_styles, list):
-            saved_styles = []
-        for style in ["Romance", "Wuxia", "Visual Novel", "MMORPG"]:
-            cb = QCheckBox(style)
-            if style in saved_styles:
+        saved_styles = _parse_styles(settings)
+        for style in TranslationStyle:
+            cb = QCheckBox(style.value)
+            if style.value in saved_styles:
                 cb.setChecked(True)
-            self.style_checkboxes[style] = cb
+            self.style_checkboxes[style.value] = cb
             style_layout.addWidget(cb)
         layout.addRow("Styles:", style_layout)
 
@@ -284,7 +292,7 @@ class XianApp(QWidget):
         
     def _on_osd_setting_changed(self, key: str, value: str):
         """Handle quick-settings updates from the OSD."""
-        logger.info(f"OSD updated {key} to {value}")
+        logger.info("OSD updated %s to %s", key, value)
         self.settings.setValue(key, value)
         if key == KEY_API_MODEL:
             self.processor.config.model_name = value
@@ -318,7 +326,7 @@ class XianApp(QWidget):
 
     def _on_lens_action(self, action: str, rect: QRect, image_data: bytes):
         """Handle an action from the Lens action bar."""
-        logger.info(f"Lens action: {action}, rect: {rect}")
+        logger.info("Lens action: %s, rect: %s", action, rect)
 
         if action == "chat":
             # Push image into chat context and open sidebar
@@ -337,7 +345,7 @@ class XianApp(QWidget):
             self._run_inference(image_data, action, rect)
             return
 
-        logger.warning(f"Unknown lens action: {action}")
+        logger.warning("Unknown lens action: %s", action)
 
     # ------------------------------------------------------------------
     # Inference
@@ -347,14 +355,7 @@ class XianApp(QWidget):
         source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
         mode = self.settings.value(KEY_MODE, constants.DEFAULT_MODE)
-        
-        saved_styles = self.settings.value(KEY_STYLES, constants.DEFAULT_STYLES)
-        if isinstance(saved_styles, str):
-            styles = [s.strip() for s in saved_styles.split(",") if s.strip()]
-        elif isinstance(saved_styles, list):
-            styles = saved_styles
-        else:
-            styles = []
+        styles = _parse_styles(self.settings)
 
         worker = InferenceWorker(
             self.processor,
@@ -377,7 +378,7 @@ class XianApp(QWidget):
 
         self._workers.append(worker)
         worker.start()
-        logger.info(f"InferenceWorker started for action={action}")
+        logger.info("InferenceWorker started for action=%s", action)
 
     def _on_inference_done(self, results, action, worker):
         """Handle completed inference."""
@@ -623,7 +624,7 @@ class XianApp(QWidget):
         composite = QPixmap(max_width, total_height)
         composite.fill(Qt.GlobalColor.black)
         
-        from PyQt6.QtGui import QPainter
+        from PyQt6.QtGui import QPainter  # delayed import: only needed when cinematic is triggered
         painter = QPainter(composite)
         y_offset = 0
         for r in rects:
@@ -640,13 +641,7 @@ class XianApp(QWidget):
         composite_data = bytes(buffer.buffer())
 
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
-        saved_styles = self.settings.value(KEY_STYLES, constants.DEFAULT_STYLES)
-        if isinstance(saved_styles, str):
-            styles = [s.strip() for s in saved_styles.split(",") if s.strip()]
-        elif isinstance(saved_styles, list):
-            styles = saved_styles
-        else:
-            styles = []
+        styles = _parse_styles(self.settings)
 
         anchor_rect = rects[-1] if rects else QRect()
 
@@ -681,14 +676,14 @@ class XianApp(QWidget):
 
     def _on_health_result(self, available: bool, models: list):
         if available:
-            logger.info(f"Lemonade server connected. Models: {models}")
+            logger.info("Lemonade server connected. Models: %s", models)
             self._available_models = models
             self.osd.update_models(models)
             
             # Ensure the default model is pulled
             target_model = self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
             if target_model not in models and not self._model_pull_attempted:
-                logger.info(f"Model '{target_model}' not found on server, pulling...")
+                logger.info("Model '%s' not found on server, pulling...", target_model)
                 self._model_pull_attempted = True
                 self._pull_model(target_model)
         else:
@@ -705,11 +700,11 @@ class XianApp(QWidget):
 
     def _on_pull_done(self, success: bool, message: str):
         if success:
-            logger.info(f"Model pull complete: {message}")
+            logger.info("Model pull complete: %s", message)
             # Re-run health check to refresh the models list
             self._run_health_check()
         else:
-            logger.warning(f"Model pull failed: {message}")
+            logger.warning("Model pull failed: %s", message)
 
     # ------------------------------------------------------------------
     # Settings

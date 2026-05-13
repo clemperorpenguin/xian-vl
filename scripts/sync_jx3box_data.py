@@ -6,7 +6,7 @@ from pathlib import Path
 
 def sync_data():
     project_root = Path(__file__).parent.parent
-    target_dir = project_root / "xian" / "knowledge" / "jx3box-data"
+    target_dir = project_root / "packages" / "xian-vl" / "src" / "xian" / "knowledge" / "jx3box-data"
     repo_url = "https://github.com/JX3BOX/jx3box-data.git"
 
     print(f"Syncing JX3Box Data to {target_dir}...")

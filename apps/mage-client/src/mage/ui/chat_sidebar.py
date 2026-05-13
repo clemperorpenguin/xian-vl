@@ -29,7 +29,7 @@ class ChatWorker(QThread):
             response = loop.run_until_complete(self.processor.process_chat(self.message))
             self.result_ready.emit(response)
         except Exception as e:
-            logger.error(f"Chat worker error: {e}")
+            logger.error("Chat worker error: %s", e)
             self.result_ready.emit(f"Error: {e}")
         finally:
             loop.close()
@@ -51,8 +51,12 @@ class ChatSidebar(QWidget):
         self.setFixedWidth(350)
         
         # Position on the right side of the screen
-        screen = QGuiApplication.primaryScreen().geometry()
-        self.setGeometry(screen.right() - 350, screen.top(), 350, screen.height())
+        primary = QGuiApplication.primaryScreen()
+        if primary is None:
+            self.setGeometry(0, 0, 350, 600)
+        else:
+            screen = primary.geometry()
+            self.setGeometry(screen.right() - 350, screen.top(), 350, screen.height())
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -126,7 +130,7 @@ class ChatSidebar(QWidget):
             self._append_message("System", "📷 Image captured from Lens (will be included in next message)", "#FF9800")
             logger.info("Image context pushed to chat")
         except Exception as e:
-            logger.error(f"Failed to add image context: {e}")
+            logger.error("Failed to add image context: %s", e)
 
     def _send_message(self):
         text = self.input_field.text().strip()

@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import random
-from typing import List, Optional
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -11,7 +12,7 @@ class SearXNGSearcher:
     """
     
     def __init__(self):
-        self.instances: List[str] = []
+        self.instances: list[str] = []
         self.current_index = 0
         self.client = httpx.AsyncClient(timeout=10.0)
         
@@ -62,10 +63,10 @@ class SearXNGSearcher:
             random.shuffle(top_instances)
             self.instances[:top_n] = top_instances
             
-            logger.info(f"Discovered {len(self.instances)} valid SearXNG instances.")
+            logger.info("Discovered %d valid SearXNG instances.", len(self.instances))
             
         except Exception as e:
-            logger.error(f"Failed to discover instances: {e}. Using fallback defaults.")
+            logger.error("Failed to discover instances: %s. Using fallback defaults.", e)
             self.instances = [
                 "https://searx.be/",
                 "https://searxng.site/",
@@ -80,7 +81,7 @@ class SearXNGSearcher:
         self.current_index = (self.current_index + 1) % len(self.instances)
         return url
 
-    async def search(self, query: str, num_results: int = 10) -> List[dict]:
+    async def search(self, query: str, num_results: int = 10) -> list[dict]:
         """Performs a search using rotating instances.
         """
         if not self.instances:
@@ -91,7 +92,7 @@ class SearXNGSearcher:
         
         while attempts < max_attempts:
             instance_url = self._get_next_instance()
-            logger.info(f"Attempting search on {instance_url} (Attempt {attempts + 1}/{max_attempts})")
+            logger.info("Attempting search on %s (Attempt %d/%d)", instance_url, attempts + 1, max_attempts)
             
             try:
                 # SearXNG JSON API endpoint is usually /search or /
@@ -110,7 +111,7 @@ class SearXNGSearcher:
                 response = await self.client.get(search_url, params=params, timeout=5.0)
                 
                 if response.status_code == 429:
-                    logger.warning(f"Rate limited by {instance_url}, switching...")
+                    logger.warning("Rate limited by %s, switching...", instance_url)
                     attempts += 1
                     continue
                     
@@ -118,11 +119,11 @@ class SearXNGSearcher:
                 data = response.json()
                 
                 results = data.get("results", [])
-                logger.info(f"Successfully retrieved {len(results)} results from {instance_url}")
+                logger.info("Successfully retrieved %d results from %s", len(results), instance_url)
                 return results[:num_results]
                 
             except (httpx.HTTPError, ValueError) as e:
-                logger.warning(f"Failed to search on {instance_url}: {e}. Trying next instance.")
+                logger.warning("Failed to search on %s: %s. Trying next instance.", instance_url, e)
                 attempts += 1
                 await asyncio.sleep(0.5) # Short pause before retry
                 

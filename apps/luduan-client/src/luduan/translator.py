@@ -5,15 +5,12 @@ directly onto the GPU.  All inference now goes through Lemonade
 Server's ``/v1/chat/completions`` endpoint via the xian-vl pipeline.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
-from typing import Optional
 
 from openai import AsyncOpenAI
 
-from shared_types.constants import DEFAULT_API_URL
+from shared_types.constants import DEFAULT_API_URL, DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +33,7 @@ class DocumentTranslator:
     def __init__(
         self,
         base_url: str = DEFAULT_API_URL,
-        model: str = "",
+        model: str = DEFAULT_MODEL,
         source_lang: str = "Chinese",
         target_lang: str = "English",
     ) -> None:

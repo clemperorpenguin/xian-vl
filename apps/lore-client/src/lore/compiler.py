@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import os
-import yaml
 import logging
-from typing import List, Dict, Any
+from typing import Any
+
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +16,7 @@ class WikiCompiler:
         self.wiki_dir = wiki_dir
         os.makedirs(self.wiki_dir, exist_ok=True)
         
-    def compile(self, entity_name: str, content: str, metadata: Dict[str, Any], infobox: Dict[str, str] = None) -> str:
+    def compile(self, entity_name: str, content: str, metadata: dict[str, Any], infobox: dict[str, str] = None) -> str:
         """Compiles content into a Markdown file with YAML frontmatter.
         """
         # Ensure entity name is clean for filename
@@ -91,5 +94,5 @@ class WikiCompiler:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(full_content)
             
-        logger.info(f"Wiki file written to {filepath}")
+        logger.info("Wiki file written to %s", filepath)
         return filepath

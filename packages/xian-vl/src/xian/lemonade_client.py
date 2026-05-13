@@ -11,7 +11,7 @@ All methods are ``async`` and use ``httpx.AsyncClient`` under the hood.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -43,6 +43,12 @@ class LemonadeClient:
             timeout=timeout,
         )
 
+    async def __aenter__(self) -> LemonadeClient:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.close()
+
     async def close(self) -> None:
         """Shut down the underlying HTTP transport."""
         await self._client.aclose()
@@ -66,7 +72,7 @@ class LemonadeClient:
     async def load_model(
         self,
         name: str,
-        options: Optional[dict[str, Any]] = None,
+        options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Load a model into memory.  ``POST /v1/load``."""
         payload: dict[str, Any] = {"model": name}

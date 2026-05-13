@@ -68,9 +68,9 @@ if sys.platform == "linux":
                                 'ctrl': False,
                                 'alt': False
                             }
-                            logger.info(f"EvdevListener: Found keyboard - {device.name} at {device.path}")
+                            logger.info("EvdevListener: Found keyboard - %s at %s", device.name, device.path)
             except Exception as e:
-                logger.error(f"EvdevListener: Failed to find keyboards (are you in the 'input' group?): {e}")
+                logger.error("EvdevListener: Failed to find keyboards (are you in the 'input' group?): %s", e)
 
         def set_leader_key(self, leader_string: str):
             parts = leader_string.lower().split('+')
@@ -91,7 +91,7 @@ if sys.platform == "linux":
                 thread.start()
                 self._threads.append(thread)
                 
-            logger.info(f"EvdevListener: Started listening on {len(self.devices)} devices.")
+            logger.info("EvdevListener: Started listening on %d devices.", len(self.devices))
 
         def stop(self):
             """Stop listening."""
@@ -109,7 +109,7 @@ if sys.platform == "linux":
                         self._handle_key_event(device.path, key_event)
             except Exception as e:
                 if self.running:
-                    logger.error(f"EvdevListener: Error reading from {device.name}: {e}")
+                    logger.error("EvdevListener: Error reading from %s: %s", device.name, e)
 
         def _handle_key_event(self, device_path: str, event):
             """Process individual key events and detect hotkeys."""
@@ -138,7 +138,7 @@ if sys.platform == "linux":
                 if keycode == self.leader_key and mods.get(self.leader_mod):
                     self.command_mode_active = True
                     self.command_mode_end_time = now + 15.0
-                    logger.info(f"EvdevListener: Command Mode ACTIVATED via {self.leader_mod}+space")
+                    logger.info("EvdevListener: Command Mode ACTIVATED via %s+space", self.leader_mod)
                     self.command_mode_started.emit()
                     return
 
@@ -230,7 +230,7 @@ else:
             if has_mod and is_leader_key:
                 self.command_mode_active = True
                 self.command_mode_end_time = now + 15.0
-                logger.info(f"PynputListener: Command Mode ACTIVATED via {self.leader_mod}+{self.leader_key_name}")
+                logger.info("PynputListener: Command Mode ACTIVATED via %s+%s", self.leader_mod, self.leader_key_name)
                 self.command_mode_started.emit()
                 return
 
@@ -265,7 +265,7 @@ else:
                             self.trigger_cinematic_mode.emit()
                             self.command_mode_active = False
                 except Exception as e:
-                    logger.debug(f"PynputListener error: {e}")
+                    logger.debug("PynputListener error: %s", e)
                 
         def on_release(self, key):
             try:

@@ -3,8 +3,8 @@
 import asyncio
 import logging
 import os
-import urllib.request
-import json as _json
+
+import httpx
 
 from PyQt6.QtCore import QThread, QRect, pyqtSignal
 
@@ -63,7 +63,7 @@ class InferenceWorker(QThread):
                 )
                 self.translation_done.emit(results, self.action)
         except Exception as e:
-            logger.error(f"InferenceWorker error: {e}")
+            logger.error("InferenceWorker error: %s", e)
             self.error.emit(str(e))
         finally:
             loop.close()
@@ -104,7 +104,7 @@ class CinematicWorker(QThread):
                 transcript = await client.transcribe(audio_bytes)
                 await client.close()
             except Exception as e:
-                logger.warning(f"Audio transcription failed: {e}")
+                logger.warning("Audio transcription failed: %s", e)
 
         # 3. Process vision + transcript
         if not self.processor.client:
@@ -125,7 +125,7 @@ class CinematicWorker(QThread):
             results = loop.run_until_complete(self._run_async())
             self.translation_done.emit(results, "cinematic")
         except Exception as e:
-            logger.error(f"CinematicWorker error: {e}")
+            logger.error("CinematicWorker error: %s", e)
             self.error.emit(str(e))
         finally:
             loop.close()
@@ -144,13 +144,14 @@ class StatusWorker(QThread):
     def run(self):
         try:
             base_url = os.environ.get("LEMONADE_API_URL", self.api_url)
-            req = urllib.request.Request(f"{base_url}/models", method="GET")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                body = _json.loads(resp.read().decode())
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.get(f"{base_url}/models")
+                resp.raise_for_status()
+                body = resp.json()
                 models = [m.get("id", "unknown") for m in body.get("data", [])]
                 self.status_changed.emit(True, models if models else ["omni-router"])
         except Exception as e:
-            logger.warning(f"Lemonade health check failed: {e}")
+            logger.warning("Lemonade health check failed: %s", e)
             self.status_changed.emit(False, [])
 
 
@@ -174,26 +175,20 @@ class ModelPullWorker(QThread):
                 try:
                     payload_dict["gpu_memory_utilization"] = float(self.gpu_memory_utilization)
                 except ValueError:
-                    logger.warning(f"Invalid gpu_memory_utilization value: {self.gpu_memory_utilization}")
-            
-            payload = _json.dumps(payload_dict).encode()
-            req = urllib.request.Request(
-                f"{base_url}/pull",
-                data=payload,
-                method="POST",
-                headers={"Content-Type": "application/json"},
-            )
-            # Model downloads can be large — use a generous timeout
-            with urllib.request.urlopen(req, timeout=600) as resp:
-                body = _json.loads(resp.read().decode())
+                    logger.warning("Invalid gpu_memory_utilization value: %s", self.gpu_memory_utilization)
+
+            with httpx.Client(timeout=600.0) as client:
+                resp = client.post(f"{base_url}/pull", json=payload_dict)
+                resp.raise_for_status()
+                body = resp.json()
                 status = body.get("status", "unknown")
                 message = body.get("message", "")
                 if status == "success":
-                    logger.info(f"Model pull succeeded: {message}")
+                    logger.info("Model pull succeeded: %s", message)
                     self.pull_done.emit(True, message)
                 else:
-                    logger.warning(f"Model pull returned status={status}: {message}")
+                    logger.warning("Model pull returned status=%s: %s", status, message)
                     self.pull_done.emit(False, message)
         except Exception as e:
-            logger.error(f"Model pull failed: {e}")
+            logger.error("Model pull failed: %s", e)
             self.pull_done.emit(False, str(e))

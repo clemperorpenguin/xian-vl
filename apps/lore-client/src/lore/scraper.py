@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Optional
 from playwright.async_api import async_playwright
 from readability import Document
 from bs4 import BeautifulSoup
@@ -14,10 +15,10 @@ class PlaywrightScraper:
     def __init__(self):
         self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
-    async def scrape(self, url: str) -> Optional[dict]:
+    async def scrape(self, url: str) -> dict | None:
         """Fetches URL and returns cleaned content and metadata.
         """
-        logger.info(f"Scraping URL: {url}")
+        logger.info("Scraping URL: %s", url)
         
         async with async_playwright() as p:
             # Launch headless browser
@@ -41,7 +42,7 @@ class PlaywrightScraper:
                 html_content = await page.content()
                 title = await page.title()
                 
-                logger.info(f"Successfully fetched content from {url}")
+                logger.info("Successfully fetched content from %s", url)
                 
                 # Clean content using Readability
                 doc = Document(html_content)
@@ -67,7 +68,7 @@ class PlaywrightScraper:
                 }
                 
             except Exception as e:
-                logger.error(f"Failed to scrape {url}: {e}")
+                logger.error("Failed to scrape %s: %s", url, e)
                 return None
                 
             finally:

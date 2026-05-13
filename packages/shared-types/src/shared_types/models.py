@@ -6,8 +6,6 @@ engine, Lemonade Server, and every client application.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 from shared_types.enums import SourceLanguage, TargetLanguage, TranslationMode
@@ -23,7 +21,7 @@ class TextStyle(BaseModel):
     font_size: float = 16.0
     font_weight: str = "normal"
     text_color: tuple[int, int, int] = (255, 255, 255)
-    background_color: Optional[tuple[int, int, int]] = None
+    background_color: tuple[int, int, int] | None = None
     rotation_angle: float = 0.0
     opacity: float = 1.0
 
@@ -69,7 +67,7 @@ class TranslationResult(BaseModel):
     accuracy: AccuracyScore = Field(
         default_factory=lambda: AccuracyScore(score=1.0, reason="full_pass")
     )
-    style: Optional[TextStyle] = None
+    style: TextStyle | None = None
     rotation_angle: float = 0.0
 
 
@@ -89,7 +87,7 @@ class CinematicPayload(BaseModel):
     image_b64: str
     audio_b64: str
     audio_format: str = "wav"
-    subtitles_hint: Optional[str] = None
+    subtitles_hint: str | None = None
 
 
 # ── Chat ─────────────────────────────────────────────────────────────
@@ -99,7 +97,7 @@ class ChatRequest(BaseModel):
     """A single message from the user to the context engine."""
 
     message: str
-    image_b64: Optional[str] = None
+    image_b64: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -117,7 +115,7 @@ class FeedbackPayload(BaseModel):
 
     translation_id: str
     rating: int = Field(ge=1, le=5)
-    correction: Optional[str] = None
+    correction: str | None = None
 
 
 # ── Visual Grounding ─────────────────────────────────────────────────

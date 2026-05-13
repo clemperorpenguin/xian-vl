@@ -1,17 +1,16 @@
 import asyncio
+import json
 import logging
+import os
 import sys
+
 import typer
 from rich.console import Console
 from rich.prompt import Prompt, IntPrompt
 from rich.table import Table
 from rich.status import Status
 
-# We'll assume shared_types is available in the workspace
-try:
-    from shared_types.constants import DEFAULT_API_URL
-except ImportError:
-    DEFAULT_API_URL = "http://localhost:8000/v1"
+from shared_types.constants import DEFAULT_API_URL, DEFAULT_MODEL
 
 from openai import AsyncOpenAI
 
@@ -48,7 +47,7 @@ async def translate_content(text: str, entity_name: str) -> str:
     
     try:
         response = await client.chat.completions.create(
-            model="qwen", # Default model or whatever Lemonade uses
+            model=DEFAULT_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Entity: {entity_name}\n\nContent:\n{text}"},
@@ -57,7 +56,7 @@ async def translate_content(text: str, entity_name: str) -> str:
         )
         return response.choices[0].message.content or text
     except Exception as e:
-        logger.error(f"Translation failed: {e}")
+        logger.error("Translation failed: %s", e)
         return text
 
 
@@ -84,17 +83,16 @@ async def extract_and_translate_infobox(raw_html: str, entity_name: str) -> dict
     
     try:
         response = await client.chat.completions.create(
-            model="qwen",
+            model=DEFAULT_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": infobox_str},
             ],
             response_format={"type": "json_object"},
         )
-        import json
         return json.loads(response.choices[0].message.content or "{}")
     except Exception as e:
-        logger.error(f"Infobox translation failed: {e}")
+        logger.error("Infobox translation failed: %s", e)
         # Return untranslated or best effort
         return heuristic_infobox
 
@@ -104,7 +102,6 @@ async def research_entity(entity_name: str):
     """
     searcher = SearXNGSearcher()
     scraper = PlaywrightScraper()
-    import os
     wiki_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "wiki")
     compiler = WikiCompiler(wiki_dir=wiki_dir)
     

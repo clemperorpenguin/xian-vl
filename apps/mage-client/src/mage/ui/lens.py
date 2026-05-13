@@ -1,4 +1,6 @@
 import logging
+from typing import ClassVar
+
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton
 from PyQt6.QtCore import Qt, QRect, QPoint, QBuffer, QIODevice, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent, QPixmap, QImage, QGuiApplication
@@ -64,7 +66,7 @@ class LensOverlayWindow(QWidget):
     action_requested = pyqtSignal(str, QRect, bytes) # action, rect, cropped_image
 
     # Persists across instances so the next overlay can recall it
-    _last_rect: QRect | None = None
+    _last_rect: ClassVar[QRect | None] = None
     
     def __init__(self, previous_rect: QRect | None = None):
         super().__init__()
@@ -109,7 +111,7 @@ class LensOverlayWindow(QWidget):
             self.update()
 
     def _handle_action(self, action: str, rect: QRect):
-        logger.info(f"Lens action requested: {action} on {rect}")
+        logger.info("Lens action requested: %s on %s", action, rect)
         # Remember this selection for next time
         LensOverlayWindow._last_rect = QRect(rect)
         
@@ -216,7 +218,7 @@ class CinematicLensOverlay(QWidget):
     closed = pyqtSignal()
     confirmed = pyqtSignal(list) # list of QRect
 
-    _last_rects: list[QRect] = []
+    _last_rects: ClassVar[list[QRect]] = []
     
     def __init__(self):
         super().__init__()

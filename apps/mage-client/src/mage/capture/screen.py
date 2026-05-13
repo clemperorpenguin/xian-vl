@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import logging
-import sys
 import os
 import subprocess
+import sys
 import tempfile
-from typing import Optional, Tuple
+
 from PyQt6.QtGui import QImage, QGuiApplication, QPixmap, QPainter, QColor
 from PyQt6.QtCore import QBuffer, QIODevice, QRect
 
@@ -22,7 +24,7 @@ class ScreenCapture:
         return total_geo
 
     @staticmethod
-    def capture_screen() -> Optional[bytes]:
+    def capture_screen() -> bytes | None:
         """Capture entire screen using best available method"""
 
         # Try Wayland-specific methods first if on Wayland (Linux only)
@@ -31,7 +33,7 @@ class ScreenCapture:
             desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
             if is_wayland:
-                logger.debug(f"Wayland detected, desktop: {desktop}")
+                logger.debug("Wayland detected, desktop: %s", desktop)
                 # 1. KDE Plasma - Spectacle
                 if "kde" in desktop:
                     logger.debug("Trying Spectacle backend...")
@@ -71,7 +73,7 @@ class ScreenCapture:
         return None
 
     @staticmethod
-    def _capture_pyqt() -> Optional[bytes]:
+    def _capture_pyqt() -> bytes | None:
         """Capture entire virtual desktop using PyQt (X11, Windows, macOS).
 
         Composites all screens into a single image so multi-monitor setups
@@ -113,11 +115,11 @@ class ScreenCapture:
 
             return data
         except Exception as e:
-            logger.debug(f"PyQt capture error: {e}")
+            logger.debug("PyQt capture error: %s", e)
         return None
 
     @staticmethod
-    def _capture_spectacle() -> Optional[bytes]:
+    def _capture_spectacle() -> bytes | None:
         """Capture screen using Spectacle (KDE)"""
         try:
             with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmp:
@@ -140,11 +142,11 @@ class ScreenCapture:
 
             if os.path.exists(tmp_path): os.unlink(tmp_path)
         except Exception as e:
-            logger.debug(f"Spectacle capture error: {e}")
+            logger.debug("Spectacle capture error: %s", e)
         return None
 
     @staticmethod
-    def _capture_gnome() -> Optional[bytes]:
+    def _capture_gnome() -> bytes | None:
         """Capture screen using GNOME screenshot methods"""
         # Try gnome-screenshot CLI first
         try:
@@ -187,12 +189,12 @@ class ScreenCapture:
                 os.unlink(tmp_path)
                 return data
         except Exception as e:
-            logger.debug(f"GNOME DBus capture error: {e}")
+            logger.debug("GNOME DBus capture error: %s", e)
 
         return None
 
     @staticmethod
-    def _capture_grim() -> Optional[bytes]:
+    def _capture_grim() -> bytes | None:
         """Capture screen using grim (Generic Wayland)"""
         try:
             result = subprocess.run(["grim", "-"], capture_output=True, timeout=5)
@@ -200,7 +202,7 @@ class ScreenCapture:
                 logger.debug("Captured screen via grim")
                 return result.stdout
         except Exception as e:
-            logger.debug(f"grim capture error: {e}")
+            logger.debug("grim capture error: %s", e)
         return None
 
     @staticmethod

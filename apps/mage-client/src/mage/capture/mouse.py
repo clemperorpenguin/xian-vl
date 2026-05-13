@@ -41,9 +41,9 @@ if sys.platform == "linux":
                         keys = device.capabilities()[evdev.ecodes.EV_KEY]
                         if evdev.ecodes.BTN_LEFT in keys:
                             self.devices.append(device)
-                            logger.info(f"EvdevMouseListener: Found mouse - {device.name} at {device.path}")
+                            logger.info("EvdevMouseListener: Found mouse - %s at %s", device.name, device.path)
             except Exception as e:
-                logger.error(f"EvdevMouseListener: Failed to find mice: {e}")
+                logger.error("EvdevMouseListener: Failed to find mice: %s", e)
 
         def start(self):
             if not self.devices:
@@ -56,7 +56,7 @@ if sys.platform == "linux":
                 thread.start()
                 self._threads.append(thread)
                 
-            logger.info(f"EvdevMouseListener: Started listening on {len(self.devices)} devices.")
+            logger.info("EvdevMouseListener: Started listening on %d devices.", len(self.devices))
 
         def stop(self):
             self.running = False
@@ -72,7 +72,7 @@ if sys.platform == "linux":
                             self.left_click.emit()
             except Exception as e:
                 if self.running:
-                    logger.error(f"EvdevMouseListener: Error reading from {device.name}: {e}")
+                    logger.error("EvdevMouseListener: Error reading from %s: %s", device.name, e)
 
 else:
     from pynput import mouse
