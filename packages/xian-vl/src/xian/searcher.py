@@ -39,9 +39,18 @@ class DuckDuckGoSearcher:
         """Perform a search via DuckDuckGo Lite and parse HTML results."""
         # Map language codes to DDG region codes
         region_map = {
-            "zh": "cn-zh", "zh-CN": "cn-zh", "zh-TW": "tw-tzh",
-            "ja": "jp-jp", "ko": "kr-kr",
-            "en": "us-en", "en-US": "us-en",
+            "zh": "cn-zh", "zh-CN": "cn-zh", "zh-TW": "tw-tzh", "Chinese": "cn-zh",
+            "ja": "jp-jp", "ko": "kr-kr", "Japanese": "jp-jp", "Korean": "kr-kr",
+            "en": "us-en", "en-US": "us-en", "English": "us-en",
+            "ru": "ru-ru", "Russian": "ru-ru",
+            "hi": "in-hi", "Hindi": "in-hi",
+            "bn": "in-bn", "Bengali": "in-bn",
+            "tr": "tr-tr", "Turkish": "tr-tr",
+            "ar": "xa-ar", "Arabic": "xa-ar",
+            "es": "es-es", "Spanish": "es-es",
+            "fr": "fr-fr", "French": "fr-fr",
+            "pt": "pt-pt", "Portuguese": "pt-pt",
+            "vi": "vn-vi", "Vietnamese": "vn-vi",
         }
         kl = region_map.get(language, "")
 

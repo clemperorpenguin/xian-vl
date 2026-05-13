@@ -13,6 +13,7 @@ class SourceLanguage(StrEnum):
     CHINESE = "Chinese"
     JAPANESE = "Japanese"
     KOREAN = "Korean"
+    RUSSIAN = "Russian"
     AUTO = "Auto"
 
 
@@ -24,6 +25,15 @@ class TargetLanguage(StrEnum):
     FRENCH = "French"
     GERMAN = "German"
     PORTUGUESE = "Portuguese"
+    RUSSIAN = "Russian"
+    HINDI = "Hindi"
+    BENGALI = "Bengali"
+    TURKISH = "Turkish"
+    ARABIC = "Arabic"
+    CHINESE = "Chinese"
+    JAPANESE = "Japanese"
+    KOREAN = "Korean"
+    VIETNAMESE = "Vietnamese"
 
 
 class TranslationMode(StrEnum):

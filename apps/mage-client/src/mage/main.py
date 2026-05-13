@@ -14,6 +14,9 @@ from shared_types.constants import APPLICATION_NAME, ORGANIZATION_NAME
 from xian.logging_config import setup_logger
 
 
+import signal
+from PyQt6.QtCore import QTimer
+
 def main() -> None:
     """Launch the MAGE Gaming HUD."""
     setup_logger(level=logging.DEBUG)
@@ -23,6 +26,14 @@ def main() -> None:
     app.setApplicationName(APPLICATION_NAME)
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(QIcon("xian.png"))
+
+    # Allow Ctrl+C to terminate the application
+    signal.signal(signal.SIGINT, lambda *args: QApplication.quit())
+
+    # Periodically "poke" the event loop so Python can process signals
+    timer = QTimer()
+    timer.start(500)
+    timer.timeout.connect(lambda: None)
 
     # Defer heavy imports until the event loop is ready
     from mage.app import XianApp  # noqa: E402
