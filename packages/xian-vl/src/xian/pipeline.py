@@ -211,6 +211,69 @@ class VLProcessor:
             logger.error("Error during OpenAI API inference: %s", e, exc_info=True)
             raise
 
+    def create_cinematic_prompt(self, transcript: str, target_lang: str, styles: list[str]) -> str:
+        """Create a prompt combining audio transcript and visual OCR for cinematic mode."""
+        style_context = f" Translate using a {', '.join(styles)} style/tone." if styles else ""
+        return (
+            f"Translate the following dialogue to {target_lang}. Use the provided system audio transcription for context, "
+            f"and cross-reference it with the OCR from the provided image of the game interface to ensure accurate character names and tone.{style_context}\n\n"
+            f"Audio Transcript: {transcript}\n\n"
+            f"Reply ONLY with two sections, no commentary:\n"
+            f"ORIGINAL:\n<original text>\n\n"
+            f"TRANSLATED:\n<{target_lang} translation>"
+        )
+
+    async def process_cinematic(self, image_data: bytes, transcript: str, target_lang: str, styles: list[str]) -> list[TranslationResult]:
+        """
+        Process a single frame along with an audio transcript using OmniRouter.
+        """
+        if not self.client:
+            raise RuntimeError("Engine not initialized. Call init_engine() first.")
+
+        image = self.preprocess_image(image_data)
+        self.context_manager.add_frame(image)
+
+        prompt = self.create_cinematic_prompt(transcript, target_lang, styles)
+        b64_image = self.encode_image(image)
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
+                ]
+            }
+        ]
+
+        try:
+            logger.info("Sending cinematic translation request to OmniRouter via OpenAI...")
+            response = await self.client.chat.completions.create(
+                model=self.config.model_name,
+                messages=messages,
+                max_tokens=self.config.max_tokens,
+                temperature=self.config.temperature,
+            )
+
+            choice = response.choices[0] if response.choices else None
+            final_output = (choice.message.content or "") if choice else ""
+
+            if not final_output and choice:
+                reasoning = getattr(choice.message, 'reasoning_content', None) or ""
+                if reasoning:
+                    final_output = reasoning
+
+            results = self._build_result(final_output, image)
+
+            extracted = [r.original_text for r in results]
+            self.context_manager.update_last_frame_data("\n".join(extracted), results)
+
+            return results
+
+        except Exception as e:
+            logger.error("Error during OpenAI API inference (cinematic): %s", e, exc_info=True)
+            raise
+
     async def process_chat(self, message: str) -> str:
         """Process a contextual chat message using the sliding window context via OmniRouter."""
         if not self.client:

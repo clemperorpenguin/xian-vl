@@ -8,6 +8,9 @@ import json as _json
 
 from PyQt6.QtCore import QThread, QRect, pyqtSignal
 
+from mage.capture.audio import capture_system_audio
+from xian.lemonade_client import LemonadeClient
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +64,68 @@ class InferenceWorker(QThread):
                 self.translation_done.emit(results, self.action)
         except Exception as e:
             logger.error(f"InferenceWorker error: {e}")
+            self.error.emit(str(e))
+        finally:
+            loop.close()
+
+
+class CinematicWorker(QThread):
+    """Run Cinematic inference handling audio transcription and visual OCR.
+
+    Accepts image bytes, captures audio, transcribes it, and calls VLProcessor.process_cinematic().
+    """
+
+    translation_done = pyqtSignal(list, str)
+    error = pyqtSignal(str)
+
+    def __init__(self, processor, *, image_data: bytes = None,
+                 target_lang: str = "English", styles: list[str] = None,
+                 anchor_rect: QRect = None):
+        super().__init__()
+        self.processor = processor
+        self.image_data = image_data
+        self.target_lang = target_lang
+        self.styles = styles or []
+        self.anchor_rect = anchor_rect or QRect()
+
+    async def _run_async(self):
+        # 1. Capture 4 seconds of audio (while user is viewing subtitle)
+        # Note: Depending on timing, if triggered right as text appears, 4s is usually enough.
+        audio_bytes = await capture_system_audio(duration_seconds=4.0)
+        
+        transcript = ""
+        if audio_bytes:
+            # 2. Transcribe via Lemonade
+            try:
+                base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
+                # LemonadeClient expects base url without /v1 but DEFAULT_API_URL has it.
+                base_url_no_v1 = base_url.removesuffix("/v1")
+                client = LemonadeClient(base_url=base_url_no_v1)
+                transcript = await client.transcribe(audio_bytes)
+                await client.close()
+            except Exception as e:
+                logger.warning(f"Audio transcription failed: {e}")
+
+        # 3. Process vision + transcript
+        if not self.processor.client:
+            await self.processor.init_engine()
+
+        results = await self.processor.process_cinematic(
+            self.image_data, 
+            transcript, 
+            self.target_lang, 
+            self.styles
+        )
+        return results
+
+    def run(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            results = loop.run_until_complete(self._run_async())
+            self.translation_done.emit(results, "cinematic")
+        except Exception as e:
+            logger.error(f"CinematicWorker error: {e}")
             self.error.emit(str(e))
         finally:
             loop.close()

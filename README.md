@@ -39,11 +39,11 @@ uv sync --all-packages
 ## Roadmap
 
 - [x] Monorepo migration and workspace setup
-- [ ] Cinematic mode — translate audio with on-screen context
+- [x] Cinematic mode — translate audio with on-screen context
 - [x] Dialogue mode — keep an area selected, advance with a click (VNs / story RPGs)
 - [ ] Game oracle / chatbot integration / complete LORE
-- [ ] UI and documentation localized
 - [ ] Complete MASHA extension
+- [ ] UI and documentation localized
 - [ ] Make everything pretty
 - [ ] Server benchmark to select best settings
 - [ ] Flatpak / SteamOS support for MAGE client

@@ -12,6 +12,8 @@ class HotkeyListener(QObject):
     trigger_chat = pyqtSignal()
     trigger_settings = pyqtSignal()
     trigger_dialogue_mode = pyqtSignal()
+    trigger_cinematic_mode = pyqtSignal()
+    cinematic_capture = pyqtSignal()
     command_mode_started = pyqtSignal()
 
     def start(self):
@@ -41,6 +43,8 @@ if sys.platform == "linux":
             self.leader_key = 57  # KEY_SPACE
             self.command_mode_active = False
             self.command_mode_end_time = 0.0
+            
+            self.cinematic_mode_active = False
             
             # Track modifier states per device
             self.modifiers = {}
@@ -137,6 +141,13 @@ if sys.platform == "linux":
                     logger.info(f"EvdevListener: Command Mode ACTIVATED via {self.leader_mod}+space")
                     self.command_mode_started.emit()
                     return
+
+                # Check cinematic trigger globally (if mode is active)
+                # KEY_GRAVE is 41 (backtick/tilde key)
+                if self.cinematic_mode_active and keycode == 41:
+                    logger.info("EvdevListener: Triggered Cinematic Capture")
+                    self.cinematic_capture.emit()
+                    return
                 
                 if self.command_mode_active:
                     # KEY_C is 46
@@ -163,6 +174,12 @@ if sys.platform == "linux":
                         self.trigger_dialogue_mode.emit()
                         self.command_mode_active = False
 
+                    # KEY_M is 50
+                    elif keycode == 50:
+                        logger.info("EvdevListener: Triggered Cinematic Mode")
+                        self.trigger_cinematic_mode.emit()
+                        self.command_mode_active = False
+
 else:
     from pynput import keyboard
 
@@ -179,6 +196,7 @@ else:
             self.leader_key_name = 'space'
             self.command_mode_active = False
             self.command_mode_end_time = 0.0
+            self.cinematic_mode_active = False
 
         def set_leader_key(self, leader_string: str):
             parts = leader_string.lower().split('+')
@@ -216,6 +234,12 @@ else:
                 self.command_mode_started.emit()
                 return
 
+            if self.cinematic_mode_active:
+                if hasattr(key, 'char') and key.char == '`':
+                    logger.info("PynputListener: Triggered Cinematic Capture")
+                    self.cinematic_capture.emit()
+                    return
+
             if self.command_mode_active:
                 try:
                     if hasattr(key, 'char') and key.char:
@@ -235,6 +259,10 @@ else:
                         elif char == 'o':
                             logger.info("PynputListener: Triggered Dialogue Mode")
                             self.trigger_dialogue_mode.emit()
+                            self.command_mode_active = False
+                        elif char == 'm':
+                            logger.info("PynputListener: Triggered Cinematic Mode")
+                            self.trigger_cinematic_mode.emit()
                             self.command_mode_active = False
                 except Exception as e:
                     logger.debug(f"PynputListener error: {e}")

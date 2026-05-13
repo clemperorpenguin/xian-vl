@@ -210,3 +210,133 @@ class LensOverlayWindow(QWidget):
     def closeEvent(self, event):
         self.closed.emit()
         super().closeEvent(event)
+
+class CinematicLensOverlay(QWidget):
+    """Overlay for selecting multiple regions for Cinematic Mode."""
+    closed = pyqtSignal()
+    confirmed = pyqtSignal(list) # list of QRect
+
+    _last_rects: list[QRect] = []
+    
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        
+        self.full_image_data = ScreenCapture.capture_screen()
+        if self.full_image_data:
+            img = QImage.fromData(self.full_image_data)
+            self.pixmap = QPixmap.fromImage(img)
+        else:
+            self.pixmap = QPixmap()
+            
+        self.total_geo = ScreenCapture.get_virtual_desktop_geometry()
+        self.setGeometry(self.total_geo)
+        
+        self.start_pos = QPoint()
+        self.current_pos = QPoint()
+        self.selecting = False
+        
+        # Load previous rects
+        self.rects = [QRect(r) for r in CinematicLensOverlay._last_rects]
+        
+        # Action Bar (Confirm / Clear)
+        self.action_bar = QWidget(self)
+        self.action_bar.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        layout = QHBoxLayout(self.action_bar)
+        self.action_bar.setStyleSheet(f"""
+            QWidget {{ background-color: rgba(30, 30, 30, 220); border-radius: 8px; border: 1px solid {accent_hex()}; }}
+            QPushButton {{ background-color: #333; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-weight: bold; }}
+            QPushButton:hover {{ background-color: {accent_hex()}; }}
+        """)
+        btn_confirm = QPushButton("Confirm")
+        btn_confirm.clicked.connect(self._on_confirm)
+        btn_clear = QPushButton("Clear All")
+        btn_clear.clicked.connect(self._on_clear)
+        layout.addWidget(btn_confirm)
+        layout.addWidget(btn_clear)
+        
+        self.action_bar.adjustSize()
+        # Position at top center
+        self.action_bar.move((self.total_geo.width() - self.action_bar.width()) // 2, 20)
+
+    def _on_confirm(self):
+        CinematicLensOverlay._last_rects = [QRect(r) for r in self.rects]
+        self.confirmed.emit(self.rects)
+        self.close()
+
+    def _on_clear(self):
+        self.rects.clear()
+        self.update()
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Check if clicking on action bar
+            if self.action_bar.geometry().contains(event.pos()):
+                super().mousePressEvent(event)
+                return
+            self.start_pos = event.globalPosition().toPoint()
+            self.selecting = True
+            self.update()
+        elif event.button() == Qt.MouseButton.RightButton:
+            self.close()
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self.selecting:
+            self.current_pos = event.globalPosition().toPoint()
+            self.update()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton and self.selecting:
+            self.selecting = False
+            self.current_pos = event.globalPosition().toPoint()
+            rect = QRect(self.start_pos, self.current_pos).normalized()
+            if rect.width() > 10 and rect.height() > 10:
+                self.rects.append(rect)
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        
+        if not self.pixmap.isNull():
+            painter.drawPixmap(0, 0, self.pixmap)
+            
+        dim_color = QColor(0, 0, 0, 150)
+        painter.fillRect(self.rect(), dim_color)
+        
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        for r in self.rects:
+            rect = QRect(r)
+            rect.translate(-self.total_geo.left(), -self.total_geo.top())
+            painter.fillRect(rect, Qt.GlobalColor.transparent)
+            
+        if self.selecting:
+            rect = QRect(self.start_pos, self.current_pos).normalized()
+            rect.translate(-self.total_geo.left(), -self.total_geo.top())
+            painter.fillRect(rect, Qt.GlobalColor.transparent)
+            
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        painter.setPen(QPen(accent_qcolor(), 2))
+        for r in self.rects:
+            rect = QRect(r)
+            rect.translate(-self.total_geo.left(), -self.total_geo.top())
+            painter.drawRect(rect)
+            
+        if self.selecting:
+            rect = QRect(self.start_pos, self.current_pos).normalized()
+            rect.translate(-self.total_geo.left(), -self.total_geo.top())
+            painter.drawRect(rect)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+        elif event.key() in (Qt.Key.Key_Enter, Qt.Key.Key_Return):
+            self._on_confirm()
+
+    def closeEvent(self, event):
+        self.closed.emit()
+        super().closeEvent(event)

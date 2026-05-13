@@ -19,8 +19,8 @@ from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap
 from mage.ui.theme import accent_hex, accent_hover_hex
 
 from xian.pipeline import VLProcessor, VLConfig
-from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker
-from mage.ui.lens import LensOverlayWindow
+from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker
+from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
 from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.result_bubble import ResultBubble
 from mage.capture.hotkeys import create_hotkey_listener
@@ -195,8 +195,14 @@ class XianApp(QWidget):
         self.hotkey_listener.trigger_chat.connect(self.toggle_chat)
         self.hotkey_listener.trigger_settings.connect(self._open_settings)
         self.hotkey_listener.trigger_dialogue_mode.connect(self.toggle_dialogue_mode)
+        self.hotkey_listener.trigger_cinematic_mode.connect(self.toggle_cinematic_mode)
+        self.hotkey_listener.cinematic_capture.connect(self._on_cinematic_trigger)
         self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
         self.hotkey_listener.start()
+
+        # --- Cinematic Mode ---
+        self.cinematic_mode_active = False
+        self.cinematic_bubble = None
 
         # --- Dialogue Mode ---
         self.dialogue_mode_active = False
@@ -410,7 +416,23 @@ class XianApp(QWidget):
                 )
                 translation_combined = dict_text
 
-        if self.dialogue_mode_active:
+        if action == "cinematic":
+            if self.cinematic_bubble is None or not self.cinematic_bubble.isVisible():
+                self.cinematic_bubble = ResultBubble(
+                    translation_combined,
+                    original_text=original_combined,
+                    anchor_rect=anchor,
+                    auto_close_ms=0,
+                )
+            else:
+                self.cinematic_bubble.close()
+                self.cinematic_bubble = ResultBubble(
+                    translation_combined,
+                    original_text=original_combined,
+                    anchor_rect=anchor,
+                    auto_close_ms=0,
+                )
+        elif self.dialogue_mode_active:
             if self.dialogue_bubble is None or not self.dialogue_bubble.isVisible():
                 self.dialogue_bubble = ResultBubble(
                     translation_combined,
@@ -527,6 +549,126 @@ class XianApp(QWidget):
         cropped_data = bytes(buffer.buffer())
         
         self._run_inference(cropped_data, "translate", rect)
+
+    # ------------------------------------------------------------------
+    # Cinematic Mode
+    # ------------------------------------------------------------------
+    def toggle_cinematic_mode(self):
+        self.osd.hide()
+        self.osd_timer.stop()
+        
+        if self.cinematic_mode_active:
+            self.cinematic_mode_active = False
+            self.hotkey_listener.cinematic_mode_active = False
+            if self.cinematic_bubble:
+                self.cinematic_bubble.close()
+                self.cinematic_bubble = None
+            bubble = ResultBubble("Cinematic Mode Disabled", auto_close_ms=3000)
+            self._bubbles = [b for b in self._bubbles if b.isVisible()]
+            self._bubbles.append(bubble)
+        else:
+            if not CinematicLensOverlay._last_rects:
+                # Open Cinematic Lens for selection
+                self._show_cinematic_lens()
+            else:
+                self._activate_cinematic_mode()
+
+    def _activate_cinematic_mode(self):
+        self.cinematic_mode_active = True
+        self.hotkey_listener.cinematic_mode_active = True
+        bubble = ResultBubble("Cinematic Mode ON (Press ` to capture)", auto_close_ms=4000)
+        self._bubbles = [b for b in self._bubbles if b.isVisible()]
+        self._bubbles.append(bubble)
+
+    def _show_cinematic_lens(self):
+        if self._lens is not None:
+            self._lens.close()
+        self._lens = CinematicLensOverlay()
+        self._lens.confirmed.connect(self._on_cinematic_lens_confirmed)
+        self._lens.closed.connect(self._on_lens_closed)
+        self._lens.showFullScreen()
+        
+    def _on_cinematic_lens_confirmed(self, rects):
+        if rects:
+            self._activate_cinematic_mode()
+        else:
+            bubble = ResultBubble("Cinematic Mode requires at least one region.", auto_close_ms=4000)
+            self._bubbles = [b for b in self._bubbles if b.isVisible()]
+            self._bubbles.append(bubble)
+
+    def _on_cinematic_trigger(self):
+        if not self.cinematic_mode_active or not CinematicLensOverlay._last_rects:
+            return
+
+        # Show capturing indicator
+        if self.cinematic_bubble is None or not self.cinematic_bubble.isVisible():
+            self.cinematic_bubble = ResultBubble("Recording audio and capturing screen...", auto_close_ms=0)
+        else:
+            self.cinematic_bubble.close()
+            self.cinematic_bubble = ResultBubble("Recording audio and capturing screen...", auto_close_ms=0)
+
+        data = ScreenCapture.capture_screen()
+        if not data:
+            return
+
+        img = QImage.fromData(data)
+        pixmap = QPixmap.fromImage(img)
+        rects = CinematicLensOverlay._last_rects
+        total_geo = ScreenCapture.get_virtual_desktop_geometry()
+        
+        # Composite rects
+        total_height = sum(r.height() for r in rects)
+        max_width = max(r.width() for r in rects)
+        
+        composite = QPixmap(max_width, total_height)
+        composite.fill(Qt.GlobalColor.black)
+        
+        from PyQt6.QtGui import QPainter
+        painter = QPainter(composite)
+        y_offset = 0
+        for r in rects:
+            safe_rect = r.translated(-total_geo.left(), -total_geo.top())
+            safe_rect = safe_rect.intersected(pixmap.rect())
+            cropped = pixmap.copy(safe_rect)
+            painter.drawPixmap(0, y_offset, cropped)
+            y_offset += r.height()
+        painter.end()
+
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        composite.save(buffer, "PNG")
+        composite_data = bytes(buffer.buffer())
+
+        target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
+        saved_styles = self.settings.value(KEY_STYLES, constants.DEFAULT_STYLES)
+        if isinstance(saved_styles, str):
+            styles = [s.strip() for s in saved_styles.split(",") if s.strip()]
+        elif isinstance(saved_styles, list):
+            styles = saved_styles
+        else:
+            styles = []
+
+        anchor_rect = rects[-1] if rects else QRect()
+
+        worker = CinematicWorker(
+            self.processor,
+            image_data=composite_data,
+            target_lang=target_lang,
+            styles=styles,
+            anchor_rect=anchor_rect,
+        )
+
+        worker.translation_done.connect(
+            lambda results, act, w=worker: self._on_inference_done(results, act, w)
+        )
+        worker.error.connect(
+            lambda msg, w=worker: self._on_inference_error(msg, w)
+        )
+        worker.finished.connect(lambda w=worker: self._cleanup_worker(w))
+
+        self._workers.append(worker)
+        worker.start()
+        logger.info("CinematicWorker started")
 
     # ------------------------------------------------------------------
     # Health check
