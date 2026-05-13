@@ -15,6 +15,7 @@ class HotkeyListener(QObject):
     trigger_cinematic_mode = pyqtSignal()
     cinematic_capture = pyqtSignal()
     command_mode_started = pyqtSignal()
+    command_mode_cancelled = pyqtSignal()
 
     def start(self):
         pass
@@ -23,6 +24,10 @@ class HotkeyListener(QObject):
         pass
 
     def set_leader_key(self, leader_string: str):
+        pass
+        
+    def cancel_command_mode(self):
+        pass
         pass
 
 if sys.platform == "linux":
@@ -48,6 +53,7 @@ if sys.platform == "linux":
             
             # Track modifier states per device
             self.modifiers = {}
+            self.mod_clean = {}
             
             # Setup devices
             self._find_keyboards()
@@ -68,6 +74,7 @@ if sys.platform == "linux":
                                 'ctrl': False,
                                 'alt': False
                             }
+                            self.mod_clean[device.path] = True
                             logger.info("EvdevListener: Found keyboard - %s at %s", device.name, device.path)
             except Exception as e:
                 logger.error("EvdevListener: Failed to find keyboards (are you in the 'input' group?): %s", e)
@@ -97,6 +104,10 @@ if sys.platform == "linux":
             """Stop listening."""
             self.running = False
 
+        def cancel_command_mode(self):
+            self.command_mode_active = False
+            self.command_mode_end_time = 0.0
+
         def _listen_device(self, device: evdev.InputDevice):
             """Listen loop for a single device."""
             try:
@@ -116,6 +127,7 @@ if sys.platform == "linux":
             keycode = event.scancode
             
             is_pressed = event.keystate in (1, 2)  # down or hold
+            is_modifier = keycode in (125, 126, 42, 54, 29, 97, 56, 100)
             
             # Update modifier tracking on any state change
             if keycode in (125, 126):
@@ -133,13 +145,30 @@ if sys.platform == "linux":
                 
             # Check hotkeys only on key down (1)
             if event.keystate == 1:
+                if is_modifier:
+                    self.mod_clean[device_path] = True
+                elif keycode != self.leader_key:
+                    self.mod_clean[device_path] = False
+
                 mods = self.modifiers[device_path]
                 
-                if keycode == self.leader_key and mods.get(self.leader_mod):
-                    self.command_mode_active = True
-                    self.command_mode_end_time = now + 15.0
-                    logger.info("EvdevListener: Command Mode ACTIVATED via %s+space", self.leader_mod)
-                    self.command_mode_started.emit()
+                if keycode == self.leader_key and mods.get(self.leader_mod) and self.mod_clean.get(device_path, True):
+                    if self.command_mode_active:
+                        logger.info("EvdevListener: Command Mode TOGGLED OFF via leader combo")
+                        self.command_mode_active = False
+                        self.command_mode_cancelled.emit()
+                    else:
+                        self.command_mode_active = True
+                        self.command_mode_end_time = now + 15.0
+                        logger.info("EvdevListener: Command Mode ACTIVATED via %s+space", self.leader_mod)
+                        self.command_mode_started.emit()
+                    return
+
+                # KEY_ESC is 1
+                if self.command_mode_active and keycode == 1:
+                    logger.info("EvdevListener: Command Mode CANCELLED via ESC")
+                    self.command_mode_active = False
+                    self.command_mode_cancelled.emit()
                     return
 
                 # Check cinematic trigger globally (if mode is active)
@@ -197,6 +226,7 @@ else:
             self.command_mode_active = False
             self.command_mode_end_time = 0.0
             self.cinematic_mode_active = False
+            self.mod_clean = True
 
         def set_leader_key(self, leader_string: str):
             parts = leader_string.lower().split('+')
@@ -205,6 +235,7 @@ else:
                 self.leader_key_name = parts[1]
             
         def on_press(self, key):
+            is_new_press = key not in self.current_keys
             self.current_keys.add(key)
             
             now = time.time()
@@ -227,11 +258,32 @@ else:
             elif hasattr(key, 'name') and key.name:
                 is_leader_key = key.name == self.leader_key_name
 
-            if has_mod and is_leader_key:
-                self.command_mode_active = True
-                self.command_mode_end_time = now + 15.0
-                logger.info("PynputListener: Command Mode ACTIVATED via %s+%s", self.leader_mod, self.leader_key_name)
-                self.command_mode_started.emit()
+            if is_new_press:
+                is_modifier = key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r,
+                                      keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r,
+                                      keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r,
+                                      keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r)
+                if is_modifier:
+                    self.mod_clean = True
+                elif not is_leader_key:
+                    self.mod_clean = False
+
+            if has_mod and is_leader_key and self.mod_clean:
+                if self.command_mode_active:
+                    logger.info("PynputListener: Command Mode TOGGLED OFF via leader combo")
+                    self.command_mode_active = False
+                    self.command_mode_cancelled.emit()
+                else:
+                    self.command_mode_active = True
+                    self.command_mode_end_time = now + 15.0
+                    logger.info("PynputListener: Command Mode ACTIVATED via %s+%s", self.leader_mod, self.leader_key_name)
+                    self.command_mode_started.emit()
+                return
+
+            if self.command_mode_active and key == keyboard.Key.esc:
+                logger.info("PynputListener: Command Mode CANCELLED via ESC")
+                self.command_mode_active = False
+                self.command_mode_cancelled.emit()
                 return
 
             if self.cinematic_mode_active:
@@ -283,6 +335,10 @@ else:
             if self.listener:
                 self.listener.stop()
                 self.listener = None
+
+        def cancel_command_mode(self):
+            self.command_mode_active = False
+            self.command_mode_end_time = 0.0
 
 def create_hotkey_listener() -> HotkeyListener:
     if sys.platform == "linux":

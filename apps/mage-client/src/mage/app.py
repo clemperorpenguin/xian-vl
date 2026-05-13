@@ -206,6 +206,8 @@ class XianApp(QWidget):
         self.hotkey_listener.trigger_cinematic_mode.connect(self.toggle_cinematic_mode)
         self.hotkey_listener.cinematic_capture.connect(self._on_cinematic_trigger)
         self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
+        if hasattr(self.hotkey_listener, "command_mode_cancelled"):
+            self.hotkey_listener.command_mode_cancelled.connect(self.hide_osd)
         self.hotkey_listener.start()
 
         # --- Cinematic Mode ---
@@ -229,10 +231,12 @@ class XianApp(QWidget):
             model=self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
         )
         self.osd.setting_changed.connect(self._on_osd_setting_changed)
+        self.osd.command_triggered.connect(self._on_osd_command)
+        self.osd.osd_hidden.connect(self._on_osd_hidden)
         
         self.osd_timer = QTimer(self)
         self.osd_timer.setSingleShot(True)
-        self.osd_timer.timeout.connect(self.osd.hide)
+        self.osd_timer.timeout.connect(self.hide_osd)
 
         # --- Chat sidebar (created once, toggled) ---
         self.chat_sidebar = ChatSidebar(self.processor)
@@ -286,6 +290,14 @@ class XianApp(QWidget):
 
         logger.info("System tray icon initialised")
 
+    def hide_osd(self):
+        self.osd.hide()
+        self.osd_timer.stop()
+
+    def _on_osd_hidden(self):
+        if hasattr(self.hotkey_listener, "cancel_command_mode"):
+            self.hotkey_listener.cancel_command_mode()
+
     def _on_command_mode_started(self):
         self.osd.show_centered()
         self.osd_timer.start(15000)
@@ -299,13 +311,28 @@ class XianApp(QWidget):
             self.processor.client = None
             self._run_health_check()
 
+    def _on_osd_command(self, key: str):
+        """Handle option buttons clicked in the OSD."""
+        logger.info("OSD command triggered: %s", key)
+        self.hide_osd()
+        
+        if key == "C":
+            self.show_lens()
+        elif key == "A":
+            self.toggle_chat()
+        elif key == "O":
+            self.toggle_dialogue_mode()
+        elif key == "M":
+            self.toggle_cinematic_mode()
+        elif key == "S":
+            self._open_settings()
+
     # ------------------------------------------------------------------
     # Lens
     # ------------------------------------------------------------------
     def show_lens(self):
         """Capture the screen and open the Lens overlay."""
-        self.osd.hide()
-        self.osd_timer.stop()
+        self.hide_osd()
         logger.info("Opening Lens overlay")
         # Close any existing lens
         if self._lens is not None:
@@ -479,8 +506,7 @@ class XianApp(QWidget):
     # ------------------------------------------------------------------
     def toggle_chat(self):
         """Toggle the chat sidebar visibility."""
-        self.osd.hide()
-        self.osd_timer.stop()
+        self.hide_osd()
         if self.chat_sidebar.isVisible():
             self.chat_sidebar.hide()
         else:
@@ -491,8 +517,7 @@ class XianApp(QWidget):
     # Dialogue Mode
     # ------------------------------------------------------------------
     def toggle_dialogue_mode(self):
-        self.osd.hide()
-        self.osd_timer.stop()
+        self.hide_osd()
 
         if self.dialogue_mode_active:
             self.dialogue_mode_active = False
@@ -555,8 +580,7 @@ class XianApp(QWidget):
     # Cinematic Mode
     # ------------------------------------------------------------------
     def toggle_cinematic_mode(self):
-        self.osd.hide()
-        self.osd_timer.stop()
+        self.hide_osd()
         
         if self.cinematic_mode_active:
             self.cinematic_mode_active = False
@@ -710,8 +734,7 @@ class XianApp(QWidget):
     # Settings
     # ------------------------------------------------------------------
     def _open_settings(self):
-        self.osd.hide()
-        self.osd_timer.stop()
+        self.hide_osd()
         dlg = SettingsDialog(self.settings, self._available_models)
         if dlg.exec():
             # Apply changed settings to processor

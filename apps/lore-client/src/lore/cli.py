@@ -14,9 +14,9 @@ from shared_types.constants import DEFAULT_API_URL, DEFAULT_MODEL
 
 from openai import AsyncOpenAI
 
-from lore.searcher import SearXNGSearcher
+from xian.searcher import WebSearcher
 from lore.scraper import PlaywrightScraper
-from lore.compiler import WikiCompiler
+from xian.compiler import WikiCompiler
 
 app = typer.Typer(help="LORE — Interactive CLI tool for researching Chinese entities.")
 console = Console()
@@ -100,18 +100,14 @@ async def extract_and_translate_infobox(raw_html: str, entity_name: str) -> dict
 async def research_entity(entity_name: str):
     """Main research loop: Search -> Select -> Ingest.
     """
-    searcher = SearXNGSearcher()
+    searcher = WebSearcher()
     scraper = PlaywrightScraper()
     wiki_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "wiki")
     compiler = WikiCompiler(wiki_dir=wiki_dir)
     
     console.print(f"[bold green]Starting research for entity:[/bold green] {entity_name}")
     
-    # 1. Discovery
-    with console.status("[bold blue]Discovering SearXNG instances...[/bold blue]"):
-        await searcher.discover_instances()
-        
-    # 2. Search
+    # 1. Search
     with console.status(f"[bold blue]Searching for '{entity_name}'...[/bold blue]"):
         try:
             results = await searcher.search(entity_name, num_results=10)
@@ -217,11 +213,40 @@ async def research_entity(entity_name: str):
 
 
 @app.command()
-def main(entity: str = typer.Argument(..., help="The Chinese entity name to research")):
-    """Research a Chinese entity and compile a localized English Wiki page.
-    """
+def research(entity: str = typer.Argument(..., help="The Chinese entity name to research")):
+    """Research a Chinese entity and compile a localized English Wiki page."""
     asyncio.run(research_entity(entity))
 
+@app.command()
+def ingest(filepath: str = typer.Argument(..., help="Path to the JSON payload exported from MASHA")):
+    """Ingest a site context exported from the MASHA extension into the LORE Wiki."""
+    wiki_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "wiki")
+    compiler = WikiCompiler(wiki_dir=wiki_dir)
+    
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        console.print(f"[bold red]Failed to read or parse file:[/bold red] {e}")
+        return
+        
+    entity_name = data.get("title", "Imported_Entity").replace(" ", "_")
+    content = data.get("translated_content", data.get("content", ""))
+    metadata = {
+        "url": data.get("url", ""),
+        "context": data.get("context", ""),
+        "sources": [{"title": data.get("title", "Imported Source"), "url": data.get("url", "")}]
+    }
+    
+    with console.status(f"[bold blue]Ingesting '{entity_name}' from MASHA export...[/bold blue]"):
+        out_path = compiler.compile(
+            entity_name=entity_name,
+            content=content,
+            metadata=metadata,
+            infobox=data.get("metadata", {})
+        )
+        
+    console.print(f"[bold green]MASHA export successfully ingested![/bold green] File saved to: {out_path}")
 
 if __name__ == "__main__":
     app()

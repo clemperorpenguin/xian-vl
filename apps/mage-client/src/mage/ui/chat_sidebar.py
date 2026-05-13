@@ -7,7 +7,7 @@ from html import escape as html_escape
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushButton, QHBoxLayout
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QRect
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QRect, QSettings
 from PyQt6.QtGui import QGuiApplication
 from mage.ui.grounding import GroundingHighlight
 from mage.ui.theme import accent_hex, accent_hover_hex
@@ -17,22 +17,70 @@ logger = logging.getLogger(__name__)
 class ChatWorker(QThread):
     result_ready = pyqtSignal(str)
     
-    def __init__(self, processor, message):
+    def __init__(self, processor, message, source_lang="zh-CN"):
         super().__init__()
         self.processor = processor
         self.message = message
+        self.source_lang = source_lang
         
     def run(self):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            response = loop.run_until_complete(self.processor.process_chat(self.message))
+            if not self.processor.client:
+                loop.run_until_complete(self.processor.init_engine())
+            response = loop.run_until_complete(
+                self.processor.process_chat(self.message, source_lang=self.source_lang)
+            )
             self.result_ready.emit(response)
         except Exception as e:
             logger.error("Chat worker error: %s", e)
             self.result_ready.emit(f"Error: {e}")
         finally:
             loop.close()
+
+class SearchWorker(QThread):
+    result_ready = pyqtSignal(str)
+    
+    def __init__(self, processor, query, language):
+        super().__init__()
+        self.processor = processor
+        self.query = query
+        self.language = language
+        
+    def run(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            from xian.searcher import WebSearcher
+            searcher = WebSearcher()
+            results = loop.run_until_complete(searcher.search(self.query, language=self.language))
+            
+            if not results:
+                response = "No search results found."
+            else:
+                lines = [f"Found top results for '{self.query}':"]
+                for r in results[:3]:
+                    title = r.get("title", "")
+                    content = r.get("content", "")
+                    url = r.get("url", "")
+                    lines.append(f"<b>{title}</b><br>{content}<br><a href='{url}'>{url}</a><br>")
+                response = "<br>".join(lines)
+                
+            # Add this search information to the AI context so the assistant knows about it
+            context_text = f"User performed a search for '{self.query}'. Results:\n"
+            for r in results[:3]:
+                context_text += f"- {r.get('title')}: {r.get('content')}\n"
+            self.processor.context_manager.add_user_message(f"Search Query: {self.query}", with_image=False)
+            self.processor.context_manager.add_assistant_message(context_text)
+
+            self.result_ready.emit(response)
+        except Exception as e:
+            logger.error("Search worker error: %s", e)
+            self.result_ready.emit(f"Search Error: {e}")
+        finally:
+            loop.close()
+
 
 class ChatSidebar(QWidget):
     def __init__(self, processor, parent=None):
@@ -143,12 +191,30 @@ class ChatSidebar(QWidget):
         self.input_field.setEnabled(False)
         self.send_btn.setEnabled(False)
         
+        if text.startswith("/search"):
+            parts = text.split(" ", 2)
+            if len(parts) >= 3 and ("-" in parts[1] or len(parts[1]) == 2):
+                language = parts[1]
+                query = parts[2]
+            else:
+                language = "zh-CN"
+                query = text[len("/search"):].strip()
+                
+            self.worker = SearchWorker(self.processor, query, language)
+            self.worker.result_ready.connect(self._handle_response)
+            self.worker.start()
+            return
+        
         # Inject grounding prompt if user is asking for location
         prompt = text
         if "where" in text.lower() and "click" in text.lower():
             prompt += "\n(Please output the bounding box coordinates of the element I should click in the format [ymin, xmin, ymax, xmax] relative to the image size from 0 to 1000.)"
         
-        self.worker = ChatWorker(self.processor, prompt)
+        # Read source language from settings
+        settings = QSettings("XianVL", "Mage")
+        source_lang = settings.value("source_lang", "zh-CN")
+        
+        self.worker = ChatWorker(self.processor, prompt, source_lang=source_lang)
         self.worker.result_ready.connect(self._handle_response)
         self.worker.start()
         

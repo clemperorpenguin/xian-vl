@@ -8,8 +8,53 @@ from shared_types.enums import SourceLanguage, TargetLanguage
 
 logger = logging.getLogger(__name__)
 
+class ClickableKeyLabel(QLabel):
+    clicked = pyqtSignal(str)
+
+    def __init__(self, action_id: str, parent=None):
+        super().__init__(parent)
+        self.action_id = action_id
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(64, 64)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setFont(QFont("sans-serif", 24, QFont.Weight.Bold))
+        self.setText(action_id)
+
+        self.base_style = f"""
+            QLabel {{
+                background-color: rgba(255, 255, 255, 10);
+                border-radius: 12px;
+                border: 1px solid rgba(255, 255, 255, 30);
+                color: {accent_hex()};
+            }}
+        """
+        self.hover_style = f"""
+            QLabel {{
+                background-color: rgba(255, 255, 255, 30);
+                border-radius: 12px;
+                border: 1px solid {accent_hex()};
+                color: {accent_hex()};
+            }}
+        """
+        self.setStyleSheet(self.base_style)
+
+    def enterEvent(self, event):
+        self.setStyleSheet(self.hover_style)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.setStyleSheet(self.base_style)
+        super().leaveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.action_id)
+        super().mouseReleaseEvent(event)
+
 class CommandOSD(QWidget):
     setting_changed = pyqtSignal(str, str)
+    command_triggered = pyqtSignal(str)
+    osd_hidden = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -57,6 +102,8 @@ class CommandOSD(QWidget):
         # We create a helper to build the options
         options_layout.addWidget(self._create_option("C", "Capture"))
         options_layout.addWidget(self._create_option("A", "Chat"))
+        options_layout.addWidget(self._create_option("O", "Dialogue"))
+        options_layout.addWidget(self._create_option("M", "Cinematic"))
         options_layout.addWidget(self._create_option("S", "Settings"))
 
         inner_layout.addLayout(options_layout)
@@ -122,20 +169,9 @@ class CommandOSD(QWidget):
         layout.setSpacing(10)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Icon placeholder (for user to replace later)
-        icon_lbl = QLabel()
-        icon_lbl.setFixedSize(64, 64)
-        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_lbl.setStyleSheet(f"""
-            QLabel {{
-                background-color: rgba(255, 255, 255, 10);
-                border-radius: 12px;
-                border: 1px solid rgba(255, 255, 255, 30);
-                color: {accent_hex()};
-            }}
-        """)
-        icon_lbl.setText(key)
-        icon_lbl.setFont(QFont("sans-serif", 24, QFont.Weight.Bold))
+        # The clickable icon
+        icon_lbl = ClickableKeyLabel(key)
+        icon_lbl.clicked.connect(self.command_triggered.emit)
 
         label = QLabel(label_text)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -183,3 +219,7 @@ class CommandOSD(QWidget):
             y = geo.center().y() - self.height() // 2
             self.move(x, y)
         self.show()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.osd_hidden.emit()

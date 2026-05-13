@@ -6,6 +6,7 @@ import io
 import logging
 import os
 import re
+import json
 from dataclasses import dataclass
 
 from PIL import Image
@@ -14,6 +15,8 @@ from openai import AsyncOpenAI
 from shared_types.constants import DEFAULT_API_URL, DEFAULT_MAX_TOKENS, QWEN_MAX_DIMENSION
 from shared_types.models import TranslationResult, TextStyle
 from xian.context_manager import ContextManager
+from xian.searcher import WebSearcher, LocalWikiSearcher
+from xian.compiler import WikiCompiler
 
 logger = logging.getLogger(__name__)
 
@@ -272,7 +275,37 @@ class VLProcessor:
             logger.error("Error during OpenAI API inference (cinematic): %s", e, exc_info=True)
             raise
 
-    async def process_chat(self, message: str) -> str:
+    async def translate_query(self, query: str, target_lang: str) -> str:
+        """Translate a search query into another language using the LLM."""
+        if not self.client:
+            return query
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.config.model_name,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            f"Translate the following search query to {target_lang}. "
+                            "Output ONLY the translated query, nothing else."
+                        ),
+                    },
+                    {"role": "user", "content": query},
+                ],
+                max_tokens=200,
+                temperature=0.1,
+            )
+            translated = (response.choices[0].message.content or "").strip()
+            # Strip thinking tags if present
+            translated = re.sub(r'<think>.*?</think>', '', translated, flags=re.DOTALL).strip()
+            if translated:
+                logger.info("Translated query '%s' → '%s'", query, translated)
+                return translated
+        except Exception as e:
+            logger.warning("Query translation failed: %s. Using original.", e)
+        return query
+
+    async def process_chat(self, message: str, source_lang: str = "zh-CN") -> str:
         """Process a contextual chat message using the sliding window context via OmniRouter."""
         if not self.client:
             raise RuntimeError("Engine not initialized. Call init_engine() first.")
@@ -307,6 +340,26 @@ class VLProcessor:
 
             openai_messages.append({"role": role, "content": final_content})
 
+        system_msg = {
+            "role": "system",
+            "content": (
+                "You are an AI assistant with access to a search tool. "
+                "If the user asks a question about facts, lore, games, or real-world information, "
+                "you MUST call the search tool INSTEAD of answering from memory.\n\n"
+                "To search, output EXACTLY this format (and nothing else):\n"
+                "<tool_call>\n"
+                "<function=search_knowledge>\n"
+                "<parameter=query>your search query here</parameter>\n"
+                "<parameter=language>zh-CN</parameter>\n"
+                "</function>\n"
+                "</tool_call>\n\n"
+                "The language parameter is optional (defaults to zh-CN). "
+                "Use en-US for English queries. "
+                "Do NOT answer factual questions without searching first."
+            ),
+        }
+        openai_messages.insert(0, system_msg)
+
         try:
             logger.info("Sending chat request to OmniRouter via OpenAI...")
             response = await self.client.chat.completions.create(
@@ -316,8 +369,122 @@ class VLProcessor:
                 temperature=0.7,  # Higher temp for chat
             )
 
-            final_output = response.choices[0].message.content or ""
+            final_output = ""
+            if response.choices:
+                final_output = response.choices[0].message.content or ""
+
+            # Detect text-based tool calls emitted by models that don't
+            # support the structured OpenAI tools protocol.
+            # Format: <tool_call>\n<function=search_knowledge>\n<parameter=query>…</parameter>\n</function>\n</tool_call>
+            tool_call_match = re.search(
+                r'<tool_call>.*?<function=(\w+)>(.*?)</function>.*?</tool_call>',
+                final_output, re.DOTALL,
+            )
+            # Also try structured tool_calls if the server supports it
+            structured_tool_call = None
+            if response.choices and response.choices[0].message.tool_calls:
+                tc = response.choices[0].message.tool_calls[0]
+                if tc.function.name in ("perform_web_search", "search_knowledge"):
+                    structured_tool_call = tc
+
+            if tool_call_match or structured_tool_call:
+                if structured_tool_call:
+                    args = json.loads(structured_tool_call.function.arguments)
+                    query = args.get("query", "")
+                    language = args.get("language", "zh-CN")
+                else:
+                    # Parse text-based tool call
+                    func_body = tool_call_match.group(2)
+                    query_match = re.search(
+                        r'<parameter=query>\s*(.*?)\s*</parameter>',
+                        func_body, re.DOTALL,
+                    )
+                    lang_match = re.search(
+                        r'<parameter=language>\s*(.*?)\s*</parameter>',
+                        func_body, re.DOTALL,
+                    )
+                    query = query_match.group(1).strip() if query_match else ""
+                    language = lang_match.group(1).strip() if lang_match else "zh-CN"
+
+                if query:
+                    logger.info("Agent requested search for: %s (lang: %s, source: %s)", query, language, source_lang)
+
+                    # Search local wiki
+                    local_searcher = LocalWikiSearcher(wiki_dir="wiki")
+                    local_results = local_searcher.search(query, num_results=3)
+
+                    # Dual-language web search
+                    searcher = WebSearcher()
+                    try:
+                        # Translate query to source language for parallel search
+                        translated_query = await self.translate_query(query, source_lang)
+                        web_results = await searcher.dual_search(
+                            query=query,
+                            target_lang=language,
+                            translated_query=translated_query,
+                            source_lang=source_lang,
+                        )
+                    except Exception as e:
+                        logger.warning("Web search failed: %s. Relying on local wiki.", e)
+                        web_results = []
+                    finally:
+                        await searcher.close()
+
+                    # Combine results
+                    results = local_results + web_results
+
+                    # 1. Database/UI State (Persistent): Save web results to LORE
+                    if web_results:
+                        compiler = WikiCompiler(wiki_dir="wiki")
+                        content_lines = []
+                        for r in web_results:
+                            content_lines.append(f"### [{r.get('title', 'No Title')}]({r.get('url', '')})")
+                            content_lines.append(r.get('content', ''))
+                        compiler.compile(query, "\n".join(content_lines), metadata={"sources": web_results})
+
+                    # 2. LLM State (Ephemeral): Build context from search results
+                    summary_parts = []
+                    for i, r in enumerate(results[:6], 1):
+                        title = r.get('title', 'Untitled')
+                        content = r.get('content', '')
+                        url = r.get('url', '')
+                        summary_parts.append(
+                            f"--- Source {i}: {title} ---\n"
+                            f"URL: {url}\n"
+                            f"{content}\n"
+                        )
+                    summary = "\n".join(summary_parts)
+
+                    # Re-prompt: replace the tool-call output with the search context
+                    openai_messages.append({
+                        "role": "assistant",
+                        "content": f"I searched for '{query}' and found several relevant sources.",
+                    })
+                    openai_messages.append({
+                        "role": "user",
+                        "content": (
+                            f"Here is the information I found:\n\n{summary}\n\n"
+                            "Based on these sources, please answer my original question "
+                            "thoroughly and in detail. Synthesize the information from "
+                            "all sources into a clear, comprehensive response."
+                        ),
+                    })
+
+                    logger.info("Sending follow-up chat request after search...")
+                    response = await self.client.chat.completions.create(
+                        model=self.config.model_name,
+                        messages=openai_messages,
+                        max_tokens=self.config.max_tokens,
+                        temperature=0.7,
+                    )
+
+                    final_output = ""
+                    if response.choices:
+                        final_output = response.choices[0].message.content or ""
+
             cleaned_output = re.sub(r'<think>.*?</think>', '', final_output, flags=re.DOTALL).strip()
+            # Strip any residual tool_call tags the model may have emitted
+            cleaned_output = re.sub(r'<tool_call>.*?</tool_call>', '', cleaned_output, flags=re.DOTALL).strip()
 
             # Add assistant message to context
             self.context_manager.add_assistant_message(cleaned_output)

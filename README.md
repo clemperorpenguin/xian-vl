@@ -10,6 +10,7 @@ This repository uses a `uv` workspace to manage multiple packages and applicatio
 
 - **[MAGE](apps/mage-client/README.md)**: A PyQt6 gaming HUD for real-time OCR, translation, and visual grounding on Wayland (Works!).
 - **[MASHA](apps/masha-extension/README.md)**: A browser extension for translating selected text on web pages (WIP).
+- **[NATE](apps/nate/README.md)**: An offline-first Chinese OCR reader, dictionary, and translation tool with optional remote LLM acceleration via Lemonade (Android).
 - **[LORE](apps/lore-client/README.md)**: Compiles collected information into a unified knowledge base. (WIP)
 - **[Luduan](apps/luduan-client/README.md)**: A CLI tool for EPUB-to-Robobook translation and narration (WIP).
 
@@ -41,8 +42,9 @@ uv sync --all-packages
 - [x] Monorepo migration and workspace setup
 - [x] Cinematic mode — translate audio with on-screen context
 - [x] Dialogue mode — keep an area selected, advance with a click (VNs / story RPGs)
-- [ ] Game oracle / chatbot integration / complete LORE
-- [ ] Complete MASHA extension
+- [x] Game oracle / chatbot integration / complete LORE
+- [x] Complete MASHA extension
+- [x] OCR/dictionary Android app
 - [ ] UI and documentation localized
 - [ ] Make everything pretty
 - [ ] Server benchmark to select best settings
