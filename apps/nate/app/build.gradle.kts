@@ -33,16 +33,7 @@ android {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
         }
 
-        python {
-            version = "3.10"
-            pip {
-                install("requests")
-                install("numpy")
-                install("paddleocr>=2.7.0")
-                install("paddlepaddle>=2.5.0")
-                install("opencv-python-headless")
-            }
-        }
+
     }
 
     buildTypes {
@@ -96,4 +87,17 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+        pip {
+            install("requests")
+            install("numpy")
+            install("paddleocr>=2.7.0")
+            install("paddlepaddle>=2.5.0")
+            install("opencv-python-headless")
+        }
+    }
 }
