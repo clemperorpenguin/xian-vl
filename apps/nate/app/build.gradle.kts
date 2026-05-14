@@ -95,8 +95,6 @@ chaquopy {
         pip {
             install("requests")
             install("numpy")
-            install("paddleocr>=2.7.0")
-            install("paddlepaddle>=2.5.0")
             install("opencv-python-headless")
         }
     }
