@@ -95,7 +95,6 @@ chaquopy {
         pip {
             install("requests")
             install("numpy")
-            install("opencv-python-headless")
         }
     }
 }
