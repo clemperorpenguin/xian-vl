@@ -2,27 +2,26 @@ import hashlib
 import logging
 import pathlib
 import threading
-import urllib.request
 import zipfile
+import httpx
 
 logger = logging.getLogger(__name__)
 
-# SHA-256 hash of the extracted cedict_ts.u8 file.
-# Update this if the upstream file changes.
-# To update: run `sha256sum data/cedict_ts.u8` and paste the hash here.
-CEDICT_EXTRACTED_SHA256 = "59f786954858947cca7a108e3c630399b0473ce503205dcec55266df36ada011"
+# The CC-CEDICT hash check has been replaced with an ETag-based update mechanism
+# to automatically stay current with upstream changes without hardcoded hashes.
 
 class LocalDictionary:
     def __init__(self, data_dir: str = "./data"):
         self.data_dir = pathlib.Path(data_dir)
         self.dict_path = self.data_dir / "cedict_ts.u8"
+        self.etag_path = self.data_dir / "cedict_ts.u8.etag"
         self.zip_url = "https://www.mdbg.net/chinese/export/cedict/cedict_1_0_ts_utf-8_mdbg.zip"
         
         # Maps simplified -> list of (traditional, pinyin, english)
         self.entries: dict[str, list[tuple[str, str, str]]] = {}
         self.ready = False
         
-        # Fix TOCTOU: use exist_ok=True
+        # Ensure data directory exists
         self.data_dir.mkdir(parents=True, exist_ok=True)
             
         # Start load/download in background
@@ -30,44 +29,66 @@ class LocalDictionary:
         
     def _init_dictionary(self):
         try:
+            # 1. Check for updates and download if necessary
+            self._check_for_updates()
+            
+            # 2. Parse the dictionary
             if not self.dict_path.exists():
-                logger.info("CC-CEDICT not found. Downloading...")
-                zip_path = self.data_dir / "cedict.zip"
-                urllib.request.urlretrieve(self.zip_url, zip_path)
-                
-                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                    # Validate all members to prevent Zip Slip (path traversal)
-                    data_dir_resolved = self.data_dir.resolve()
-                    for member in zip_ref.namelist():
-                        target = (data_dir_resolved / member).resolve()
-                        if not target.is_relative_to(data_dir_resolved):
-                            raise ValueError("Zip member escapes target directory: %s" % member)
-                    zip_ref.extractall(self.data_dir)
-                zip_path.unlink()
-                logger.info("CC-CEDICT downloaded and extracted.")
-
-            # Verify integrity on every load, not just after download
-            self._verify_integrity()
+                raise FileNotFoundError("CC-CEDICT dictionary file not found.")
+            
             self._parse_dict()
         except Exception as e:
             logger.error("Failed to initialize dictionary: %s", e)
-            
-    def _verify_integrity(self):
-        logger.info("Verifying CC-CEDICT integrity...")
-        hasher = hashlib.sha256()
-        with open(self.dict_path, 'rb') as f:
-            while chunk := f.read(8192):
-                hasher.update(chunk)
+            # If initialization failed and the file exists, it might be corrupt
+            if self.dict_path.exists():
+                logger.info("Parsing failed; the dictionary file might be corrupt. It will be re-downloaded on next start.")
+                self.dict_path.unlink(missing_ok=True)
+                self.etag_path.unlink(missing_ok=True)
+
+    def _check_for_updates(self):
+        """Checks if a new version of the dictionary is available using ETags."""
+        current_etag = self.etag_path.read_text().strip() if self.etag_path.exists() else None
         
-        current_hash = hasher.hexdigest()
-        if current_hash != CEDICT_EXTRACTED_SHA256:
-            logger.error(
-                "CC-CEDICT integrity check failed! Expected %s, got %s. Removing file.",
-                CEDICT_EXTRACTED_SHA256, current_hash,
-            )
-            self.dict_path.unlink(missing_ok=True)
-            raise ValueError("Integrity check failed")
-        logger.info("CC-CEDICT integrity verified.")
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) MAGE/1.0"}
+            if current_etag and self.dict_path.exists():
+                headers["If-None-Match"] = current_etag
+
+            with httpx.Client(follow_redirects=True, timeout=30.0) as client:
+                logger.info("Checking for CC-CEDICT updates...")
+                resp = client.get(self.zip_url, headers=headers)
+                
+                if resp.status_code == 200:
+                    logger.info("New CC-CEDICT version found. Downloading...")
+                    zip_path = self.data_dir / "cedict.zip"
+                    with open(zip_path, "wb") as f:
+                        f.write(resp.content)
+                    
+                    self._extract_dictionary(zip_path)
+                    
+                    # Store the new ETag
+                    new_etag = resp.headers.get("ETag")
+                    if new_etag:
+                        self.etag_path.write_text(new_etag)
+                elif resp.status_code == 304:
+                    logger.info("CC-CEDICT is already up to date.")
+                else:
+                    logger.warning("Unexpected status code %d from MDBG. Using local copy if available.", resp.status_code)
+        except Exception as e:
+            logger.warning("Failed to check for CC-CEDICT updates: %s. Using local copy.", e)
+
+    def _extract_dictionary(self, zip_path: pathlib.Path):
+        logger.info("Extracting CC-CEDICT...")
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            # Validate all members to prevent Zip Slip
+            data_dir_resolved = self.data_dir.resolve()
+            for member in zip_ref.namelist():
+                target = (data_dir_resolved / member).resolve()
+                if not target.is_relative_to(data_dir_resolved):
+                    raise ValueError("Zip member escapes target directory: %s" % member)
+            zip_ref.extractall(self.data_dir)
+        zip_path.unlink()
+        logger.info("CC-CEDICT extracted successfully.")
 
     def _parse_dict(self):
         logger.info("Parsing CC-CEDICT...")
@@ -95,6 +116,9 @@ class LocalDictionary:
                 self.entries[simp].append((trad, pinyin, english))
                 count += 1
                 
+        if count < 1000:  # Sanity check: CC-CEDICT should have >100,000 entries
+            raise ValueError(f"Dictionary parsing failed: only {count} entries found. File may be truncated or invalid.")
+
         self.ready = True
         logger.info("CC-CEDICT parsed successfully. Loaded %d entries.", count)
         
