@@ -4,10 +4,12 @@ Wraps async inference calls with ``asyncio.wait_for()`` and returns a
 partial result with a degraded :class:`~shared_types.models.AccuracyScore`
 when the deadline fires.
 
-Default timeouts:
-* Game mode: 3 s  (speed is king during gameplay)
-* Web mode:  5 s
-* Document mode: 10 s  (quality over latency)
+Default timeouts for :func:`run_with_timeout` (text-style deadlines; not used for VLM):
+
+* Game / Web / Document: conservative values if you wire ``run_with_timeout`` to mode.
+
+Vision (VLM) OCR + translation needs much longer; see :data:`VISION_TIMEOUTS` and
+:func:`vision_timeout_for_mode`.
 """
 
 from __future__ import annotations
@@ -30,6 +32,14 @@ MODE_TIMEOUTS: dict[str, float] = {
     "Document": 10.0,
 }
 
+# Whole-frame VLM calls (screenshot → OCR + translate). Lemonade / local models
+# routinely need tens of seconds, especially on first load or large images.
+VISION_TIMEOUTS: dict[str, float] = {
+    "Game": 120.0,
+    "Web": 120.0,
+    "Document": 180.0,
+}
+
 # Chat / agentic flows (tool calls + follow-up) need a larger budget than live OCR.
 CHAT_TIMEOUT_SECONDS = 120.0
 
@@ -40,6 +50,11 @@ CHAT_AUX_TIMEOUT_SECONDS = 30.0
 def timeout_for_mode(mode: str) -> float:
     """Return the default timeout (seconds) for a translation mode."""
     return MODE_TIMEOUTS.get(mode, 5.0)
+
+
+def vision_timeout_for_mode(mode: str) -> float:
+    """Return the asyncio deadline (seconds) for a vision-language completion."""
+    return VISION_TIMEOUTS.get(mode, 120.0)
 
 
 async def run_with_timeout(

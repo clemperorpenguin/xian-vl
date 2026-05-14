@@ -17,7 +17,11 @@ from shared_types.models import TranslationResult, TextStyle
 from xian.compiler import WikiCompiler
 from xian.context_manager import ContextManager
 from xian.searcher import LocalWikiSearcher, WebSearcher
-from xian.timeout import CHAT_AUX_TIMEOUT_SECONDS, CHAT_TIMEOUT_SECONDS, timeout_for_mode
+from xian.timeout import (
+    CHAT_AUX_TIMEOUT_SECONDS,
+    CHAT_TIMEOUT_SECONDS,
+    vision_timeout_for_mode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +184,7 @@ class VLProcessor:
                     max_tokens=self.config.max_tokens,
                     temperature=self.config.temperature,
                 ),
-                timeout=timeout_for_mode(mode),
+                timeout=vision_timeout_for_mode(mode),
             )
 
             # Debug: log raw response structure
@@ -265,7 +269,7 @@ class VLProcessor:
                     max_tokens=self.config.max_tokens,
                     temperature=self.config.temperature,
                 ),
-                timeout=timeout_for_mode("Document"),
+                timeout=vision_timeout_for_mode("Document"),
             )
 
             choice = response.choices[0] if response.choices else None
