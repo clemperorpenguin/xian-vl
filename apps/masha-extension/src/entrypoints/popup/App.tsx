@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 
+import { normalizeLemonadeBaseUrl } from '../../utils/lemonadeUrl';
+
 function App() {
   const [serverUrl, setServerUrl] = useState('http://localhost:13305/v1');
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -8,14 +10,16 @@ function App() {
   useEffect(() => {
     chrome.storage.local.get(['serverUrl']).then((result) => {
       if (result.serverUrl) {
-        setServerUrl(result.serverUrl);
+        setServerUrl(normalizeLemonadeBaseUrl(result.serverUrl));
       }
     });
   }, []);
 
   const handleSave = () => {
     setStatus('saving');
-    chrome.storage.local.set({ serverUrl }).then(() => {
+    const normalized = normalizeLemonadeBaseUrl(serverUrl);
+    setServerUrl(normalized);
+    chrome.storage.local.set({ serverUrl: normalized }).then(() => {
       setStatus('saved');
       setTimeout(() => setStatus('idle'), 2000);
     });
@@ -63,97 +67,121 @@ function App() {
         Status: <span style={{ color: '#10b981', fontWeight: 'bold' }}>Active</span>
       </p>
 
+      <div
+        role="note"
+        style={{
+          fontSize: '12px',
+          lineHeight: 1.45,
+          color: '#92400e',
+          backgroundColor: '#fef3c7',
+          border: '1px solid #fcd34d',
+          borderRadius: '8px',
+          padding: '10px 12px',
+          marginBottom: '16px',
+        }}
+      >
+        <strong style={{ display: 'block', marginBottom: '6px', color: '#b45309' }}>Server trust</strong>
+        Only set the Lemonade URL to a server <strong>you</strong> run or fully trust. This extension sends selected
+        text, full-page text, page metadata, and image URLs to that server for translation. If an attacker tricks you
+        into saving their URL (for example through a phishing link or a compromised helper app), they could receive
+        copies of what you translate—including sensitive page content. Double-check the hostname before clicking Save.
+      </div>
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         <label style={{ fontSize: '13px', fontWeight: 'bold', color: '#374151' }}>Lemonade Server URL</label>
-        <input 
-          type="text" 
+        <input
+          type="text"
           value={serverUrl}
           onChange={(e) => setServerUrl(e.target.value)}
           placeholder="http://localhost:13305/v1"
-          style={{ 
-            width: '100%', 
-            padding: '10px', 
-            border: '1px solid #d1d5db', 
+          style={{
+            width: '100%',
+            padding: '10px',
+            border: '1px solid #d1d5db',
             borderRadius: '6px',
-            boxSizing: 'border-box'
+            boxSizing: 'border-box',
           }}
         />
+        <p style={{ fontSize: '11px', color: '#6b7280', margin: 0 }}>
+          Must include the OpenAI-compatible path (typically ending in <code style={{ fontSize: '11px' }}>/v1</code>).
+          It is normalized on save if you omit it.
+        </p>
       </div>
 
-      <button 
+      <button
         onClick={handleSave}
-        style={{ 
-          marginTop: '20px', 
-          width: '100%', 
-          padding: '10px', 
-          backgroundColor: '#3b82f6', 
-          color: 'white', 
-          border: 'none', 
+        style={{
+          marginTop: '20px',
+          width: '100%',
+          padding: '10px',
+          backgroundColor: '#3b82f6',
+          color: 'white',
+          border: 'none',
           borderRadius: '6px',
           fontWeight: 'bold',
           cursor: 'pointer',
-          transition: 'background-color 0.2s'
+          transition: 'background-color 0.2s',
         }}
-        onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#2563eb'}
-        onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#3b82f6'}
+        onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#2563eb')}
+        onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#3b82f6')}
       >
         {status === 'saving' ? 'Saving...' : status === 'saved' ? 'Saved!' : 'Save Settings'}
       </button>
 
       <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
-        <button 
+        <button
           onClick={handleFullPageTranslate}
-          style={{ 
-            width: '100%', 
-            padding: '10px', 
-            backgroundColor: '#10b981', 
-            color: 'white', 
-            border: 'none', 
+          style={{
+            width: '100%',
+            padding: '10px',
+            backgroundColor: '#10b981',
+            color: 'white',
+            border: 'none',
             borderRadius: '6px',
             fontWeight: 'bold',
             cursor: 'pointer',
-            transition: 'background-color 0.2s'
+            transition: 'background-color 0.2s',
           }}
-          onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#059669'}
-          onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#10b981'}
+          onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#059669')}
+          onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#10b981')}
         >
           ✨ Translate Full Page
         </button>
 
-        <button 
+        <button
           onClick={handleToggleImageMode}
-          style={{ 
-            width: '100%', 
-            padding: '10px', 
-            backgroundColor: imageMode ? '#f59e0b' : '#8b5cf6', 
-            color: 'white', 
-            border: 'none', 
+          style={{
+            width: '100%',
+            padding: '10px',
+            backgroundColor: imageMode ? '#f59e0b' : '#8b5cf6',
+            color: 'white',
+            border: 'none',
             borderRadius: '6px',
             fontWeight: 'bold',
             cursor: 'pointer',
-            transition: 'background-color 0.2s'
+            transition: 'background-color 0.2s',
           }}
-          onMouseOver={(e) => e.currentTarget.style.backgroundColor = imageMode ? '#d97706' : '#7c3aed'}
-          onMouseOut={(e) => e.currentTarget.style.backgroundColor = imageMode ? '#f59e0b' : '#8b5cf6'}
+          onMouseOver={(e) => (e.currentTarget.style.backgroundColor = imageMode ? '#d97706' : '#7c3aed')}
+          onMouseOut={(e) => (e.currentTarget.style.backgroundColor = imageMode ? '#f59e0b' : '#8b5cf6')}
         >
           {imageMode ? '🛑 Stop Image Selection' : '🖼️ Select Images to Translate'}
         </button>
 
-        <button 
+        <button
           onClick={handleExportToLore}
-          style={{ 
-            width: '100%', 
-            padding: '10px', 
-            backgroundColor: '#6366f1', 
-            color: 'white', 
-            border: 'none', 
+          style={{
+            width: '100%',
+            padding: '10px',
+            backgroundColor: '#6366f1',
+            color: 'white',
+            border: 'none',
             borderRadius: '6px',
             fontWeight: 'bold',
             cursor: 'pointer',
-            transition: 'background-color 0.2s'
+            transition: 'background-color 0.2s',
           }}
-          onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#4f46e5'}
-          onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#6366f1'}
+          onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#4f46e5')}
+          onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#6366f1')}
         >
           📚 Export to LORE
         </button>

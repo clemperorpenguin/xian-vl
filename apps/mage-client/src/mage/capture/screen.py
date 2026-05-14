@@ -35,7 +35,7 @@ class ScreenCapture:
             if is_wayland:
                 logger.debug("Wayland detected, desktop: %s", desktop)
                 # 1. KDE Plasma - Spectacle
-                if "kde" in desktop:
+                if "kde" in desktop or "plasma" in desktop:
                     logger.debug("Trying Spectacle backend...")
                     data = ScreenCapture._capture_spectacle()
                     if data: return data

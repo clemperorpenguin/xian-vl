@@ -14,9 +14,10 @@ from openai import AsyncOpenAI
 
 from shared_types.constants import DEFAULT_API_URL, DEFAULT_MAX_TOKENS, QWEN_MAX_DIMENSION
 from shared_types.models import TranslationResult, TextStyle
-from xian.context_manager import ContextManager
-from xian.searcher import WebSearcher, LocalWikiSearcher
 from xian.compiler import WikiCompiler
+from xian.context_manager import ContextManager
+from xian.searcher import LocalWikiSearcher, WebSearcher
+from xian.timeout import CHAT_AUX_TIMEOUT_SECONDS, CHAT_TIMEOUT_SECONDS, timeout_for_mode
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class VLProcessor:
                 return  # already initialized by another coroutine
             # Use configured API URL, falling back to environment variable if set
             base_url = os.environ.get("LEMONADE_API_URL", self.config.api_url)
-            api_key = os.environ.get("LEMONADE_API_KEY", "lemonade")
+            api_key = os.environ.get("LEMONADE_API_KEY", "not-needed")
             logger.info("Initializing OpenAI client with base_url: %s", base_url)
             self.client = AsyncOpenAI(
                 base_url=base_url,
@@ -103,7 +104,8 @@ class VLProcessor:
 
         Tries structured markers first, then heuristic splitting, then raw fallback.
         """
-        logger.info("parse_response raw input (%d chars): %s", len(response), response[:300])
+        preview = (response[:80] + "…") if len(response) > 80 else response
+        logger.debug("parse_response raw input (%d chars), preview=%r", len(response), preview)
 
         # Strip thinking tags if present
         cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
@@ -171,11 +173,14 @@ class VLProcessor:
 
         try:
             logger.info("Sending translation request to OmniRouter via OpenAI...")
-            response = await self.client.chat.completions.create(
-                model=self.config.model_name,
-                messages=messages,
-                max_tokens=self.config.max_tokens,
-                temperature=self.config.temperature,
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.config.model_name,
+                    messages=messages,
+                    max_tokens=self.config.max_tokens,
+                    temperature=self.config.temperature,
+                ),
+                timeout=timeout_for_mode(mode),
             )
 
             # Debug: log raw response structure
@@ -207,6 +212,10 @@ class VLProcessor:
             self.context_manager.update_last_frame_data("\n".join(extracted), results)
 
             return results
+
+        except asyncio.TimeoutError:
+            logger.error("OpenAI translation timed out (mode=%s)", mode)
+            raise RuntimeError("Translation request timed out.") from None
 
         except Exception as e:
             logger.error("Error during OpenAI API inference: %s", e, exc_info=True)
@@ -249,11 +258,14 @@ class VLProcessor:
 
         try:
             logger.info("Sending cinematic translation request to OmniRouter via OpenAI...")
-            response = await self.client.chat.completions.create(
-                model=self.config.model_name,
-                messages=messages,
-                max_tokens=self.config.max_tokens,
-                temperature=self.config.temperature,
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.config.model_name,
+                    messages=messages,
+                    max_tokens=self.config.max_tokens,
+                    temperature=self.config.temperature,
+                ),
+                timeout=timeout_for_mode("Document"),
             )
 
             choice = response.choices[0] if response.choices else None
@@ -271,6 +283,10 @@ class VLProcessor:
 
             return results
 
+        except asyncio.TimeoutError:
+            logger.error("OpenAI cinematic translation timed out")
+            raise RuntimeError("Cinematic translation request timed out.") from None
+
         except Exception as e:
             logger.error("Error during OpenAI API inference (cinematic): %s", e, exc_info=True)
             raise
@@ -280,22 +296,26 @@ class VLProcessor:
         if not self.client:
             return query
         try:
-            response = await self.client.chat.completions.create(
-                model=self.config.model_name,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            f"Translate the following search query to {target_lang}. "
-                            "Output ONLY the translated query, nothing else."
-                        ),
-                    },
-                    {"role": "user", "content": query},
-                ],
-                max_tokens=200,
-                temperature=0.1,
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.config.model_name,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                f"Translate the following search query to {target_lang}. "
+                                "Output ONLY the translated query, nothing else."
+                            ),
+                        },
+                        {"role": "user", "content": query},
+                    ],
+                    max_tokens=200,
+                    temperature=0.1,
+                ),
+                timeout=CHAT_AUX_TIMEOUT_SECONDS,
             )
-            translated = (response.choices[0].message.content or "").strip()
+            ch0 = response.choices[0] if response.choices else None
+            translated = (ch0.message.content or "").strip() if ch0 else ""
             # Strip thinking tags if present
             translated = re.sub(r'<think>.*?</think>', '', translated, flags=re.DOTALL).strip()
             if translated:
@@ -362,11 +382,14 @@ class VLProcessor:
 
         try:
             logger.info("Sending chat request to OmniRouter via OpenAI...")
-            response = await self.client.chat.completions.create(
-                model=self.config.model_name,
-                messages=openai_messages,
-                max_tokens=self.config.max_tokens,
-                temperature=0.7,  # Higher temp for chat
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.config.model_name,
+                    messages=openai_messages,
+                    max_tokens=self.config.max_tokens,
+                    temperature=0.7,  # Higher temp for chat
+                ),
+                timeout=CHAT_TIMEOUT_SECONDS,
             )
 
             final_output = ""
@@ -389,9 +412,15 @@ class VLProcessor:
 
             if tool_call_match or structured_tool_call:
                 if structured_tool_call:
-                    args = json.loads(structured_tool_call.function.arguments)
-                    query = args.get("query", "")
-                    language = args.get("language", "zh-CN")
+                    query = ""
+                    language = "zh-CN"
+                    raw_args = getattr(structured_tool_call.function, "arguments", None) or "{}"
+                    try:
+                        args = json.loads(raw_args)
+                        query = args.get("query", "") or ""
+                        language = args.get("language", "zh-CN") or "zh-CN"
+                    except json.JSONDecodeError:
+                        logger.warning("Malformed structured tool_call.arguments JSON; skipping search.")
                 else:
                     # Parse text-based tool call
                     func_body = tool_call_match.group(2)
@@ -414,8 +443,9 @@ class VLProcessor:
                     local_results = local_searcher.search(query, num_results=3)
 
                     # Dual-language web search
-                    searcher = WebSearcher()
+                    searcher: WebSearcher | None = None
                     try:
+                        searcher = WebSearcher()
                         # Translate query to source language for parallel search
                         translated_query = await self.translate_query(query, source_lang)
                         web_results = await searcher.dual_search(
@@ -428,7 +458,8 @@ class VLProcessor:
                         logger.warning("Web search failed: %s. Relying on local wiki.", e)
                         web_results = []
                     finally:
-                        await searcher.close()
+                        if searcher is not None:
+                            await searcher.close()
 
                     # Combine results
                     results = local_results + web_results
@@ -471,11 +502,14 @@ class VLProcessor:
                     })
 
                     logger.info("Sending follow-up chat request after search...")
-                    response = await self.client.chat.completions.create(
-                        model=self.config.model_name,
-                        messages=openai_messages,
-                        max_tokens=self.config.max_tokens,
-                        temperature=0.7,
+                    response = await asyncio.wait_for(
+                        self.client.chat.completions.create(
+                            model=self.config.model_name,
+                            messages=openai_messages,
+                            max_tokens=self.config.max_tokens,
+                            temperature=0.7,
+                        ),
+                        timeout=CHAT_TIMEOUT_SECONDS,
                     )
 
                     final_output = ""
@@ -490,6 +524,10 @@ class VLProcessor:
             self.context_manager.add_assistant_message(cleaned_output)
 
             return cleaned_output
+
+        except asyncio.TimeoutError:
+            logger.error("OpenAI chat request timed out")
+            raise RuntimeError("Chat request timed out.") from None
 
         except Exception as e:
             logger.error("Error during OpenAI chat inference: %s", e, exc_info=True)

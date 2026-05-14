@@ -16,11 +16,19 @@ class WikiCompiler:
         self.wiki_dir = wiki_dir
         os.makedirs(self.wiki_dir, exist_ok=True)
         
-    def compile(self, entity_name: str, content: str, metadata: dict[str, Any], infobox: dict[str, str] = None) -> str:
+    def compile(
+        self,
+        entity_name: str,
+        content: str,
+        metadata: dict[str, Any],
+        infobox: dict[str, str] | None = None,
+    ) -> str:
         """Compiles content into a Markdown file with YAML frontmatter.
         """
         # Ensure entity name is clean for filename
         safe_filename = "".join(c for c in entity_name if c.isalnum() or c in (" ", "-", "_")).strip()
+        if not safe_filename:
+            safe_filename = "untitled"
         filename = f"{safe_filename}.md"
         filepath = os.path.join(self.wiki_dir, filename)
         

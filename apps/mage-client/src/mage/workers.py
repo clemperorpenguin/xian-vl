@@ -169,16 +169,15 @@ class ModelPullWorker(QThread):
     def run(self):
         try:
             base_url = os.environ.get("LEMONADE_API_URL", self.api_url)
-            
-            payload_dict = {"model_name": self.model_name}
+            payload: dict = {"model": self.model_name, "stream": True}
             if self.gpu_memory_utilization != "Default":
                 try:
-                    payload_dict["gpu_memory_utilization"] = float(self.gpu_memory_utilization)
+                    payload["gpu_memory_utilization"] = float(self.gpu_memory_utilization)
                 except ValueError:
                     logger.warning("Invalid gpu_memory_utilization value: %s", self.gpu_memory_utilization)
 
             with httpx.Client(timeout=600.0) as client:
-                resp = client.post(f"{base_url}/pull", json=payload_dict)
+                resp = client.post(f"{base_url}/pull", json=payload)
                 resp.raise_for_status()
                 body = resp.json()
                 status = body.get("status", "unknown")

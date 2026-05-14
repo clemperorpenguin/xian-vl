@@ -30,6 +30,12 @@ MODE_TIMEOUTS: dict[str, float] = {
     "Document": 10.0,
 }
 
+# Chat / agentic flows (tool calls + follow-up) need a larger budget than live OCR.
+CHAT_TIMEOUT_SECONDS = 120.0
+
+# Sub-requests inside chat (e.g. query translation for dual search).
+CHAT_AUX_TIMEOUT_SECONDS = 30.0
+
 
 def timeout_for_mode(mode: str) -> float:
     """Return the default timeout (seconds) for a translation mode."""

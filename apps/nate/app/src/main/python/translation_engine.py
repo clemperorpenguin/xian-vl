@@ -1,3 +1,9 @@
+"""Stub translation engine for the Nate Android app.
+
+The Kotlin layer wires this module for future on-device or hybrid flows.
+Responses are placeholders until real inference is integrated.
+"""
+
 class TranslationEngine:
     def __init__(self):
         print("Translation Engine Initialized")

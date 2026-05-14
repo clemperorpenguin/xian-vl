@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from urllib.parse import urlparse
+
 from playwright.async_api import async_playwright
 from readability import Document
 from bs4 import BeautifulSoup
@@ -19,7 +21,11 @@ class PlaywrightScraper:
         """Fetches URL and returns cleaned content and metadata.
         """
         logger.info("Scraping URL: %s", url)
-        
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            logger.error("Refusing to scrape non-http(s) URL or missing host: %s", url)
+            return None
+
         async with async_playwright() as p:
             # Launch headless browser
             browser = await p.chromium.launch(headless=True)

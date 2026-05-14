@@ -1,10 +1,12 @@
 import { defineBackground } from 'wxt/sandbox';
 
+import { normalizeLemonadeBaseUrl } from '../utils/lemonadeUrl';
+
 const DEFAULT_LEMONADE_URL = 'http://localhost:13305/v1';
 
 async function getLemonadeUrl(): Promise<string> {
   const result = await chrome.storage.local.get(['serverUrl']);
-  return result.serverUrl || DEFAULT_LEMONADE_URL;
+  return normalizeLemonadeBaseUrl(result.serverUrl || DEFAULT_LEMONADE_URL);
 }
 
 // IndexedDB Caching for Images
@@ -64,7 +66,8 @@ async function translateText(text: string, targetLanguage: string = 'English'): 
 
   if (!response.ok) throw new Error(`Lemonade API Error: ${response.statusText}`);
   const data = await response.json();
-  return data.choices[0].message.content.trim();
+  const content = data.choices?.[0]?.message?.content;
+  return (typeof content === 'string' ? content : '').trim();
 }
 
 async function analyzeContext(metadata: any): Promise<string> {
@@ -86,8 +89,10 @@ async function analyzeContext(metadata: any): Promise<string> {
     })
   });
 
+  if (!response.ok) throw new Error(`Lemonade API Error: ${response.statusText}`);
   const data = await response.json();
-  return data.choices[0].message.content.trim();
+  const content = data.choices?.[0]?.message?.content;
+  return (typeof content === 'string' ? content : '').trim();
 }
 
 async function batchTranslateText(texts: string[], context: string, targetLanguage: string = 'English'): Promise<string[]> {
@@ -109,9 +114,14 @@ async function batchTranslateText(texts: string[], context: string, targetLangua
     })
   });
 
+  if (!response.ok) throw new Error(`Lemonade API Error: ${response.statusText}`);
   const data = await response.json();
+  const raw = data.choices?.[0]?.message?.content;
+  if (typeof raw !== 'string') {
+    return texts;
+  }
   try {
-    return JSON.parse(data.choices[0].message.content.trim());
+    return JSON.parse(raw.trim());
   } catch (e) {
     return texts;
   }
@@ -138,7 +148,11 @@ async function translateImage(imageUrl: string, targetLanguage: string = 'Englis
   if (!response.ok) throw new Error(`Lemonade API Error: ${response.statusText}`);
 
   const data = await response.json();
-  const base64Image = `data:image/png;base64,${data.data[0].b64_json}`;
+  const b64 = data.data?.[0]?.b64_json;
+  if (typeof b64 !== 'string') {
+    throw new Error('Lemonade API returned no image data');
+  }
+  const base64Image = `data:image/png;base64,${b64}`;
   await setCachedImage(imageUrl, base64Image); // Cache the result
   return base64Image;
 }

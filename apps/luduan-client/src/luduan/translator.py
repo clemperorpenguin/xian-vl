@@ -69,7 +69,17 @@ class DocumentTranslator:
             logger.exception("Translation failed for passage (len=%d)", len(text))
             return text
 
-    async def translate_batch(self, passages: list[str]) -> list[str]:
-        """Translate multiple passages concurrently."""
-        tasks = [self.translate(p) for p in passages]
-        return await asyncio.gather(*tasks)
+    async def translate_batch(
+        self,
+        passages: list[str],
+        *,
+        concurrency: int = 8,
+    ) -> list[str]:
+        """Translate multiple passages with a bounded concurrency limit."""
+        sem = asyncio.Semaphore(max(1, concurrency))
+
+        async def _one(p: str) -> str:
+            async with sem:
+                return await self.translate(p)
+
+        return await asyncio.gather(*(_one(p) for p in passages))

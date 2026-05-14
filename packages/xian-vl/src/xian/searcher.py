@@ -357,9 +357,15 @@ class WebSearcher:
                 break
 
             url = result.get("url", "")
+            if not url:
+                continue
+            parsed_url = urllib.parse.urlparse(url)
+            if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
+                logger.debug("Skipping enrich for non-http(s) URL: %s", url)
+                continue
 
             # Skip domains that won't have useful text
-            domain = urllib.parse.urlparse(url).netloc.lower()
+            domain = parsed_url.netloc.lower()
             if any(skip in domain for skip in self._SKIP_DOMAINS):
                 continue
 

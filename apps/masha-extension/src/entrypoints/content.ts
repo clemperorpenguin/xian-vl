@@ -93,9 +93,12 @@ export default defineContentScript({
 
           if (transRes && transRes.success && Array.isArray(transRes.translations)) {
             chunk.forEach((node, idx) => {
-              if (transRes.translations[idx]) {
-                node.nodeValue = node.nodeValue!.replace(texts[idx], transRes.translations[idx]);
-              }
+              const replacement = transRes.translations[idx];
+              if (!replacement) return;
+              const raw = node.nodeValue!;
+              const needle = texts[idx];
+              // Replace every occurrence of the trimmed segment (String.replace only hits once).
+              node.nodeValue = needle ? raw.split(needle).join(replacement) : raw;
             });
           }
         } catch (e) {
