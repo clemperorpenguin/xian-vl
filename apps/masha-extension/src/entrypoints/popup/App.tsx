@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-import { normalizeLemonadeBaseUrl } from '../../utils/lemonadeUrl';
+import { normalizeLemonadeBaseUrl, shouldWarnHttpToNonLoopback } from '../../utils/lemonadeUrl';
 
 function App() {
   const [serverUrl, setServerUrl] = useState('http://localhost:13305/v1');
@@ -18,6 +18,15 @@ function App() {
   const handleSave = () => {
     setStatus('saving');
     const normalized = normalizeLemonadeBaseUrl(serverUrl);
+    if (shouldWarnHttpToNonLoopback(normalized)) {
+      const ok = window.confirm(
+        'You are saving an HTTP Lemonade URL that is not localhost. Traffic can be read or modified on the network path. Lemonade does not provide HTTPS itself; use a VPN, SSH tunnel, or a TLS reverse proxy if this server is reachable beyond one trusted machine.\n\nClick OK to save or Cancel to go back.',
+      );
+      if (!ok) {
+        setStatus('idle');
+        return;
+      }
+    }
     setServerUrl(normalized);
     chrome.storage.local.set({ serverUrl: normalized }).then(() => {
       setStatus('saved');

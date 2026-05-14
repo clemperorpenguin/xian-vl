@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml
 
+from xian.url_safety import markdown_http_https_url_or_none
+
 logger = logging.getLogger(__name__)
 
 class WikiCompiler:
@@ -79,7 +81,12 @@ class WikiCompiler:
         ])
         
         for source in metadata.get("sources", []):
-            lines.append(f"- [{source.get('title', 'Source')}]({source.get('url')})")
+            title = source.get("title", "Source")
+            href = markdown_http_https_url_or_none(source.get("url"))
+            if href:
+                lines.append(f"- [{title}]({href})")
+            else:
+                lines.append(f"- {title} *(source URL omitted)*")
             
         # Enforce strict Obsidian-style bidirectional linking
         # This is a heuristic: if we see other known entities, we could link them.

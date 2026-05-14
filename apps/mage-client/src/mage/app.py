@@ -11,7 +11,7 @@ import os
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QDialog, QFormLayout,
     QLineEdit, QComboBox, QSpinBox, QPushButton, QLabel, QVBoxLayout,
-    QHBoxLayout, QWidget, QCheckBox
+    QHBoxLayout, QWidget, QCheckBox, QMessageBox
 )
 from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, QBuffer, QIODevice
 from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap
@@ -27,6 +27,7 @@ from mage.capture.hotkeys import create_hotkey_listener
 from mage.capture.mouse import create_mouse_listener
 from mage.capture.screen import ScreenCapture
 from xian.dictionary import LocalDictionary
+from xian.lemonade_url import normalize_lemonade_api_base_url, should_warn_http_to_non_loopback
 from mage.ui.command_osd import CommandOSD
 from shared_types import constants
 from shared_types.enums import SourceLanguage, TargetLanguage, TranslationMode, TranslationStyle
@@ -40,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 ORGANIZATION = constants.ORGANIZATION_NAME
 APP_NAME = constants.APPLICATION_NAME
+
+
+def _normalized_api_url_from_settings(settings: QSettings) -> str:
+    return normalize_lemonade_api_base_url(str(settings.value(KEY_API_URL, constants.DEFAULT_API_URL)))
 
 
 def _parse_styles(settings: QSettings) -> list[str]:
@@ -63,7 +68,7 @@ class SettingsDialog(QDialog):
 
         # Server URL
         self.url_edit = QLineEdit()
-        self.url_edit.setText(settings.value(KEY_API_URL, constants.DEFAULT_API_URL))
+        self.url_edit.setText(_normalized_api_url_from_settings(settings))
         layout.addRow("Server URL:", self.url_edit)
 
         # Model
@@ -155,7 +160,23 @@ class SettingsDialog(QDialog):
         """)
 
     def _save(self):
-        self.settings.setValue(KEY_API_URL, self.url_edit.text())
+        normalized = normalize_lemonade_api_base_url(self.url_edit.text().strip())
+        if should_warn_http_to_non_loopback(normalized):
+            choice = QMessageBox.warning(
+                self,
+                "HTTP to remote server",
+                "You configured Lemonade over HTTP to a host that is not loopback. "
+                "Traffic can be read or modified on the network path. Lemonade does not "
+                "provide HTTPS itself; use a VPN, SSH tunnel, or a TLS reverse proxy if "
+                "this endpoint is reachable beyond a single trusted machine.\n\n"
+                "Choose Save to continue or Cancel to go back.",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save,
+            )
+            if choice == QMessageBox.StandardButton.Cancel:
+                return
+        self.url_edit.setText(normalized)
+        self.settings.setValue(KEY_API_URL, normalized)
         self.settings.setValue(KEY_API_MODEL, self.model_combo.currentText())
         self.settings.setValue(KEY_SOURCE_LANG, self.source_lang_combo.currentText())
         self.settings.setValue(KEY_TARGET_LANG, self.lang_combo.currentText())
@@ -186,7 +207,7 @@ class XianApp(QWidget):
         # --- Core objects ---
         self.processor = VLProcessor(VLConfig(
             model_name=self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL),
-            api_url=self.settings.value(KEY_API_URL, constants.DEFAULT_API_URL),
+            api_url=_normalized_api_url_from_settings(self.settings),
             max_tokens=int(self.settings.value(KEY_MAX_TOKENS, constants.DEFAULT_MAX_TOKENS)),
         ))
         self.dictionary = LocalDictionary()
@@ -693,7 +714,7 @@ class XianApp(QWidget):
     # Health check
     # ------------------------------------------------------------------
     def _run_health_check(self):
-        api_url = self.settings.value(KEY_API_URL, constants.DEFAULT_API_URL)
+        api_url = _normalized_api_url_from_settings(self.settings)
         self._status_worker = StatusWorker(api_url)
         self._status_worker.status_changed.connect(self._on_health_result)
         self._status_worker.start()
@@ -716,7 +737,7 @@ class XianApp(QWidget):
 
     def _pull_model(self, model_name: str):
         """Download a model via the Lemonade /v1/pull endpoint."""
-        api_url = self.settings.value(KEY_API_URL, constants.DEFAULT_API_URL)
+        api_url = _normalized_api_url_from_settings(self.settings)
         gpu_util = self.settings.value(KEY_GPU_UTIL, constants.DEFAULT_GPU_MEMORY_UTILIZATION)
         self._pull_worker = ModelPullWorker(api_url, model_name, gpu_util)
         self._pull_worker.pull_done.connect(self._on_pull_done)
@@ -738,7 +759,7 @@ class XianApp(QWidget):
         dlg = SettingsDialog(self.settings, self._available_models)
         if dlg.exec():
             # Apply changed settings to processor
-            self.processor.config.api_url = self.settings.value(KEY_API_URL, constants.DEFAULT_API_URL)
+            self.processor.config.api_url = _normalized_api_url_from_settings(self.settings)
             self.processor.config.model_name = self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
             self.processor.config.max_tokens = int(self.settings.value(KEY_MAX_TOKENS, constants.DEFAULT_MAX_TOKENS))
             # Force re-init on next inference

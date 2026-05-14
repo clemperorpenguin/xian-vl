@@ -1,6 +1,6 @@
 import { defineBackground } from 'wxt/sandbox';
 
-import { normalizeLemonadeBaseUrl } from '../utils/lemonadeUrl';
+import { normalizeLemonadeBaseUrl, isAllowedImageTranslationUrl } from '../utils/lemonadeUrl';
 
 const DEFAULT_LEMONADE_URL = 'http://localhost:13305/v1';
 
@@ -128,6 +128,9 @@ async function batchTranslateText(texts: string[], context: string, targetLangua
 }
 
 async function translateImage(imageUrl: string, targetLanguage: string = 'English'): Promise<string> {
+  if (!isAllowedImageTranslationUrl(imageUrl)) {
+    throw new Error('Unsupported image URL scheme (allowed: http, https, data, blob)');
+  }
   const cached = await getCachedImage(imageUrl);
   if (cached) return cached;
 
@@ -161,6 +164,11 @@ export default defineBackground(() => {
   console.log('MASHA background script initialized.');
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (sender.id !== chrome.runtime.id) {
+      sendResponse({ success: false, error: 'Invalid sender' });
+      return;
+    }
+
     if (message.type === 'TRANSLATE_TEXT') {
       translateText(message.payload.text, message.payload.targetLanguage || 'English')
         .then(translation => sendResponse({ success: true, translation }))

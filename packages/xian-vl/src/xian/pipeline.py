@@ -17,6 +17,7 @@ from shared_types.models import TranslationResult, TextStyle
 from xian.compiler import WikiCompiler
 from xian.context_manager import ContextManager
 from xian.searcher import LocalWikiSearcher, WebSearcher
+from xian.url_safety import markdown_http_https_url_or_none
 from xian.timeout import (
     CHAT_AUX_TIMEOUT_SECONDS,
     CHAT_TIMEOUT_SECONDS,
@@ -334,7 +335,7 @@ class VLProcessor:
         if not self.client:
             raise RuntimeError("Engine not initialized. Call init_engine() first.")
 
-        logger.info("Processing chat message: %s", message)
+        logger.info("Processing chat message (%d chars)", len(message))
 
         # Add user message to context manager
         self.context_manager.add_user_message(message, with_image=True)
@@ -473,8 +474,15 @@ class VLProcessor:
                         compiler = WikiCompiler(wiki_dir="wiki")
                         content_lines = []
                         for r in web_results:
-                            content_lines.append(f"### [{r.get('title', 'No Title')}]({r.get('url', '')})")
-                            content_lines.append(r.get('content', ''))
+                            title = r.get("title", "No Title")
+                            href = markdown_http_https_url_or_none(r.get("url", ""))
+                            if href:
+                                content_lines.append(f"### [{title}]({href})")
+                            else:
+                                content_lines.append(
+                                    f"### {title}\n*(source URL omitted — unsupported or disallowed scheme)*"
+                                )
+                            content_lines.append(r.get("content", ""))
                         compiler.compile(query, "\n".join(content_lines), metadata={"sources": web_results})
 
                     # 2. LLM State (Ephemeral): Build context from search results

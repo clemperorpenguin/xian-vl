@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright
 from readability import Document
 from bs4 import BeautifulSoup
+
+from xian.url_safety import is_safe_http_url_for_untrusted_fetch
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,18 @@ class PlaywrightScraper:
             logger.error("Refusing to scrape non-http(s) URL or missing host: %s", url)
             return None
 
+        if not is_safe_http_url_for_untrusted_fetch(url):
+            logger.error("Refusing scrape target that failed URL safety checks: %s", url)
+            return None
+
+        async def _block_unsafe_route(route):
+            req_url = route.request.url
+            if not is_safe_http_url_for_untrusted_fetch(req_url):
+                logger.debug("Aborting unsafe Playwright request: %s", req_url)
+                await route.abort()
+                return
+            await route.continue_()
+
         async with async_playwright() as p:
             # Launch headless browser
             browser = await p.chromium.launch(headless=True)
@@ -39,7 +52,8 @@ class PlaywrightScraper:
             )
             
             page = await context.new_page()
-            
+            await page.route("**/*", _block_unsafe_route)
+
             try:
                 # Set a reasonable timeout
                 await page.goto(url, wait_until="networkidle", timeout=30000)
@@ -76,8 +90,12 @@ class PlaywrightScraper:
             except Exception as e:
                 logger.error("Failed to scrape %s: %s", url, e)
                 return None
-                
+
             finally:
+                try:
+                    await page.unroute("**/*")
+                except Exception:
+                    pass
                 await browser.close()
 
     def extract_infobox(self, html_content: str) -> dict:

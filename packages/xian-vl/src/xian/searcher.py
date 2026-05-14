@@ -9,6 +9,8 @@ import urllib.parse
 
 import httpx
 
+from xian.url_safety import httpx_get_with_safe_redirects
+
 logger = logging.getLogger(__name__)
 
 _BROWSER_UA = (
@@ -252,7 +254,7 @@ class WebSearcher:
         self._client = httpx.AsyncClient(
             timeout=8.0,
             headers={"User-Agent": _BROWSER_UA},
-            follow_redirects=True,
+            follow_redirects=False,
         )
 
     async def search(self, query: str, num_results: int = 10, language: str = "zh-CN",
@@ -370,8 +372,8 @@ class WebSearcher:
                 continue
 
             try:
-                resp = await self._client.get(url)
-                if resp.status_code != 200:
+                resp = await httpx_get_with_safe_redirects(self._client, url)
+                if resp is None or resp.status_code != 200:
                     continue
 
                 doc = ReadabilityDocument(resp.text)
