@@ -106,7 +106,7 @@ class ScreenCapture:
 
             buffer = QBuffer()
             buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-            combined.save(buffer, "PNG")
+            combined.save(buffer, "JPG", 85)
             data = bytes(buffer.buffer())
 
             if ScreenCapture._is_image_empty(data):

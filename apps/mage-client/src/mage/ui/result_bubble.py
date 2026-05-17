@@ -19,6 +19,7 @@ class ResultBubble(QWidget):
 
     def __init__(self, text: str, original_text: str = "",
                  anchor_rect: QRect = None, auto_close_ms: int = 30000,
+                 border_color: str | None = None,
                  parent=None):
         super().__init__(parent)
         self.setWindowFlags(
@@ -32,13 +33,15 @@ class ResultBubble(QWidget):
         self._text = text
         self._original = original_text
 
+        border = border_color if border_color else accent_hex()
+
         # --- layout -----------------------------------------------------------
         root = QWidget(self)
         root.setObjectName("BubbleRoot")
         root.setStyleSheet(f"""
             #BubbleRoot {{
                 background-color: rgba(20, 20, 20, 230);
-                border: 1px solid {accent_hex()};
+                border: 1px solid {border};
                 border-radius: 8px;
             }}
             QLabel {{
@@ -66,8 +69,10 @@ class ResultBubble(QWidget):
 
         # Header row with close button
         header = QHBoxLayout()
-        title = QLabel("Xian — Translation")
-        title.setStyleSheet(f"color: {accent_hex()}; font-weight: bold; font-size: 11px;")
+        display_title = "⚠️ Xian — Speculative" if border_color else "Xian — Translation"
+        title = QLabel(display_title)
+        title_color = border_color if border_color else accent_hex()
+        title.setStyleSheet(f"color: {title_color}; font-weight: bold; font-size: 11px;")
         header.addWidget(title)
         header.addStretch()
 

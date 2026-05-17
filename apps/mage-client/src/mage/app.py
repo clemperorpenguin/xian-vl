@@ -19,7 +19,7 @@ from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap
 from mage.ui.theme import accent_hex, accent_hover_hex
 
 from xian.pipeline import VLProcessor, VLConfig
-from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker
+from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker
 from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
 from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.result_bubble import ResultBubble
@@ -212,6 +212,10 @@ class XianApp(QWidget):
         ))
         self.dictionary = LocalDictionary()
 
+        # Pre-warm target model in VRAM
+        self._prewarm_worker = PrewarmWorker(self.processor)
+        self._prewarm_worker.start()
+
         # --- Hotkeys ---
         self.hotkey_listener = create_hotkey_listener()
         
@@ -331,6 +335,8 @@ class XianApp(QWidget):
             self.processor.config.model_name = value
             self.processor.client = None
             self._run_health_check()
+            self._prewarm_worker = PrewarmWorker(self.processor)
+            self._prewarm_worker.start()
 
     def _on_osd_command(self, key: str):
         """Handle option buttons clicked in the OSD."""
@@ -465,6 +471,11 @@ class XianApp(QWidget):
                 )
                 translation_combined = dict_text
 
+        # Determine if speculative (confidence < 0.70)
+        min_confidence = min((r.confidence for r in results), default=1.0)
+        is_speculative = min_confidence < 0.70
+        border_color = "#e5a93c" if is_speculative else None
+
         if action == "cinematic":
             if self.cinematic_bubble is None or not self.cinematic_bubble.isVisible():
                 self.cinematic_bubble = ResultBubble(
@@ -472,6 +483,7 @@ class XianApp(QWidget):
                     original_text=original_combined,
                     anchor_rect=anchor,
                     auto_close_ms=0,
+                    border_color=border_color,
                 )
             else:
                 self.cinematic_bubble.close()
@@ -480,6 +492,7 @@ class XianApp(QWidget):
                     original_text=original_combined,
                     anchor_rect=anchor,
                     auto_close_ms=0,
+                    border_color=border_color,
                 )
         elif self.dialogue_mode_active:
             if self.dialogue_bubble is None or not self.dialogue_bubble.isVisible():
@@ -488,6 +501,7 @@ class XianApp(QWidget):
                     original_text=original_combined,
                     anchor_rect=anchor,
                     auto_close_ms=0,  # Persistent
+                    border_color=border_color,
                 )
             else:
                 self.dialogue_bubble.close()
@@ -496,12 +510,14 @@ class XianApp(QWidget):
                     original_text=original_combined,
                     anchor_rect=anchor,
                     auto_close_ms=0,
+                    border_color=border_color,
                 )
         else:
             bubble = ResultBubble(
                 translation_combined,
                 original_text=original_combined,
                 anchor_rect=anchor,
+                border_color=border_color,
             )
             self._bubbles = [b for b in self._bubbles if b.isVisible()]
             self._bubbles.append(bubble)
@@ -592,7 +608,7 @@ class XianApp(QWidget):
         
         buffer = QBuffer()
         buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-        cropped.save(buffer, "PNG")
+        cropped.save(buffer, "JPG", 85)
         cropped_data = bytes(buffer.buffer())
         
         self._run_inference(cropped_data, "translate", rect)
@@ -682,7 +698,7 @@ class XianApp(QWidget):
 
         buffer = QBuffer()
         buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-        composite.save(buffer, "PNG")
+        composite.save(buffer, "JPG", 85)
         composite_data = bytes(buffer.buffer())
 
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
@@ -766,6 +782,10 @@ class XianApp(QWidget):
             self.processor.client = None
             # Re-run health check
             self._run_health_check()
+            
+            # Pre-warm target model in VRAM
+            self._prewarm_worker = PrewarmWorker(self.processor)
+            self._prewarm_worker.start()
             
             # Apply new leader key
             new_leader = self.settings.value(KEY_LEADER_KEY, constants.DEFAULT_LEADER_KEY)

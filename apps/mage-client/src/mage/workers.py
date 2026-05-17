@@ -191,3 +191,22 @@ class ModelPullWorker(QThread):
         except Exception as e:
             logger.error("Model pull failed: %s", e)
             self.pull_done.emit(False, str(e))
+
+
+class PrewarmWorker(QThread):
+    """Pre-load the model into Lemonade Server VRAM off the main thread."""
+
+    def __init__(self, processor):
+        super().__init__()
+        self.processor = processor
+
+    def run(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            if hasattr(self.processor, "prewarm_model"):
+                loop.run_until_complete(self.processor.prewarm_model())
+        except Exception as e:
+            logger.warning("PrewarmWorker error: %s", e)
+        finally:
+            loop.close()

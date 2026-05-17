@@ -98,16 +98,22 @@ class VLProcessor:
 
         return (
             f"OCR the {source_lang} text from this image of {mode_context}, "
-            f"then translate it to {target_lang}.{style_context}\n"
-            f"Reply ONLY with two sections, no commentary:\n"
-            f"ORIGINAL:\n<extracted {source_lang} text>\n\n"
-            f"TRANSLATED:\n<{target_lang} translation>"
+            f"then translate it to {target_lang}.{style_context}\n\n"
+            f"CRITICAL SYSTEM DIRECTIVES:\n"
+            f"- KEEP YOUR REASONING/THINKING EXTREMELY BRIEF (under 2 sentences) or bypass it entirely if possible.\n"
+            f"- DO NOT write any reasoning, thinking process, or explanation.\n"
+            f"- DO NOT self-correct, refine, or write multiple drafts.\n"
+            f"- Output a single confidence estimation float (0.0 to 1.0) based on your certainty of the OCR and translation.\n\n"
+            f"Reply strictly in this 3-part layout with NO other conversational introduction, commentary, or Markdown formatting outside of the markers:\n"
+            f"ORIGINAL:\n[Extracted {source_lang} text]\n\n"
+            f"TRANSLATED:\n[Direct translation into {target_lang}]\n\n"
+            f"CONFIDENCE:\n[Confidence float score]"
         )
 
-    def parse_response(self, response: str) -> tuple[str, str]:
-        """Parse the model response to extract original text and translation.
+    def parse_response(self, response: str) -> tuple[str, str, float]:
+        """Parse the model response to extract original text, translation, and confidence.
 
-        Tries structured markers first, then heuristic splitting, then raw fallback.
+        Returns (original_text, translated_text, confidence_score).
         """
         preview = (response[:80] + "…") if len(response) > 80 else response
         logger.debug("parse_response raw input (%d chars), preview=%r", len(response), preview)
@@ -118,39 +124,72 @@ class VLProcessor:
         if not cleaned:
             cleaned = response.strip()
 
-        # --- Strategy 1: structured markers (ORIGINAL/TRANSLATED or ORIGINAL TEXT/TRANSLATION) ---
+        # Parse confidence score using keyword search
+        confidence = 0.85
+        conf_match = re.search(r'CONFIDENCE\b\D*?([0-9.]+)', cleaned, re.IGNORECASE)
+        if conf_match:
+            try:
+                confidence = float(conf_match.group(1).strip())
+                confidence = max(0.0, min(1.0, confidence))  # clamp between 0.0 and 1.0
+            except ValueError:
+                pass
+
+        # Split on double-newline for fallback parsing
+        parts = re.split(r'\n\s*\n', cleaned, maxsplit=2)
+        if not conf_match and len(parts) == 3:
+            try:
+                val = float(parts[2].strip())
+                confidence = max(0.0, min(1.0, val))
+            except ValueError:
+                pass
+
+        # Extract ORIGINAL and TRANSLATED sections using a highly resilient regex
         orig_match = re.search(
-            r'(?:ORIGINAL(?:\s*TEXT)?)\s*:\s*(.*?)\s*(?:TRANSLAT(?:ED|ION))\s*:',
+            r'ORIGINAL.*?:(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:TRANSLAT|CONFIDENCE)|\Z)',
             cleaned, re.DOTALL | re.IGNORECASE
         )
         trans_match = re.search(
-            r'(?:TRANSLAT(?:ED|ION))\s*:\s*(.*)',
+            r'TRANSLAT.*?:(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:CONFIDENCE|ORIGINAL)|\Z)',
             cleaned, re.DOTALL | re.IGNORECASE
         )
 
         if orig_match and trans_match:
             original_text = orig_match.group(1).strip()
-            translation = trans_match.group(1).strip()
-            logger.info(
-                "parse_response (markers): original=%d chars, translation=%d chars",
-                len(original_text), len(translation),
+            # Strip markdown and quotes first so prefix stripping works at the absolute start ^
+            original_text = original_text.strip(' \t\n\r"\'`*•-')
+            
+            # Strip VLM conversational filler
+            original_text = re.sub(
+                r'^(?:The image contains the following text:|The image contains the following.*?text:|The text in the image is:|The extracted text is:|The.*?text is:)\s*',
+                '', original_text, flags=re.IGNORECASE
             )
-            return original_text, translation
+            # Strip again to clean up remaining trailing/leading quotes
+            original_text = original_text.strip(' \t\n\r"\'`*•-')
+            
+            translation = trans_match.group(1).strip()
+            translation = translation.strip(' \t\n\r"\'`*•-')
+            
+            logger.info(
+                "parse_response (markers): original=%d chars, translation=%d chars, confidence=%.2f",
+                len(original_text), len(translation), confidence
+            )
+            return original_text, translation, confidence
 
         # --- Strategy 2: split on double newline ---
-        parts = re.split(r'\n\s*\n', cleaned, maxsplit=1)
-        if len(parts) == 2 and len(parts[0].strip()) > 5 and len(parts[1].strip()) > 5:
+        if len(parts) >= 2 and len(parts[0].strip()) > 5 and len(parts[1].strip()) > 5:
             original_text = parts[0].strip()
+            original_text = original_text.strip(' \t\n\r"\'`*•-')
             translation = parts[1].strip()
+            translation = translation.strip(' \t\n\r"\'`*•-')
             logger.info(
-                "parse_response (split): original=%d chars, translation=%d chars",
-                len(original_text), len(translation),
+                "parse_response (split): original=%d chars, translation=%d chars, confidence=%.2f",
+                len(original_text), len(translation), confidence
             )
-            return original_text, translation
+            return original_text, translation, confidence
 
         # --- Strategy 3: raw fallback ---
-        logger.info("parse_response: using raw output as translation")
-        return "", cleaned
+        logger.info("parse_response: using raw output as translation, confidence=%.2f", confidence)
+        return "", cleaned, confidence
 
     async def process_frame(self, image_data: bytes, source_lang: str, target_lang: str, mode: str, styles: list[str]) -> list[TranslationResult]:
         """
@@ -202,15 +241,24 @@ class VLProcessor:
 
             final_output = (choice.message.content or "") if choice else ""
 
-            # Fallback: if the model spent all tokens on reasoning and produced
-            # no content, try to extract a usable translation from reasoning_content.
-            if not final_output and choice:
-                reasoning = getattr(choice.message, 'reasoning_content', None) or ""
-                if reasoning:
-                    logger.info("Content empty but reasoning_content has %d chars; extracting from it", len(reasoning))
-                    final_output = reasoning
+            # If the response was truncated while reasoning (content is empty)
+            if not final_output and choice and choice.finish_reason == "length":
+                logger.warning("VLM execution was truncated (finish_reason=length) while thinking. Try increasing max_tokens.")
+                results = [TranslationResult(
+                    original_text="",
+                    translated_text="⚠️ Translation request truncated (VLM token limit reached).",
+                    confidence=0.0
+                )]
+            else:
+                # Fallback: if the model spent all tokens on reasoning and produced
+                # no content under normal stop, try to extract a usable translation from reasoning_content.
+                if not final_output and choice:
+                    reasoning = getattr(choice.message, 'reasoning_content', None) or ""
+                    if reasoning:
+                        logger.info("Content empty but reasoning_content has %d chars; extracting from it", len(reasoning))
+                        final_output = reasoning
 
-            results = self._build_result(final_output, image)
+                results = self._build_result(final_output, image)
 
             # Update context manager with extracted data
             extracted = [r.original_text for r in results]
@@ -233,9 +281,15 @@ class VLProcessor:
             f"Translate the following dialogue to {target_lang}. Use the provided system audio transcription for context, "
             f"and cross-reference it with the OCR from the provided image of the game interface to ensure accurate character names and tone.{style_context}\n\n"
             f"Audio Transcript: {transcript}\n\n"
-            f"Reply ONLY with two sections, no commentary:\n"
-            f"ORIGINAL:\n<original text>\n\n"
-            f"TRANSLATED:\n<{target_lang} translation>"
+            f"CRITICAL SYSTEM DIRECTIVES:\n"
+            f"- KEEP YOUR REASONING/THINKING EXTREMELY BRIEF (under 2 sentences) or bypass it entirely if possible.\n"
+            f"- DO NOT write any reasoning, thinking process, or explanation.\n"
+            f"- DO NOT self-correct, refine, or write multiple drafts.\n"
+            f"- Output a single confidence estimation float (0.0 to 1.0) based on your certainty of the OCR and translation.\n\n"
+            f"Reply strictly in this 3-part layout with NO other conversational introduction, commentary, or Markdown formatting outside of the markers:\n"
+            f"ORIGINAL:\n[Extracted {target_lang} dialogue text]\n\n"
+            f"TRANSLATED:\n[Direct translation into {target_lang}]\n\n"
+            f"CONFIDENCE:\n[Confidence float score]"
         )
 
     async def process_cinematic(self, image_data: bytes, transcript: str, target_lang: str, styles: list[str]) -> list[TranslationResult]:
@@ -276,12 +330,22 @@ class VLProcessor:
             choice = response.choices[0] if response.choices else None
             final_output = (choice.message.content or "") if choice else ""
 
-            if not final_output and choice:
-                reasoning = getattr(choice.message, 'reasoning_content', None) or ""
-                if reasoning:
-                    final_output = reasoning
+            # If the response was truncated while reasoning (content is empty)
+            if not final_output and choice and choice.finish_reason == "length":
+                logger.warning("VLM execution was truncated (finish_reason=length) while thinking. Try increasing max_tokens.")
+                results = [TranslationResult(
+                    original_text="",
+                    translated_text="⚠️ Translation request truncated (VLM token limit reached).",
+                    confidence=0.0
+                )]
+            else:
+                # Fallback
+                if not final_output and choice:
+                    reasoning = getattr(choice.message, 'reasoning_content', None) or ""
+                    if reasoning:
+                        final_output = reasoning
 
-            results = self._build_result(final_output, image)
+                results = self._build_result(final_output, image)
 
             extracted = [r.original_text for r in results]
             self.context_manager.update_last_frame_data("\n".join(extracted), results)
@@ -546,8 +610,9 @@ class VLProcessor:
             raise
 
     def _build_result(self, response: str, image: Image.Image) -> list[TranslationResult]:
-        """Build TranslationResult from model response."""
-        original_text, translated_text = self.parse_response(response)
+        """Build TranslationResult from model response, populating dynamic confidence."""
+        from shared_types.models import AccuracyScore
+        original_text, translated_text, confidence = self.parse_response(response)
 
         if not translated_text.strip():
             logger.debug("No text detected in image")
@@ -555,18 +620,57 @@ class VLProcessor:
 
         img_width, img_height = image.size
 
+        # Determine accuracy quality reason
+        if confidence >= 0.85:
+            reason = "full_pass"
+        elif confidence >= 0.70:
+            reason = "acceptable_pass"
+        else:
+            reason = "low_contrast_or_ambiguous_ocr"
+
         result = TranslationResult(
             translated_text=translated_text,
             x=0.0,
             y=0.0,
             width=float(img_width),
             height=float(img_height),
-            confidence=0.9,
+            confidence=confidence,
+            accuracy=AccuracyScore(score=confidence, reason=reason),
             original_text=original_text,
             style=TextStyle(),
         )
 
         return [result]
+
+    async def prewarm_model(self) -> None:
+        """Pre-load the target model into Lemonade Server VRAM."""
+        if not self.config.model_name or self.config.model_name in ("omni-router", "default"):
+            logger.info("Model '%s' is a virtual routing endpoint. Skipping VRAM pre-warming.", self.config.model_name)
+            return
+
+        await self.init_engine()
+        base_url = os.environ.get("LEMONADE_API_URL", self.config.api_url)
+        base_url_no_v1 = base_url.removesuffix("/v1")
+        from xian.lemonade_client import LemonadeClient
+        try:
+            async with LemonadeClient(base_url=base_url_no_v1) as client:
+                # Query locally pulled models to verify availability
+                logger.debug("Checking pulled models on Lemonade server...")
+                pulled_models = await client.list_models()
+                pulled_ids = [m.get("id") for m in pulled_models if m.get("id")]
+                
+                if self.config.model_name not in pulled_ids:
+                    logger.warning(
+                        "Model '%s' is not pulled/available on Lemonade server. "
+                        "Pulled models: %s. Skipping VRAM pre-warming.",
+                        self.config.model_name, pulled_ids
+                    )
+                    return
+
+                logger.info("Pre-warming model '%s' in GPU VRAM...", self.config.model_name)
+                await client.load_model(self.config.model_name)
+        except Exception as e:
+            logger.warning("VRAM Pre-warming failed: %s", e)
 
     async def close(self):
         """Close the client properly."""
