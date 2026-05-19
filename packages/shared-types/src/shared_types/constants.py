@@ -28,5 +28,5 @@ DEFAULT_LEADER_KEY = "Shift+Space"
 DEFAULT_GPU_MEMORY_UTILIZATION = "Default"
 
 # ── Image Processing ─────────────────────────────────────────────────
-QWEN_MAX_DIMENSION = 1024
+QWEN_MAX_DIMENSION = 640
 IMAGE_HASH_SIZE = 16  # 16×16 perceptual hash

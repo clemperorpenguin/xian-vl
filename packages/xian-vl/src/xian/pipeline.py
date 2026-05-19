@@ -46,7 +46,7 @@ class VLProcessor:
         self._client_lock = asyncio.Lock()
 
         # Initialize context manager for stateful interactions
-        self.context_manager = ContextManager(max_frames=3)
+        self.context_manager = ContextManager(max_frames=1)
 
     async def init_engine(self):
         """Initialize the OpenAI API client (async-safe)."""
