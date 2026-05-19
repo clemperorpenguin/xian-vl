@@ -10,6 +10,12 @@ DEFAULT_API_URL = "http://localhost:13305/v1"
 # ── Model Defaults ───────────────────────────────────────────────────
 DEFAULT_MODEL = "Qwen3.5-9B-GGUF"
 DEFAULT_MAX_TOKENS = 2048
+MODE_MAX_TOKENS: dict[str, int] = {
+    "Game": 512,
+    "Web": 1024,
+    "Document": 2048,
+}
+
 
 # ── Language Defaults ────────────────────────────────────────────────
 DEFAULT_SOURCE_LANG = "Chinese"

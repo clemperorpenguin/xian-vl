@@ -32,6 +32,8 @@ class ResultBubble(QWidget):
 
         self._text = text
         self._original = original_text
+        self._anchor_rect = anchor_rect
+        self._orig_label = None
 
         border = border_color if border_color else accent_hex()
 
@@ -84,18 +86,18 @@ class ResultBubble(QWidget):
 
         # Original text (collapsed by default)
         if original_text:
-            orig_label = QLabel(original_text)
-            orig_label.setWordWrap(True)
-            orig_label.setStyleSheet("color: #999; font-size: 11px; font-style: italic;")
-            orig_label.setMaximumHeight(60)
-            layout.addWidget(orig_label)
+            self._orig_label = QLabel(original_text)
+            self._orig_label.setWordWrap(True)
+            self._orig_label.setStyleSheet("color: #999; font-size: 11px; font-style: italic;")
+            self._orig_label.setMaximumHeight(60)
+            layout.addWidget(self._orig_label)
 
         # Translation
-        trans_label = QLabel(text)
-        trans_label.setWordWrap(True)
-        trans_label.setFont(QFont("sans-serif", 13))
-        trans_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(trans_label)
+        self._trans_label = QLabel(text)
+        self._trans_label.setWordWrap(True)
+        self._trans_label.setFont(QFont("sans-serif", 13))
+        self._trans_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self._trans_label)
 
         # Footer
         footer = QHBoxLayout()
@@ -151,3 +153,22 @@ class ResultBubble(QWidget):
         if cb:
             cb.setText(self._text)
             logger.info("Translation copied to clipboard")
+
+    def update_text(self, text: str, original_text: str = "") -> None:
+        """Update displayed translation text in-place."""
+        self._text = text
+        self._trans_label.setText(text)
+        if original_text:
+            self._original = original_text
+            if self._orig_label:
+                self._orig_label.setText(original_text)
+                self._orig_label.show()
+        
+        self.adjustSize()
+        # Clamp width
+        max_w = 500
+        if self.width() > max_w:
+            self.setFixedWidth(max_w)
+            self.adjustSize()
+        if self._anchor_rect and not self._anchor_rect.isEmpty():
+            self._position_near(self._anchor_rect)

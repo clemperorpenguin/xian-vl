@@ -272,6 +272,8 @@ class XianApp(QWidget):
         self._workers: list = []
         # Active result bubbles (prevent GC)
         self._bubbles: list = []
+        # Map active InferenceWorker to its temporary/loading ResultBubble
+        self._active_bubbles: dict[InferenceWorker, ResultBubble] = {}
         # Guard against repeated pull attempts
         self._model_pull_attempted: bool = False
 
@@ -333,7 +335,9 @@ class XianApp(QWidget):
         self.settings.setValue(key, value)
         if key == KEY_API_MODEL:
             self.processor.config.model_name = value
-            self.processor.client = None
+            self.processor.engine.reconfigure(
+                base_url=self.processor.config.api_url
+            )
             self._run_health_check()
             self._prewarm_worker = PrewarmWorker(self.processor)
             self._prewarm_worker.start()
@@ -422,6 +426,12 @@ class XianApp(QWidget):
             anchor_rect=anchor_rect,
         )
 
+        worker.thinking.connect(
+            lambda w=worker: self._on_inference_thinking(w)
+        )
+        worker.translation_partial.connect(
+            lambda text, act, w=worker: self._on_inference_partial(text, act, w)
+        )
         worker.translation_done.connect(
             lambda results, act, w=worker: self._on_inference_done(results, act, w)
         )
@@ -434,9 +444,28 @@ class XianApp(QWidget):
         worker.start()
         logger.info("InferenceWorker started for action=%s", action)
 
+    def _on_inference_thinking(self, worker):
+        anchor = worker.anchor_rect
+        bubble = ResultBubble(
+            "Translating...",
+            anchor_rect=anchor,
+            auto_close_ms=0,
+        )
+        self._active_bubbles[worker] = bubble
+        self._bubbles = [b for b in self._bubbles if b.isVisible()]
+        self._bubbles.append(bubble)
+
+    def _on_inference_partial(self, text, action, worker):
+        bubble = self._active_bubbles.get(worker)
+        if bubble and bubble.isVisible():
+            bubble.update_text(text)
+
     def _on_inference_done(self, results, action, worker):
         """Handle completed inference."""
         anchor = worker.anchor_rect
+        bubble = self._active_bubbles.pop(worker, None)
+        if bubble:
+            bubble.close()
 
         if not results:
             logger.info("Inference returned no results")
@@ -524,6 +553,9 @@ class XianApp(QWidget):
 
     def _on_inference_error(self, msg, worker):
         anchor = worker.anchor_rect
+        bubble = self._active_bubbles.pop(worker, None)
+        if bubble:
+            bubble.close()
         bubble = ResultBubble(
             f"⚠ Error: {msg}",
             anchor_rect=anchor,
@@ -778,8 +810,9 @@ class XianApp(QWidget):
             self.processor.config.api_url = _normalized_api_url_from_settings(self.settings)
             self.processor.config.model_name = self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
             self.processor.config.max_tokens = int(self.settings.value(KEY_MAX_TOKENS, constants.DEFAULT_MAX_TOKENS))
-            # Force re-init on next inference
-            self.processor.client = None
+            self.processor.engine.reconfigure(
+                base_url=self.processor.config.api_url
+            )
             # Re-run health check
             self._run_health_check()
             

@@ -10,6 +10,7 @@ from PyQt6.QtCore import QThread, QRect, pyqtSignal
 
 from mage.capture.audio import capture_system_audio
 from xian.lemonade_client import LemonadeClient
+from xian.timeout import vision_timeout_for_mode
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,10 @@ class InferenceWorker(QThread):
 
     # (list_of_TranslationResult, action_string)
     translation_done = pyqtSignal(list, str)
+    # (partial_translation_text, action_string)
+    translation_partial = pyqtSignal(str, str)
+    # emitted as soon as run() starts
+    thinking = pyqtSignal()
     # (chat_response_text,)
     chat_done = pyqtSignal(str)
     error = pyqtSignal(str)
@@ -45,28 +50,67 @@ class InferenceWorker(QThread):
         self.anchor_rect = anchor_rect or QRect()
 
     def run(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # Ensure the engine is initialised
-            if not self.processor.client:
-                loop.run_until_complete(self.processor.init_engine())
+        self.thinking.emit()
 
-            if self.action == "chat":
-                response = loop.run_until_complete(
-                    self.processor.process_chat(self.chat_message)
-                )
+        if self.action == "chat":
+            future = self.processor.engine.submit(
+                self.processor.process_chat(self.chat_message)
+            )
+            try:
+                response = future.result(timeout=vision_timeout_for_mode(self.mode))
                 self.chat_done.emit(response)
-            else:
-                results = loop.run_until_complete(
-                    self.processor.process_frame(self.image_data, self.source_lang, self.target_lang, self.mode, self.styles)
-                )
-                self.translation_done.emit(results, self.action)
+            except Exception as e:
+                logger.error("InferenceWorker chat error: %s", e)
+                self.error.emit(str(e))
+            return
+
+        engine_loop = self.processor.engine._loop
+        if not engine_loop:
+            self.error.emit("Engine loop not running")
+            return
+
+        import asyncio
+        q: asyncio.Queue[str | None] = asyncio.Queue()
+
+        async def _stream_to_queue():
+            async for _orig, trans in self.processor.stream_frame(
+                self.image_data, self.source_lang, self.target_lang,
+                self.mode, self.styles
+            ):
+                await q.put(trans)
+            await q.put(None)
+
+        stream_future = self.processor.engine.submit(_stream_to_queue())
+
+        timeout = vision_timeout_for_mode(self.mode)
+        try:
+            while True:
+                item = asyncio.run_coroutine_threadsafe(
+                    q.get(), engine_loop
+                ).result(timeout=timeout)
+                if item is None:
+                    break
+                self.translation_partial.emit(item, self.action)
+
+            stream_future.result()
+
+            results = self.processor.last_stream_results
+            self.translation_done.emit(results, self.action)
+
+            # Fire-and-forget stats log
+            async def _log_stats():
+                try:
+                     base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
+                     async with LemonadeClient(base_url=base_url.removesuffix("/v1")) as c:
+                         stats = await c.stats()
+                         logger.debug("Lemonade stats post-inference: %s", stats)
+                except Exception:
+                     pass
+            self.processor.engine.submit(_log_stats())
+
         except Exception as e:
             logger.error("InferenceWorker error: %s", e)
             self.error.emit(str(e))
-        finally:
-            loop.close()
 
 
 class CinematicWorker(QThread):
@@ -89,16 +133,21 @@ class CinematicWorker(QThread):
         self.anchor_rect = anchor_rect or QRect()
 
     async def _run_async(self):
-        # 1. Capture 4 seconds of audio (while user is viewing subtitle)
-        # Note: Depending on timing, if triggered right as text appears, 4s is usually enough.
-        audio_bytes = await capture_system_audio(duration_seconds=4.0)
+        # 1. Start audio capture task (4 seconds recording)
+        audio_task = asyncio.create_task(capture_system_audio(duration_seconds=4.0))
+
+        # 2. Preprocess and encode the image on CPU
+        image = self.processor.preprocess_image(self.image_data)
+        b64_image = self.processor.encode_image(image)
+
+        # 3. Await audio recording completion
+        audio_bytes = await audio_task
         
         transcript = ""
         if audio_bytes:
-            # 2. Transcribe via Lemonade
+            # 4. Transcribe via Lemonade
             try:
                 base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
-                # LemonadeClient expects base url without /v1 but DEFAULT_API_URL has it.
                 base_url_no_v1 = base_url.removesuffix("/v1")
                 client = LemonadeClient(base_url=base_url_no_v1)
                 transcript = await client.transcribe(audio_bytes)
@@ -106,29 +155,27 @@ class CinematicWorker(QThread):
             except Exception as e:
                 logger.warning("Audio transcription failed: %s", e)
 
-        # 3. Process vision + transcript
-        if not self.processor.client:
-            await self.processor.init_engine()
-
+        # 5. Process vision + transcript with precomputed base64/image
         results = await self.processor.process_cinematic(
             self.image_data, 
             transcript, 
             self.target_lang, 
-            self.styles
+            self.styles,
+            b64_image=b64_image,
+            image=image
         )
         return results
 
     def run(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # CinematicWorker can still run its own one-shot loop or submit to the engine loop
+        # Submitting to engine loop is safer and reuses client
+        future = self.processor.engine.submit(self._run_async())
         try:
-            results = loop.run_until_complete(self._run_async())
+            results = future.result(timeout=vision_timeout_for_mode("Document") + 5.0)
             self.translation_done.emit(results, "cinematic")
         except Exception as e:
             logger.error("CinematicWorker error: %s", e)
             self.error.emit(str(e))
-        finally:
-            loop.close()
 
 
 class StatusWorker(QThread):
@@ -201,12 +248,9 @@ class PrewarmWorker(QThread):
         self.processor = processor
 
     def run(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            if hasattr(self.processor, "prewarm_model"):
-                loop.run_until_complete(self.processor.prewarm_model())
-        except Exception as e:
-            logger.warning("PrewarmWorker error: %s", e)
-        finally:
-            loop.close()
+        if hasattr(self.processor, "prewarm_model"):
+            future = self.processor.engine.submit(self.processor.prewarm_model())
+            try:
+                future.result(timeout=60)
+            except Exception as e:
+                logger.warning("PrewarmWorker error: %s", e)

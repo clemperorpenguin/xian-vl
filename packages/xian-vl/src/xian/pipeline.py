@@ -11,8 +11,9 @@ from dataclasses import dataclass
 
 from PIL import Image
 from openai import AsyncOpenAI
+import imagehash
 
-from shared_types.constants import DEFAULT_API_URL, DEFAULT_MAX_TOKENS, QWEN_MAX_DIMENSION
+from shared_types.constants import DEFAULT_API_URL, DEFAULT_MAX_TOKENS, QWEN_MAX_DIMENSION, IMAGE_HASH_SIZE, MODE_MAX_TOKENS
 from shared_types.models import TranslationResult, TextStyle
 from xian.compiler import WikiCompiler
 from xian.context_manager import ContextManager
@@ -23,6 +24,7 @@ from xian.timeout import (
     CHAT_TIMEOUT_SECONDS,
     vision_timeout_for_mode,
 )
+from xian.async_engine import AsyncEngine
 
 logger = logging.getLogger(__name__)
 
@@ -42,25 +44,39 @@ class VLProcessor:
 
     def __init__(self, config: VLConfig | None = None):
         self.config = config or VLConfig()
-        self.client: AsyncOpenAI | None = None
-        self._client_lock = asyncio.Lock()
+        self.engine = AsyncEngine(
+            base_url=os.environ.get("LEMONADE_API_URL", self.config.api_url),
+            api_key=os.environ.get("LEMONADE_API_KEY", "not-needed")
+        )
+        self.engine.start()
+
+        # Perceptual hash caching properties
+        self._last_phash: str | None = None
+        self._last_b64: str | None = None
+        self._last_results: list[TranslationResult] | None = None
+        self.last_stream_results: list[TranslationResult] = []
 
         # Initialize context manager for stateful interactions
         self.context_manager = ContextManager(max_frames=1)
 
+    @property
+    def client(self) -> AsyncOpenAI:
+        return self.engine.client
+
     async def init_engine(self):
-        """Initialize the OpenAI API client (async-safe)."""
-        async with self._client_lock:
-            if self.client:
-                return  # already initialized by another coroutine
-            # Use configured API URL, falling back to environment variable if set
-            base_url = os.environ.get("LEMONADE_API_URL", self.config.api_url)
-            api_key = os.environ.get("LEMONADE_API_KEY", "not-needed")
-            logger.info("Initializing OpenAI client with base_url: %s", base_url)
-            self.client = AsyncOpenAI(
-                base_url=base_url,
-                api_key=api_key,
-            )
+        """No-op stub for backward compatibility."""
+        pass
+
+    def _get_or_encode_image(self, image: Image.Image) -> tuple[str, bool]:
+        """Return (b64_string, was_cached). Skips re-encoding if image is unchanged."""
+        phash = str(imagehash.phash(image, hash_size=IMAGE_HASH_SIZE))
+        if phash == self._last_phash and self._last_b64:
+            logger.debug("Image unchanged (phash=%s), reusing cached b64", phash)
+            return self._last_b64, True
+        b64 = self.encode_image(image)
+        self._last_phash = phash
+        self._last_b64 = b64
+        return b64, False
 
     def preprocess_image(self, image_data: bytes) -> Image.Image:
         """
@@ -195,15 +211,19 @@ class VLProcessor:
         """
         Process a single frame with unified OCR and translation via OmniRouter.
         """
-        if not self.client:
-            raise RuntimeError("Engine not initialized. Call init_engine() first.")
+        if not self.engine:
+            raise RuntimeError("Engine not initialized.")
 
         # Preprocess and store in context manager
         image = self.preprocess_image(image_data)
         self.context_manager.add_frame(image)
 
+        b64_image, was_cached = self._get_or_encode_image(image)
+        if was_cached and self._last_results is not None:
+            logger.info("Returning cached translation result (identical frame)")
+            return self._last_results
+
         prompt = self.create_prompt(source_lang, target_lang, mode, styles)
-        b64_image = self.encode_image(image)
 
         messages = [
             {
@@ -215,13 +235,15 @@ class VLProcessor:
             }
         ]
 
+        max_tok = MODE_MAX_TOKENS.get(mode, self.config.max_tokens)
+
         try:
             logger.info("Sending translation request to OmniRouter via OpenAI...")
             response = await asyncio.wait_for(
                 self.client.chat.completions.create(
                     model=self.config.model_name,
                     messages=messages,
-                    max_tokens=self.config.max_tokens,
+                    max_tokens=max_tok,
                     temperature=self.config.temperature,
                 ),
                 timeout=vision_timeout_for_mode(mode),
@@ -264,6 +286,9 @@ class VLProcessor:
             extracted = [r.original_text for r in results]
             self.context_manager.update_last_frame_data("\n".join(extracted), results)
 
+            # Cache the result
+            self._last_results = results
+
             return results
 
         except asyncio.TimeoutError:
@@ -272,6 +297,71 @@ class VLProcessor:
 
         except Exception as e:
             logger.error("Error during OpenAI API inference: %s", e, exc_info=True)
+            raise
+
+    async def stream_frame(self, image_data: bytes, source_lang: str, target_lang: str, mode: str, styles: list[str]):
+        """Streaming version of process_frame. Yields (original, translated) partials."""
+        if not self.engine:
+            raise RuntimeError("Engine not initialized.")
+
+        image = self.preprocess_image(image_data)
+        self.context_manager.add_frame(image)
+        prompt = self.create_prompt(source_lang, target_lang, mode, styles)
+
+        # Check cache
+        b64_image, was_cached = self._get_or_encode_image(image)
+        if was_cached and self._last_results is not None:
+            logger.info("Returning cached translation result (identical frame) via stream")
+            self.last_stream_results = self._last_results
+            original_combined = "\n".join(r.original_text for r in self._last_results if r.original_text)
+            translation_combined = "\n".join(r.translated_text for r in self._last_results if r.translated_text)
+            yield original_combined, translation_combined
+            return
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
+                ]
+            }
+        ]
+
+        max_tok = MODE_MAX_TOKENS.get(mode, self.config.max_tokens)
+        accumulated = ""
+
+        try:
+            logger.info("Sending streaming translation request to OmniRouter via OpenAI...")
+            stream = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.config.model_name,
+                    messages=messages,
+                    max_tokens=max_tok,
+                    temperature=self.config.temperature,
+                    stream=True,
+                ),
+                timeout=vision_timeout_for_mode(mode),
+            )
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content or "" if chunk.choices else ""
+                accumulated += delta
+                orig, trans, _ = self.parse_response(accumulated)
+                yield orig, trans
+
+            results = self._build_result(accumulated, image)
+            self._last_results = results
+            self.last_stream_results = results
+
+            extracted = [r.original_text for r in results]
+            self.context_manager.update_last_frame_data("\n".join(extracted), results)
+
+        except asyncio.TimeoutError:
+            logger.error("OpenAI streaming translation timed out (mode=%s)", mode)
+            raise RuntimeError("Translation request timed out.") from None
+
+        except Exception as e:
+            logger.error("Error during OpenAI API streaming inference: %s", e, exc_info=True)
             raise
 
     def create_cinematic_prompt(self, transcript: str, target_lang: str, styles: list[str]) -> str:
@@ -292,18 +382,20 @@ class VLProcessor:
             f"CONFIDENCE:\n[Confidence float score]"
         )
 
-    async def process_cinematic(self, image_data: bytes, transcript: str, target_lang: str, styles: list[str]) -> list[TranslationResult]:
+    async def process_cinematic(self, image_data: bytes, transcript: str, target_lang: str, styles: list[str], b64_image: str | None = None, image: Image.Image | None = None) -> list[TranslationResult]:
         """
         Process a single frame along with an audio transcript using OmniRouter.
         """
-        if not self.client:
-            raise RuntimeError("Engine not initialized. Call init_engine() first.")
+        if not self.engine:
+            raise RuntimeError("Engine not initialized.")
 
-        image = self.preprocess_image(image_data)
+        if image is None:
+            image = self.preprocess_image(image_data)
         self.context_manager.add_frame(image)
 
         prompt = self.create_cinematic_prompt(transcript, target_lang, styles)
-        b64_image = self.encode_image(image)
+        if b64_image is None:
+            b64_image = self.encode_image(image)
 
         messages = [
             {
@@ -674,6 +766,5 @@ class VLProcessor:
 
     async def close(self):
         """Close the client properly."""
-        if self.client:
-            await self.client.close()
-            self.client = None
+        if self.engine:
+            self.engine.shutdown()

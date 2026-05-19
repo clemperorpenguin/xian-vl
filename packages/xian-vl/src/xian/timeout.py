@@ -35,9 +35,9 @@ MODE_TIMEOUTS: dict[str, float] = {
 # Whole-frame VLM calls (screenshot → OCR + translate). Lemonade / local models
 # routinely need tens of seconds, especially on first load or large images.
 VISION_TIMEOUTS: dict[str, float] = {
-    "Game": 120.0,
-    "Web": 120.0,
-    "Document": 180.0,
+    "Game": 30.0,
+    "Web": 60.0,
+    "Document": 120.0,
 }
 
 # Chat / agentic flows (tool calls + follow-up) need a larger budget than live OCR.
