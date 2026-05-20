@@ -154,10 +154,11 @@ class JX3Database:
     def search_spec(self, query: str):
         """Search for specs by Chinese or English name (substring match)."""
         with self._lock:
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             cursor = self.conn.cursor()
             cursor.execute(
-                "SELECT * FROM specs WHERE cn_name LIKE ? OR en_name LIKE ? COLLATE NOCASE",
-                (f"%{query}%", f"%{query}%"),
+                "SELECT * FROM specs WHERE cn_name LIKE ? ESCAPE '\\' OR en_name LIKE ? ESCAPE '\\' COLLATE NOCASE",
+                (f"%{escaped}%", f"%{escaped}%"),
             )
             return [dict(row) for row in cursor.fetchall()]
 

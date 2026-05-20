@@ -122,25 +122,22 @@ class ScreenCapture:
     def _capture_spectacle() -> bytes | None:
         """Capture screen using Spectacle (KDE)"""
         try:
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmp:
-                tmp_path = tmp.name
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp_path = os.path.join(tmpdir, "capture.png")
 
-            # -b: background, -n: no notification, -f: fullscreen, -o: output
-            result = subprocess.run(
-                ["spectacle", "-b", "-n", "-f", "-o", tmp_path],
-                capture_output=True, timeout=5
-            )
+                # -b: background, -n: no notification, -f: fullscreen, -o: output
+                result = subprocess.run(
+                    ["spectacle", "-b", "-n", "-f", "-o", tmp_path],
+                    capture_output=True, timeout=5
+                )
 
-            if result.returncode == 0 and os.path.exists(tmp_path):
-                with open(tmp_path, "rb") as f:
-                    data = f.read()
-                os.unlink(tmp_path)
+                if result.returncode == 0 and os.path.exists(tmp_path):
+                    with open(tmp_path, "rb") as f:
+                        data = f.read()
 
-                if not ScreenCapture._is_image_empty(data):
-                    logger.debug("Captured screen via Spectacle")
-                    return data
-
-            if os.path.exists(tmp_path): os.unlink(tmp_path)
+                    if not ScreenCapture._is_image_empty(data):
+                        logger.debug("Captured screen via Spectacle")
+                        return data
         except Exception as e:
             logger.debug("Spectacle capture error: %s", e)
         return None
@@ -150,44 +147,38 @@ class ScreenCapture:
         """Capture screen using GNOME screenshot methods"""
         # Try gnome-screenshot CLI first
         try:
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmp:
-                tmp_path = tmp.name
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp_path = os.path.join(tmpdir, "capture.png")
+                result = subprocess.run(
+                    ["gnome-screenshot", "--file", tmp_path],
+                    capture_output=True, timeout=5
+                )
 
-            result = subprocess.run(
-                ["gnome-screenshot", "--file", tmp_path],
-                capture_output=True, timeout=5
-            )
-
-            if result.returncode == 0 and os.path.exists(tmp_path):
-                with open(tmp_path, "rb") as f:
-                    data = f.read()
-                os.unlink(tmp_path)
-                return data
-
-            if os.path.exists(tmp_path): os.unlink(tmp_path)
+                if result.returncode == 0 and os.path.exists(tmp_path):
+                    with open(tmp_path, "rb") as f:
+                        data = f.read()
+                    return data
         except Exception:
             pass
 
         # Try DBus method for modern GNOME
         try:
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmp:
-                tmp_path = tmp.name
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp_path = os.path.join(tmpdir, "capture.png")
+                # Using dbus-send as a fallback to avoid requiring a dbus library
+                # org.gnome.Shell.Screenshot.Screenshot(bool include_cursor, bool flash, string filename)
+                subprocess.run([
+                    "dbus-send", "--session", "--type=method_call",
+                    "--dest=org.gnome.Shell.Screenshot",
+                    "/org/gnome/Shell/Screenshot",
+                    "org.gnome.Shell.Screenshot.Screenshot",
+                    "boolean:false", "boolean:false", f"string:{tmp_path}"
+                ], capture_output=True, timeout=5)
 
-            # Using dbus-send as a fallback to avoid requiring a dbus library
-            # org.gnome.Shell.Screenshot.Screenshot(bool include_cursor, bool flash, string filename)
-            subprocess.run([
-                "dbus-send", "--session", "--type=method_call",
-                "--dest=org.gnome.Shell.Screenshot",
-                "/org/gnome/Shell/Screenshot",
-                "org.gnome.Shell.Screenshot.Screenshot",
-                "boolean:false", "boolean:false", f"string:{tmp_path}"
-            ], capture_output=True, timeout=5)
-
-            if os.path.exists(tmp_path):
-                with open(tmp_path, "rb") as f:
-                    data = f.read()
-                os.unlink(tmp_path)
-                return data
+                if os.path.exists(tmp_path):
+                    with open(tmp_path, "rb") as f:
+                        data = f.read()
+                    return data
         except Exception as e:
             logger.debug("GNOME DBus capture error: %s", e)
 

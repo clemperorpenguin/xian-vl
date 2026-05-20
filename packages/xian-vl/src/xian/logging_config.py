@@ -3,6 +3,11 @@ import sys
 
 def setup_logger(name="xian", level=logging.INFO):
     """Set up and return a logger with a standard configuration"""
+    if not name:
+        name = "xian"
+    elif name != "xian" and not name.startswith("xian."):
+        name = f"xian.{name}"
+
     logger = logging.getLogger(name)
     
     # Avoid duplicate handlers if setup_logger is called multiple times

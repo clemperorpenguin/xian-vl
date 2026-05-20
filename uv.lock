@@ -2014,6 +2014,7 @@ dependencies = [
     { name = "openai" },
     { name = "opencv-python-headless" },
     { name = "pillow" },
+    { name = "pyyaml" },
     { name = "shared-types" },
 ]
 
@@ -2036,6 +2037,7 @@ requires-dist = [
     { name = "opencv-python-headless", specifier = ">=4.8" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pyyaml" },
     { name = "shared-types", editable = "packages/shared-types" },
 ]
 provides-extras = ["mcp", "dev"]

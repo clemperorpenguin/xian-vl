@@ -37,7 +37,9 @@ class DocumentTranslator:
         source_lang: str = "Chinese",
         target_lang: str = "English",
     ) -> None:
-        self._client = AsyncOpenAI(base_url=base_url, api_key="not-needed")
+        import os
+        api_url = os.environ.get("LEMONADE_API_URL", base_url)
+        self._client = AsyncOpenAI(base_url=api_url, api_key="not-needed")
         self._model = model
         self._source = source_lang
         self._target = target_lang

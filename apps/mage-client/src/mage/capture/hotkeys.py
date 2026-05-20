@@ -29,7 +29,6 @@ class HotkeyListener(QObject):
         
     def cancel_command_mode(self):
         pass
-        pass
 
 if sys.platform == "linux":
     import evdev
@@ -104,6 +103,11 @@ if sys.platform == "linux":
         def stop(self):
             """Stop listening."""
             self.running = False
+            for device in self.devices:
+                try:
+                    device.close()
+                except Exception:
+                    pass
 
         def cancel_command_mode(self):
             self.command_mode_active = False
@@ -227,6 +231,7 @@ else:
         def __init__(self):
             super().__init__()
             self.listener = None
+            self.lock = threading.RLock()
             self.current_keys = set()
             self.leader_mod = 'shift'
             self.leader_key_name = 'space'
@@ -236,105 +241,108 @@ else:
             self.mod_clean = True
 
         def set_leader_key(self, leader_string: str):
-            parts = leader_string.lower().split('+')
-            if len(parts) == 2:
-                self.leader_mod = parts[0]
-                self.leader_key_name = parts[1]
+            with self.lock:
+                parts = leader_string.lower().split('+')
+                if len(parts) == 2:
+                    self.leader_mod = parts[0]
+                    self.leader_key_name = parts[1]
             
         def on_press(self, key):
-            is_new_press = key not in self.current_keys
-            self.current_keys.add(key)
-            
-            now = time.time()
-            if self.command_mode_active and now > self.command_mode_end_time:
-                self.command_mode_active = False
-
-            has_mod = False
-            if self.leader_mod == 'shift':
-                has_mod = keyboard.Key.shift in self.current_keys or keyboard.Key.shift_l in self.current_keys or keyboard.Key.shift_r in self.current_keys
-            elif self.leader_mod == 'ctrl':
-                has_mod = keyboard.Key.ctrl in self.current_keys or keyboard.Key.ctrl_l in self.current_keys or keyboard.Key.ctrl_r in self.current_keys
-            elif self.leader_mod == 'alt':
-                has_mod = keyboard.Key.alt in self.current_keys or keyboard.Key.alt_l in self.current_keys or keyboard.Key.alt_r in self.current_keys
-            elif self.leader_mod == 'super':
-                has_mod = keyboard.Key.cmd in self.current_keys or keyboard.Key.cmd_l in self.current_keys or keyboard.Key.cmd_r in self.current_keys
-
-            is_leader_key = False
-            if hasattr(key, 'char') and key.char:
-                is_leader_key = key.char.lower() == self.leader_key_name
-            elif hasattr(key, 'name') and key.name:
-                is_leader_key = key.name == self.leader_key_name
-
-            if is_new_press:
-                is_modifier = key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r,
-                                      keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r,
-                                      keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r,
-                                      keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r)
-                if is_modifier:
-                    self.mod_clean = True
-                elif not is_leader_key:
-                    self.mod_clean = False
-
-            if has_mod and is_leader_key and self.mod_clean:
-                if self.command_mode_active:
-                    logger.info("PynputListener: Command Mode TOGGLED OFF via leader combo")
+            with self.lock:
+                is_new_press = key not in self.current_keys
+                self.current_keys.add(key)
+                
+                now = time.time()
+                if self.command_mode_active and now > self.command_mode_end_time:
                     self.command_mode_active = False
-                    self.command_mode_cancelled.emit()
-                else:
-                    self.command_mode_active = True
-                    self.command_mode_end_time = now + 15.0
-                    logger.info("PynputListener: Command Mode ACTIVATED via %s+%s", self.leader_mod, self.leader_key_name)
-                    self.command_mode_started.emit()
-                return
 
-            if self.command_mode_active and key == keyboard.Key.esc:
-                logger.info("PynputListener: Command Mode CANCELLED via ESC")
-                self.command_mode_active = False
-                self.command_mode_cancelled.emit()
-                return
+                has_mod = False
+                if self.leader_mod == 'shift':
+                    has_mod = keyboard.Key.shift in self.current_keys or keyboard.Key.shift_l in self.current_keys or keyboard.Key.shift_r in self.current_keys
+                elif self.leader_mod == 'ctrl':
+                    has_mod = keyboard.Key.ctrl in self.current_keys or keyboard.Key.ctrl_l in self.current_keys or keyboard.Key.ctrl_r in self.current_keys
+                elif self.leader_mod == 'alt':
+                    has_mod = keyboard.Key.alt in self.current_keys or keyboard.Key.alt_l in self.current_keys or keyboard.Key.alt_r in self.current_keys
+                elif self.leader_mod == 'super':
+                    has_mod = keyboard.Key.cmd in self.current_keys or keyboard.Key.cmd_l in self.current_keys or keyboard.Key.cmd_r in self.current_keys
 
-            if self.cinematic_mode_active:
-                if hasattr(key, 'char') and key.char == '`':
-                    logger.info("PynputListener: Triggered Cinematic Capture")
-                    self.cinematic_capture.emit()
+                is_leader_key = False
+                if hasattr(key, 'char') and key.char:
+                    is_leader_key = key.char.lower() == self.leader_key_name
+                elif hasattr(key, 'name') and key.name:
+                    is_leader_key = key.name == self.leader_key_name
+
+                if is_new_press:
+                    is_modifier = key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r,
+                                          keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r,
+                                          keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r,
+                                          keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r)
+                    if is_modifier:
+                        self.mod_clean = True
+                    elif not is_leader_key:
+                        self.mod_clean = False
+
+                if has_mod and is_leader_key and self.mod_clean:
+                    if self.command_mode_active:
+                        logger.info("PynputListener: Command Mode TOGGLED OFF via leader combo")
+                        self.command_mode_active = False
+                        self.command_mode_cancelled.emit()
+                    else:
+                        self.command_mode_active = True
+                        self.command_mode_end_time = now + 15.0
+                        logger.info("PynputListener: Command Mode ACTIVATED via %s+%s", self.leader_mod, self.leader_key_name)
+                        self.command_mode_started.emit()
                     return
 
-            if self.command_mode_active:
-                try:
-                    if hasattr(key, 'char') and key.char:
-                        char = key.char.lower()
-                        if char == 'c':
-                            logger.info("PynputListener: Triggered Lens")
-                            self.trigger_lens.emit()
-                            self.command_mode_active = False
-                        elif char == 'a':
-                            logger.info("PynputListener: Triggered Chat")
-                            self.trigger_chat.emit()
-                            self.command_mode_active = False
-                        elif char == 's':
-                            logger.info("PynputListener: Triggered Settings")
-                            self.trigger_settings.emit()
-                            self.command_mode_active = False
-                        elif char == 'o':
-                            logger.info("PynputListener: Triggered Dialogue Mode")
-                            self.trigger_dialogue_mode.emit()
-                            self.command_mode_active = False
-                        elif char == 'm':
-                            logger.info("PynputListener: Triggered Cinematic Mode")
-                            self.trigger_cinematic_mode.emit()
-                            self.command_mode_active = False
-                        elif char == 't':
-                            logger.info("PynputListener: Triggered Translate")
-                            self.trigger_how_to_say.emit()
-                            self.command_mode_active = False
-                except Exception as e:
-                    logger.debug("PynputListener error: %s", e)
+                if self.command_mode_active and key == keyboard.Key.esc:
+                    logger.info("PynputListener: Command Mode CANCELLED via ESC")
+                    self.command_mode_active = False
+                    self.command_mode_cancelled.emit()
+                    return
+
+                if self.cinematic_mode_active:
+                    if hasattr(key, 'char') and key.char == '`':
+                        logger.info("PynputListener: Triggered Cinematic Capture")
+                        self.cinematic_capture.emit()
+                        return
+
+                if self.command_mode_active:
+                    try:
+                        if hasattr(key, 'char') and key.char:
+                            char = key.char.lower()
+                            if char == 'c':
+                                logger.info("PynputListener: Triggered Lens")
+                                self.trigger_lens.emit()
+                                self.command_mode_active = False
+                            elif char == 'a':
+                                logger.info("PynputListener: Triggered Chat")
+                                self.trigger_chat.emit()
+                                self.command_mode_active = False
+                            elif char == 's':
+                                logger.info("PynputListener: Triggered Settings")
+                                self.trigger_settings.emit()
+                                self.command_mode_active = False
+                            elif char == 'o':
+                                logger.info("PynputListener: Triggered Dialogue Mode")
+                                self.trigger_dialogue_mode.emit()
+                                self.command_mode_active = False
+                            elif char == 'm':
+                                logger.info("PynputListener: Triggered Cinematic Mode")
+                                self.trigger_cinematic_mode.emit()
+                                self.command_mode_active = False
+                            elif char == 't':
+                                logger.info("PynputListener: Triggered Translate")
+                                self.trigger_how_to_say.emit()
+                                self.command_mode_active = False
+                    except Exception as e:
+                        logger.debug("PynputListener error: %s", e)
                 
         def on_release(self, key):
-            try:
-                self.current_keys.remove(key)
-            except KeyError:
-                pass
+            with self.lock:
+                try:
+                    self.current_keys.remove(key)
+                except KeyError:
+                    pass
 
         def start(self):
             if not self.listener:
@@ -348,8 +356,9 @@ else:
                 self.listener = None
 
         def cancel_command_mode(self):
-            self.command_mode_active = False
-            self.command_mode_end_time = 0.0
+            with self.lock:
+                self.command_mode_active = False
+                self.command_mode_end_time = 0.0
 
 def create_hotkey_listener() -> HotkeyListener:
     if sys.platform == "linux":

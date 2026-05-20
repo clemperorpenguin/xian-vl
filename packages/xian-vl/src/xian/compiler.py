@@ -34,6 +34,13 @@ class WikiCompiler:
         filename = f"{safe_filename}.md"
         filepath = os.path.join(self.wiki_dir, filename)
         
+        # Defense-in-depth: ensure the resolved path is within the wiki directory
+        from pathlib import Path
+        try:
+            Path(filepath).resolve().relative_to(Path(self.wiki_dir).resolve())
+        except ValueError:
+            raise ValueError(f"Entity name would escape wiki directory: {entity_name!r}")
+        
         # Prepare frontmatter
         frontmatter = {
             "title": entity_name,

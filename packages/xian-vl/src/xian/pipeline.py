@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import json
+import threading
 from dataclasses import dataclass
 
 from PIL import Image
@@ -14,7 +15,7 @@ from openai import AsyncOpenAI
 import imagehash
 
 from shared_types.constants import DEFAULT_API_URL, DEFAULT_MAX_TOKENS, QWEN_MAX_DIMENSION, IMAGE_HASH_SIZE, MODE_MAX_TOKENS
-from shared_types.models import TranslationResult, TextStyle
+from shared_types.models import TranslationResult, TextStyle, AccuracyScore
 from xian.compiler import WikiCompiler
 from xian.context_manager import ContextManager
 from xian.searcher import LocalWikiSearcher, WebSearcher
@@ -25,6 +26,7 @@ from xian.timeout import (
     vision_timeout_for_mode,
 )
 from xian.async_engine import AsyncEngine
+from xian.lemonade_client import LemonadeClient
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,9 @@ class VLProcessor:
         )
         self.engine.start()
 
+        # Thread lock for caching properties
+        self._lock = threading.Lock()
+
         # Perceptual hash caching properties
         self._last_phash: str | None = None
         self._last_b64: str | None = None
@@ -74,13 +79,17 @@ class VLProcessor:
     def _get_or_encode_image(self, image: Image.Image) -> tuple[str, bool]:
         """Return (b64_string, was_cached). Skips re-encoding if image is unchanged."""
         phash = str(imagehash.phash(image, hash_size=IMAGE_HASH_SIZE))
-        if phash == self._last_phash and self._last_b64:
-            logger.debug("Image unchanged (phash=%s), reusing cached b64", phash)
-            return self._last_b64, True
+        with self._lock:
+            if phash == self._last_phash and self._last_b64:
+                logger.debug("Image unchanged (phash=%s), reusing cached b64", phash)
+                return self._last_b64, True
         b64 = self.encode_image(image)
-        self._last_phash = phash
-        self._last_b64 = b64
-        return b64, False
+        with self._lock:
+            if phash == self._last_phash and self._last_b64:
+                return self._last_b64, True
+            self._last_phash = phash
+            self._last_b64 = b64
+            return b64, False
 
     def preprocess_image(self, image_data: bytes) -> Image.Image:
         """
@@ -223,118 +232,16 @@ class VLProcessor:
         """
         Process a single frame with unified OCR and translation via OmniRouter.
         """
-        if not self.engine:
-            raise RuntimeError("Engine not initialized.")
-
-        # Preprocess and store in context manager
-        image = self.preprocess_image(image_data)
-        self.context_manager.add_frame(image)
-
-        b64_image, was_cached = self._get_or_encode_image(image)
-        if was_cached and self._last_results is not None:
-            logger.info("Returning cached translation result (identical frame)")
-            return self._last_results
-
-        system_prompt, user_prompt = self.create_prompt(source_lang, target_lang, mode, styles)
-
-        messages = [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
-                ]
-            }
-        ]
-
-        max_tok = max(MODE_MAX_TOKENS.get(mode, self.config.max_tokens), 2048)
-
-        try:
-            logger.info("Sending translation request to OmniRouter via OpenAI...")
-            response = await asyncio.wait_for(
-                self.client.chat.completions.create(
-                    model=self.config.model_name,
-                    messages=messages,
-                    max_tokens=max_tok,
-                    temperature=0.1,
-                    frequency_penalty=0.3,
-                ),
-                timeout=vision_timeout_for_mode(mode),
-            )
-
-            # Debug: log raw response structure
-            choice = response.choices[0] if response.choices else None
-            if choice:
-                logger.info(
-                    "API response: finish_reason=%s, content_length=%d, role=%s",
-                    choice.finish_reason,
-                    len(choice.message.content or ''),
-                    choice.message.role,
-                )
-            else:
-                logger.warning("No choices in response. Full response: %s", response)
-
-            final_output = (choice.message.content or "") if choice else ""
-            finish_reason = choice.finish_reason if choice else "stop"
-
-            # If the response was truncated while reasoning (content is empty)
-            if not final_output and finish_reason == "length":
-                logger.warning("VLM execution was truncated (finish_reason=length) while thinking. Try increasing max_tokens.")
-                results = [TranslationResult(
-                    original_text="",
-                    translated_text="⚠️ Translation request truncated (VLM token limit reached).",
-                    confidence=0.0,
-                    truncated=True,
-                    raw_output="",
-                )]
-            else:
-                # Fallback: if the model spent all tokens on reasoning and produced
-                # no content under normal stop, try to extract a usable translation from reasoning_content.
-                if not final_output and choice:
-                    reasoning = getattr(choice.message, 'reasoning_content', None) or ""
-                    if reasoning:
-                        logger.info("Content empty but reasoning_content has %d chars; extracting from it", len(reasoning))
-                        final_output = reasoning
-
-                results = self._build_result(final_output, image)
-
-            # Propagate truncation flag when the model produced partial content
-            if finish_reason == "length" and final_output:
-                if not results:
-                    results = [TranslationResult(
-                        original_text="",
-                        translated_text="⚠️ Translation request truncated (VLM token limit reached).",
-                        confidence=0.0
-                    )]
-                for r in results:
-                    r.truncated = True
-                    r.raw_output = final_output
-
-            # Update context manager with extracted data
-            extracted = [r.original_text for r in results]
-            self.context_manager.update_last_frame_data("\n".join(extracted), results)
-
-            # Cache the result and stash continuation context
-            self._last_results = results
-            self._last_messages = messages
-            self._last_raw_output = final_output
-
-            return results
-
-        except asyncio.TimeoutError:
-            logger.error("OpenAI translation timed out (mode=%s)", mode)
-            raise RuntimeError("Translation request timed out.") from None
-
-        except Exception as e:
-            logger.error("Error during OpenAI API inference: %s", e, exc_info=True)
-            raise
+        results_data = None
+        async for _, _, extra in self.stream_frame(image_data, source_lang, target_lang, mode, styles):
+            if extra is not None:
+                results_data = extra[0]
+        if results_data is None:
+            raise RuntimeError("Stream frame failed to produce results.")
+        return results_data
 
     async def stream_frame(self, image_data: bytes, source_lang: str, target_lang: str, mode: str, styles: list[str]):
-        """Streaming version of process_frame. Yields (original, translated) partials."""
+        """Streaming version of process_frame. Yields (original, translated, results_data) partials."""
         if not self.engine:
             raise RuntimeError("Engine not initialized.")
 
@@ -344,12 +251,15 @@ class VLProcessor:
 
         # Check cache
         b64_image, was_cached = self._get_or_encode_image(image)
-        if was_cached and self._last_results is not None:
+        with self._lock:
+            cached_results = self._last_results
+        if was_cached and cached_results is not None:
             logger.info("Returning cached translation result (identical frame) via stream")
-            self.last_stream_results = self._last_results
-            original_combined = "\n".join(r.original_text for r in self._last_results if r.original_text)
-            translation_combined = "\n".join(r.translated_text for r in self._last_results if r.translated_text)
-            yield original_combined, translation_combined
+            with self._lock:
+                self.last_stream_results = cached_results
+            original_combined = "\n".join(r.original_text for r in cached_results if r.original_text)
+            translation_combined = "\n".join(r.translated_text for r in cached_results if r.translated_text)
+            yield original_combined, translation_combined, (cached_results, None, None)
             return
 
         messages = [
@@ -376,7 +286,7 @@ class VLProcessor:
                     model=self.config.model_name,
                     messages=messages,
                     max_tokens=max_tok,
-                    temperature=0.1,
+                    temperature=self.config.temperature,
                     frequency_penalty=0.3,
                     stream=True,
                 ),
@@ -389,7 +299,7 @@ class VLProcessor:
                 if chunk.choices and chunk.choices[0].finish_reason:
                     last_finish = chunk.choices[0].finish_reason
                 orig, trans, _ = self.parse_response(accumulated)
-                yield orig, trans
+                yield orig, trans, None
 
             results = self._build_result(accumulated, image)
 
@@ -405,15 +315,16 @@ class VLProcessor:
                     r.truncated = True
                     r.raw_output = accumulated
 
-            self._last_results = results
-            self.last_stream_results = results
-
-            # Stash continuation context
-            self._last_messages = messages
-            self._last_raw_output = accumulated
+            with self._lock:
+                self._last_results = results
+                self.last_stream_results = results
+                self._last_messages = messages
+                self._last_raw_output = accumulated
 
             extracted = [r.original_text for r in results]
             self.context_manager.update_last_frame_data("\n".join(extracted), results)
+
+            yield orig, trans, (results, messages, accumulated)
 
         except asyncio.TimeoutError:
             logger.error("OpenAI streaming translation timed out (mode=%s)", mode)
@@ -464,7 +375,7 @@ class VLProcessor:
                     model=self.config.model_name,
                     messages=continuation_messages,
                     max_tokens=max_tok,
-                    temperature=0.1,
+                    temperature=self.config.temperature,
                     frequency_penalty=0.3,
                     stream=True,
                 ),
@@ -477,11 +388,14 @@ class VLProcessor:
                 accumulated += delta
                 if chunk.choices and chunk.choices[0].finish_reason:
                     last_finish = chunk.choices[0].finish_reason
-                yield partial_output + accumulated, last_finish
+                yield partial_output + accumulated, last_finish, None
 
             # Update stored context for potential further continuations
-            self._last_raw_output = partial_output + accumulated
-            self._last_messages = continuation_messages
+            with self._lock:
+                self._last_raw_output = partial_output + accumulated
+                self._last_messages = continuation_messages
+
+            yield partial_output + accumulated, last_finish, (continuation_messages, partial_output + accumulated)
 
         except asyncio.TimeoutError:
             logger.error("Continuation timed out (mode=%s)", mode)
@@ -491,7 +405,7 @@ class VLProcessor:
             logger.error("Error during continuation: %s", e, exc_info=True)
             raise
 
-    def create_cinematic_prompt(self, transcript: str, target_lang: str, styles: list[str]) -> str:
+    def create_cinematic_prompt(self, transcript: str, target_lang: str, styles: list[str], source_lang: str = "Chinese") -> str:
         """Create a prompt combining audio transcript and visual OCR for cinematic mode."""
         style_context = f" Translate using a {', '.join(styles)} style/tone." if styles else ""
         return (
@@ -504,12 +418,12 @@ class VLProcessor:
             f"- DO NOT self-correct, refine, or write multiple drafts.\n"
             f"- Output a single confidence estimation float (0.0 to 1.0) based on your certainty of the OCR and translation.\n\n"
             f"Reply strictly in this 3-part layout with NO other conversational introduction, commentary, or Markdown formatting outside of the markers:\n"
-            f"ORIGINAL:\n[Extracted {target_lang} dialogue text]\n\n"
+            f"ORIGINAL:\n[Extracted {source_lang} dialogue text]\n\n"
             f"TRANSLATED:\n[Direct translation into {target_lang}]\n\n"
             f"CONFIDENCE:\n[Confidence float score]"
         )
 
-    async def process_cinematic(self, image_data: bytes, transcript: str, target_lang: str, styles: list[str], b64_image: str | None = None, image: Image.Image | None = None) -> list[TranslationResult]:
+    async def process_cinematic(self, image_data: bytes, transcript: str, target_lang: str, styles: list[str], b64_image: str | None = None, image: Image.Image | None = None, source_lang: str = "Chinese") -> list[TranslationResult]:
         """
         Process a single frame along with an audio transcript using OmniRouter.
         """
@@ -520,7 +434,7 @@ class VLProcessor:
             image = self.preprocess_image(image_data)
         self.context_manager.add_frame(image)
 
-        prompt = self.create_cinematic_prompt(transcript, target_lang, styles)
+        prompt = self.create_cinematic_prompt(transcript, target_lang, styles, source_lang=source_lang)
         if b64_image is None:
             b64_image = self.encode_image(image)
 
@@ -618,10 +532,12 @@ class VLProcessor:
         if not self.client:
             raise RuntimeError("Engine not initialized. Call init_engine() first.")
 
-        logger.info("Processing chat message (%d chars)", len(message))
+        # Strip tool-call XML from user input to prevent injection
+        sanitized = re.sub(r'</?(?:tool_call|function|parameter)[^>]*>', '', message)
+        logger.info("Processing chat message (%d chars)", len(sanitized))
 
         # Add user message to context manager
-        self.context_manager.add_user_message(message, with_image=True)
+        self.context_manager.add_user_message(sanitized, with_image=True)
 
         # Build OpenAI-compatible chat history
         openai_messages = []
@@ -830,7 +746,6 @@ class VLProcessor:
 
     def _build_result(self, response: str, image: Image.Image) -> list[TranslationResult]:
         """Build TranslationResult from model response, populating dynamic confidence."""
-        from shared_types.models import AccuracyScore
         original_text, translated_text, confidence = self.parse_response(response)
 
         if not translated_text.strip():
@@ -870,7 +785,6 @@ class VLProcessor:
         await self.init_engine()
         base_url = os.environ.get("LEMONADE_API_URL", self.config.api_url)
         base_url_no_v1 = base_url.removesuffix("/v1")
-        from xian.lemonade_client import LemonadeClient
         try:
             async with LemonadeClient(base_url=base_url_no_v1) as client:
                 # Query locally pulled models to verify availability

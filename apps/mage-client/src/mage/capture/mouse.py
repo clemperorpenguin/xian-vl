@@ -60,6 +60,11 @@ if sys.platform == "linux":
 
         def stop(self):
             self.running = False
+            for device in self.devices:
+                try:
+                    device.close()
+                except Exception:
+                    pass
 
         def _listen_device(self, device: evdev.InputDevice):
             try:

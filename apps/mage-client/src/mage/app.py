@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 ORGANIZATION = constants.ORGANIZATION_NAME
 APP_NAME = constants.APPLICATION_NAME
+MAX_AUTO_CONTINUES = 5
 
 
 def _normalized_api_url_from_settings(settings: QSettings) -> str:
@@ -304,7 +305,15 @@ class XianApp(QWidget):
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(self)
         # Try to load icon, fall back to a theme icon
-        icon = QIcon("xian.png")
+        import os
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(base_dir, "xian.png")
+        if not os.path.exists(icon_path):
+            # Fall back to checking root of workspace/repo
+            icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(base_dir)))), "xian.png")
+        if not os.path.exists(icon_path):
+            icon_path = "xian.png"
+        icon = QIcon(icon_path)
         if icon.isNull():
             icon = QIcon.fromTheme("applications-graphics")
         self.tray.setIcon(icon)
@@ -461,6 +470,40 @@ class XianApp(QWidget):
         worker.start()
         logger.info("InferenceWorker started for action=%s", action)
 
+    def _add_bubble(self, bubble: ResultBubble):
+        """Clean up old bubbles, limit maximum tracked bubbles, and append new one."""
+        self._bubbles = [b for b in self._bubbles if b.isVisible()]
+        if len(self._bubbles) >= 20:  # MAX_BUBBLES
+            # Close the oldest visible bubbles to avoid memory leak and clutter
+            for old in self._bubbles[:-19]:
+                old.close()
+            self._bubbles = self._bubbles[-19:]
+        self._bubbles.append(bubble)
+
+    def _replace_persistent_bubble(self, attr_name: str, text: str, original_text: str = "", anchor: QRect = QRect(), border_color: str | None = None, truncated: bool = False) -> ResultBubble:
+        """Helper to close and recreate a persistent dialogue or cinematic bubble."""
+        old_bubble = getattr(self, attr_name, None)
+        if old_bubble is not None:
+            try:
+                old_bubble.close()
+            except Exception:
+                pass
+        
+        bubble = ResultBubble(
+            text,
+            original_text=original_text,
+            anchor_rect=anchor,
+            auto_close_ms=0,
+            border_color=border_color,
+            truncated=truncated,
+        )
+        setattr(self, attr_name, bubble)
+        if truncated:
+            bubble.continue_requested.connect(
+                lambda b=bubble: self._on_continue_requested(b)
+            )
+        return bubble
+
     def _on_inference_thinking(self, worker):
         anchor = worker.anchor_rect
         bubble = ResultBubble(
@@ -469,8 +512,7 @@ class XianApp(QWidget):
             auto_close_ms=0,
         )
         self._active_bubbles[worker] = bubble
-        self._bubbles = [b for b in self._bubbles if b.isVisible()]
-        self._bubbles.append(bubble)
+        self._add_bubble(bubble)
 
     def _on_inference_partial(self, text, action, worker):
         bubble = self._active_bubbles.get(worker)
@@ -491,8 +533,7 @@ class XianApp(QWidget):
                 anchor_rect=anchor,
                 auto_close_ms=5000,
             )
-            self._bubbles = [b for b in self._bubbles if b.isVisible()]
-            self._bubbles.append(bubble)
+            self._add_bubble(bubble)
             return
 
         # Combine all results into a single display
@@ -526,53 +567,23 @@ class XianApp(QWidget):
         any_truncated = any(getattr(r, 'truncated', False) for r in results)
 
         if action == "cinematic":
-            if self.cinematic_bubble is None or not self.cinematic_bubble.isVisible():
-                self.cinematic_bubble = ResultBubble(
-                    translation_combined,
-                    original_text=original_combined,
-                    anchor_rect=anchor,
-                    auto_close_ms=0,
-                    border_color=border_color,
-                    truncated=any_truncated,
-                )
-            else:
-                self.cinematic_bubble.close()
-                self.cinematic_bubble = ResultBubble(
-                    translation_combined,
-                    original_text=original_combined,
-                    anchor_rect=anchor,
-                    auto_close_ms=0,
-                    border_color=border_color,
-                    truncated=any_truncated,
-                )
-            if any_truncated:
-                self.cinematic_bubble.continue_requested.connect(
-                    lambda b=self.cinematic_bubble: self._on_continue_requested(b)
-                )
+            target_bubble = self._replace_persistent_bubble(
+                "cinematic_bubble",
+                translation_combined,
+                original_text=original_combined,
+                anchor=anchor,
+                border_color=border_color,
+                truncated=any_truncated,
+            )
         elif self.dialogue_mode_active:
-            if self.dialogue_bubble is None or not self.dialogue_bubble.isVisible():
-                self.dialogue_bubble = ResultBubble(
-                    translation_combined,
-                    original_text=original_combined,
-                    anchor_rect=anchor,
-                    auto_close_ms=0,  # Persistent
-                    border_color=border_color,
-                    truncated=any_truncated,
-                )
-            else:
-                self.dialogue_bubble.close()
-                self.dialogue_bubble = ResultBubble(
-                    translation_combined,
-                    original_text=original_combined,
-                    anchor_rect=anchor,
-                    auto_close_ms=0,
-                    border_color=border_color,
-                    truncated=any_truncated,
-                )
-            if any_truncated:
-                self.dialogue_bubble.continue_requested.connect(
-                    lambda b=self.dialogue_bubble: self._on_continue_requested(b)
-                )
+            target_bubble = self._replace_persistent_bubble(
+                "dialogue_bubble",
+                translation_combined,
+                original_text=original_combined,
+                anchor=anchor,
+                border_color=border_color,
+                truncated=any_truncated,
+            )
         else:
             bubble = ResultBubble(
                 translation_combined,
@@ -581,25 +592,30 @@ class XianApp(QWidget):
                 border_color=border_color,
                 truncated=any_truncated,
             )
+            target_bubble = bubble
             if any_truncated:
                 bubble.continue_requested.connect(
                     lambda b=bubble: self._on_continue_requested(b)
                 )
-            self._bubbles = [b for b in self._bubbles if b.isVisible()]
-            self._bubbles.append(bubble)
+            self._add_bubble(bubble)
+
+        # Store continuation context on target_bubble
+        if any_truncated and target_bubble:
+            target_bubble.continuation_messages = getattr(worker, "continuation_messages", None)
+            target_bubble.continuation_partial = getattr(worker, "continuation_context_partial", None)
 
         # Auto-continue if enabled
         if any_truncated:
             auto_continue = self.settings.value(KEY_AUTO_CONTINUE, "false")
             if auto_continue == "true" or auto_continue is True:
-                target_bubble = (
-                    self.cinematic_bubble if action == "cinematic"
-                    else self.dialogue_bubble if self.dialogue_mode_active
-                    else bubble
-                )
                 if target_bubble:
-                    logger.info("Auto-continuing truncated translation")
-                    self._on_continue_requested(target_bubble)
+                    count = getattr(target_bubble, "_continue_count", 0)
+                    if count < MAX_AUTO_CONTINUES:
+                        target_bubble._continue_count = count + 1
+                        logger.info("Auto-continuing truncated translation (%d/%d)", count + 1, MAX_AUTO_CONTINUES)
+                        self._on_continue_requested(target_bubble)
+                    else:
+                        logger.warning("Max auto-continue limit reached")
 
     def _on_inference_error(self, msg, worker):
         anchor = worker.anchor_rect
@@ -611,8 +627,7 @@ class XianApp(QWidget):
             anchor_rect=anchor,
             auto_close_ms=8000,
         )
-        self._bubbles = [b for b in self._bubbles if b.isVisible()]
-        self._bubbles.append(bubble)
+        self._add_bubble(bubble)
 
     def _cleanup_worker(self, worker):
         try:
@@ -622,8 +637,8 @@ class XianApp(QWidget):
 
     def _on_continue_requested(self, bubble: ResultBubble):
         """User clicked Continue on a truncated result."""
-        messages = self.processor._last_messages
-        partial = self.processor._last_raw_output
+        messages = getattr(bubble, "continuation_messages", None)
+        partial = getattr(bubble, "continuation_partial", None)
         mode = self.settings.value(KEY_MODE, constants.DEFAULT_MODE)
 
         if not messages or not partial:
@@ -641,8 +656,8 @@ class XianApp(QWidget):
             lambda text, b=bubble: b.update_text(text) if b.isVisible() else None
         )
         worker.continuation_done.connect(
-            lambda text, still_truncated, b=bubble: self._on_continue_done(
-                b, text, still_truncated
+            lambda text, still_truncated, b=bubble, w=worker: self._on_continue_done(
+                b, text, still_truncated, w
             )
         )
         worker.error.connect(
@@ -653,10 +668,19 @@ class XianApp(QWidget):
         self._workers.append(worker)
         worker.start()
 
-    def _on_continue_done(self, bubble, text, still_truncated):
+    def _on_continue_done(self, bubble, text, still_truncated, worker):
         """Handle completed continuation."""
         if not bubble.isVisible():
             return
+
+        # Store updated continuation context back on the bubble
+        if still_truncated:
+            bubble.continuation_messages = getattr(worker, "continuation_messages", None)
+            bubble.continuation_partial = getattr(worker, "continuation_context_partial", None)
+        else:
+            bubble.continuation_messages = None
+            bubble.continuation_partial = None
+
         # Re-parse the combined output to extract a proper translation
         orig, trans, conf = self.processor.parse_response(text)
         if trans:
@@ -669,8 +693,13 @@ class XianApp(QWidget):
         if still_truncated:
             auto_continue = self.settings.value(KEY_AUTO_CONTINUE, "false")
             if auto_continue == "true" or auto_continue is True:
-                logger.info("Auto-continuing again (still truncated)")
-                self._on_continue_requested(bubble)
+                count = getattr(bubble, "_continue_count", 0)
+                if count < MAX_AUTO_CONTINUES:
+                    bubble._continue_count = count + 1
+                    logger.info("Auto-continuing again (still truncated) (%d/%d)", count + 1, MAX_AUTO_CONTINUES)
+                    self._on_continue_requested(bubble)
+                else:
+                    logger.warning("Max auto-continue limit reached")
 
     # ------------------------------------------------------------------
     # Chat
@@ -726,22 +755,19 @@ class XianApp(QWidget):
                 self.dialogue_bubble = None
             
             bubble = ResultBubble("Dialogue Mode Disabled", auto_close_ms=3000)
-            self._bubbles = [b for b in self._bubbles if b.isVisible()]
-            self._bubbles.append(bubble)
+            self._add_bubble(bubble)
             logger.info("Dialogue Mode Deactivated")
         else:
             if LensOverlayWindow._last_rect is None or LensOverlayWindow._last_rect.isEmpty():
                 bubble = ResultBubble("Please use Lens (Leader+C) to select a dialogue area first.", auto_close_ms=5000)
-                self._bubbles = [b for b in self._bubbles if b.isVisible()]
-                self._bubbles.append(bubble)
+                self._add_bubble(bubble)
                 return
 
             self.dialogue_mode_active = True
             self.mouse_listener.start()
             
             bubble = ResultBubble("Dialogue Mode ON", anchor_rect=LensOverlayWindow._last_rect, auto_close_ms=3000)
-            self._bubbles = [b for b in self._bubbles if b.isVisible()]
-            self._bubbles.append(bubble)
+            self._add_bubble(bubble)
             logger.info("Dialogue Mode Activated")
 
     def on_dialogue_click(self):
@@ -787,8 +813,7 @@ class XianApp(QWidget):
                 self.cinematic_bubble.close()
                 self.cinematic_bubble = None
             bubble = ResultBubble("Cinematic Mode Disabled", auto_close_ms=3000)
-            self._bubbles = [b for b in self._bubbles if b.isVisible()]
-            self._bubbles.append(bubble)
+            self._add_bubble(bubble)
         else:
             if not CinematicLensOverlay._last_rects:
                 # Open Cinematic Lens for selection
@@ -800,8 +825,7 @@ class XianApp(QWidget):
         self.cinematic_mode_active = True
         self.hotkey_listener.cinematic_mode_active = True
         bubble = ResultBubble("Cinematic Mode ON (Press ` to capture)", auto_close_ms=4000)
-        self._bubbles = [b for b in self._bubbles if b.isVisible()]
-        self._bubbles.append(bubble)
+        self._add_bubble(bubble)
 
     def _show_cinematic_lens(self):
         if self._lens is not None:
@@ -816,19 +840,14 @@ class XianApp(QWidget):
             self._activate_cinematic_mode()
         else:
             bubble = ResultBubble("Cinematic Mode requires at least one region.", auto_close_ms=4000)
-            self._bubbles = [b for b in self._bubbles if b.isVisible()]
-            self._bubbles.append(bubble)
+            self._add_bubble(bubble)
 
     def _on_cinematic_trigger(self):
         if not self.cinematic_mode_active or not CinematicLensOverlay._last_rects:
             return
 
         # Show capturing indicator
-        if self.cinematic_bubble is None or not self.cinematic_bubble.isVisible():
-            self.cinematic_bubble = ResultBubble("Recording audio and capturing screen...", auto_close_ms=0)
-        else:
-            self.cinematic_bubble.close()
-            self.cinematic_bubble = ResultBubble("Recording audio and capturing screen...", auto_close_ms=0)
+        self.cinematic_bubble = self._replace_persistent_bubble("cinematic_bubble", "Recording audio and capturing screen...")
 
         data = ScreenCapture.capture_screen()
         if not data:
@@ -862,6 +881,7 @@ class XianApp(QWidget):
         composite.save(buffer, "JPG", 85)
         composite_data = bytes(buffer.buffer())
 
+        source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
         styles = _parse_styles(self.settings)
 
@@ -873,6 +893,7 @@ class XianApp(QWidget):
             target_lang=target_lang,
             styles=styles,
             anchor_rect=anchor_rect,
+            source_lang=source_lang,
         )
 
         worker.translation_done.connect(

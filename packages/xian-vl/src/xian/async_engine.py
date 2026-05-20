@@ -31,6 +31,12 @@ class AsyncEngine(threading.Thread):
     # ── Public API ────────────────────────────────────────────────────
 
     @property
+    def loop(self) -> asyncio.AbstractEventLoop:
+        self._ready.wait()      # block until loop is running
+        assert self._loop is not None
+        return self._loop
+
+    @property
     def client(self) -> AsyncOpenAI:
         self._ready.wait()      # block until loop is running
         assert self._client is not None
@@ -76,8 +82,9 @@ class AsyncEngine(threading.Thread):
     def _do_reconfigure(self, base_url: str, api_key: str) -> None:
         """Must be called from within the engine loop."""
         async def _swap():
-            if self._client:
-                await self._client.close()
+            old = self._client
             self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
             logger.info("AsyncEngine reconfigured (base_url=%s)", base_url)
+            if old:
+                await old.close()
         self._loop.create_task(_swap())

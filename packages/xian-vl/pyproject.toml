@@ -13,6 +13,7 @@ dependencies = [
     "lmdb>=1.4",
     "httpx>=0.27",
     "shared-types",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]

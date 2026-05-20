@@ -64,37 +64,48 @@ class InferenceWorker(QThread):
                 self.error.emit(str(e))
             return
 
-        engine_loop = self.processor.engine._loop
+        engine_loop = self.processor.engine.loop
         if not engine_loop:
             self.error.emit("Engine loop not running")
             return
 
-        import asyncio
-        q: asyncio.Queue[str | None] = asyncio.Queue()
+        q: asyncio.Queue = asyncio.Queue()
 
         async def _stream_to_queue():
-            async for _orig, trans in self.processor.stream_frame(
+            final_data = None
+            async for _orig, trans, results_data in self.processor.stream_frame(
                 self.image_data, self.source_lang, self.target_lang,
                 self.mode, self.styles
             ):
-                await q.put(trans)
-            await q.put(None)
+                if results_data is not None:
+                    final_data = results_data
+                else:
+                    await q.put(trans)
+            await q.put((None, final_data))
 
         stream_future = self.processor.engine.submit(_stream_to_queue())
 
         timeout = vision_timeout_for_mode(self.mode)
         try:
+            final_data = None
             while True:
                 item = asyncio.run_coroutine_threadsafe(
                     q.get(), engine_loop
                 ).result(timeout=timeout)
-                if item is None:
+                if isinstance(item, tuple) and item[0] is None:
+                    final_data = item[1]
                     break
                 self.translation_partial.emit(item, self.action)
 
             stream_future.result()
 
-            results = self.processor.last_stream_results
+            if final_data is not None:
+                results, messages, accumulated = final_data
+                self.continuation_messages = messages
+                self.continuation_context_partial = accumulated
+            else:
+                results = []
+
             self.translation_done.emit(results, self.action)
 
             # Fire-and-forget stats log
@@ -131,36 +142,46 @@ class ContinueWorker(QThread):
         self.mode = mode
 
     def run(self):
-        engine_loop = self.processor.engine._loop
+        engine_loop = self.processor.engine.loop
         if not engine_loop:
             self.error.emit("Engine loop not running")
             return
 
-        import asyncio
-        q: asyncio.Queue[tuple[str, str | None] | None] = asyncio.Queue()
+        q: asyncio.Queue = asyncio.Queue()
 
         async def _stream():
-            async for text, finish in self.processor.continue_generation(
+            final_data = None
+            async for text, finish, continuation_data in self.processor.continue_generation(
                 self.messages, self.partial_output, self.mode
             ):
-                await q.put((text, finish))
-            await q.put(None)
+                if continuation_data is not None:
+                    final_data = continuation_data
+                else:
+                    await q.put((text, finish))
+            await q.put((None, None, final_data))
 
         future = self.processor.engine.submit(_stream())
 
         try:
             last_text = self.partial_output
             last_finish = None
+            final_data = None
             while True:
                 item = asyncio.run_coroutine_threadsafe(
                     q.get(), engine_loop
                 ).result(timeout=vision_timeout_for_mode(self.mode))
-                if item is None:
+                if isinstance(item, tuple) and item[0] is None and item[1] is None:
+                    final_data = item[2]
                     break
                 last_text, last_finish = item
                 self.continuation_partial.emit(last_text)
 
             future.result()
+
+            if final_data is not None:
+                self.continuation_messages = final_data[0]
+                self.continuation_context_partial = final_data[1]
+
             still_truncated = (last_finish == "length")
             self.continuation_done.emit(last_text, still_truncated)
 
@@ -184,13 +205,14 @@ class CinematicWorker(QThread):
 
     def __init__(self, processor, *, image_data: bytes = None,
                  target_lang: str = "English", styles: list[str] = None,
-                 anchor_rect: QRect = None):
+                 anchor_rect: QRect = None, source_lang: str = "Chinese"):
         super().__init__()
         self.processor = processor
         self.image_data = image_data
         self.target_lang = target_lang
         self.styles = styles or []
         self.anchor_rect = anchor_rect or QRect()
+        self.source_lang = source_lang
 
     async def _run_async(self):
         # 1. Start audio capture task (4 seconds recording)
@@ -222,7 +244,8 @@ class CinematicWorker(QThread):
             self.target_lang, 
             self.styles,
             b64_image=b64_image,
-            image=image
+            image=image,
+            source_lang=self.source_lang
         )
         return results
 
