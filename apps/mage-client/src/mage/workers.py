@@ -113,6 +113,66 @@ class InferenceWorker(QThread):
             self.error.emit(str(e))
 
 
+class ContinueWorker(QThread):
+    """Continue a truncated VLM generation by replaying partial output."""
+
+    # (accumulated_text,)
+    continuation_partial = pyqtSignal(str)
+    # (final_text, still_truncated: bool)
+    continuation_done = pyqtSignal(str, bool)
+    error = pyqtSignal(str)
+
+    def __init__(self, processor, *, messages: list[dict],
+                 partial_output: str, mode: str = "Game"):
+        super().__init__()
+        self.processor = processor
+        self.messages = messages
+        self.partial_output = partial_output
+        self.mode = mode
+
+    def run(self):
+        engine_loop = self.processor.engine._loop
+        if not engine_loop:
+            self.error.emit("Engine loop not running")
+            return
+
+        import asyncio
+        q: asyncio.Queue[tuple[str, str | None] | None] = asyncio.Queue()
+
+        async def _stream():
+            async for text, finish in self.processor.continue_generation(
+                self.messages, self.partial_output, self.mode
+            ):
+                await q.put((text, finish))
+            await q.put(None)
+
+        future = self.processor.engine.submit(_stream())
+
+        try:
+            last_text = self.partial_output
+            last_finish = None
+            while True:
+                item = asyncio.run_coroutine_threadsafe(
+                    q.get(), engine_loop
+                ).result(timeout=vision_timeout_for_mode(self.mode))
+                if item is None:
+                    break
+                last_text, last_finish = item
+                self.continuation_partial.emit(last_text)
+
+            future.result()
+            still_truncated = (last_finish == "length")
+            self.continuation_done.emit(last_text, still_truncated)
+
+        except Exception as e:
+            msg = str(e)
+            if "context" in msg.lower() or "too long" in msg.lower():
+                self.error.emit("Context window full — cannot continue further.")
+            else:
+                logger.error("ContinueWorker error: %s", e)
+                self.error.emit(msg)
+
+
 class CinematicWorker(QThread):
     """Run Cinematic inference handling audio transcription and visual OCR.
 

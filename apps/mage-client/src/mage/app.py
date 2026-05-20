@@ -19,7 +19,7 @@ from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap
 from mage.ui.theme import accent_hex, accent_hover_hex
 
 from xian.pipeline import VLProcessor, VLConfig
-from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker
+from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker
 from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
 from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.result_bubble import ResultBubble
@@ -35,6 +35,7 @@ from mage.settings_keys import (
     KEY_API_URL, KEY_API_MODEL, KEY_SOURCE_LANG, KEY_TARGET_LANG,
     KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY,
     KEY_GPU_UTIL, KEY_DIALOGUE_DELAY, KEY_CINEMATIC_TRIGGER,
+    KEY_AUTO_CONTINUE,
 )
 
 logger = logging.getLogger(__name__)
@@ -134,6 +135,12 @@ class SettingsDialog(QDialog):
         self.delay_spin.setValue(int(settings.value(KEY_DIALOGUE_DELAY, 1500)))
         layout.addRow("Dialogue Delay (ms):", self.delay_spin)
 
+        # Auto-continue truncated translations
+        self.auto_continue_cb = QCheckBox("Automatically continue truncated translations")
+        auto_val = settings.value(KEY_AUTO_CONTINUE, "false")
+        self.auto_continue_cb.setChecked(auto_val == "true" or auto_val is True)
+        layout.addRow(self.auto_continue_cb)
+
         # Buttons
         btn_row = QHBoxLayout()
         save_btn = QPushButton("Save")
@@ -187,6 +194,7 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_LEADER_KEY, self.leader_combo.currentText())
         self.settings.setValue(KEY_GPU_UTIL, self.gpu_combo.currentText())
         self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
+        self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
         self.accept()
 
 
@@ -505,6 +513,9 @@ class XianApp(QWidget):
         is_speculative = min_confidence < 0.70
         border_color = "#e5a93c" if is_speculative else None
 
+        # Detect truncation
+        any_truncated = any(getattr(r, 'truncated', False) for r in results)
+
         if action == "cinematic":
             if self.cinematic_bubble is None or not self.cinematic_bubble.isVisible():
                 self.cinematic_bubble = ResultBubble(
@@ -513,6 +524,7 @@ class XianApp(QWidget):
                     anchor_rect=anchor,
                     auto_close_ms=0,
                     border_color=border_color,
+                    truncated=any_truncated,
                 )
             else:
                 self.cinematic_bubble.close()
@@ -522,6 +534,11 @@ class XianApp(QWidget):
                     anchor_rect=anchor,
                     auto_close_ms=0,
                     border_color=border_color,
+                    truncated=any_truncated,
+                )
+            if any_truncated:
+                self.cinematic_bubble.continue_requested.connect(
+                    lambda b=self.cinematic_bubble: self._on_continue_requested(b)
                 )
         elif self.dialogue_mode_active:
             if self.dialogue_bubble is None or not self.dialogue_bubble.isVisible():
@@ -531,6 +548,7 @@ class XianApp(QWidget):
                     anchor_rect=anchor,
                     auto_close_ms=0,  # Persistent
                     border_color=border_color,
+                    truncated=any_truncated,
                 )
             else:
                 self.dialogue_bubble.close()
@@ -540,6 +558,11 @@ class XianApp(QWidget):
                     anchor_rect=anchor,
                     auto_close_ms=0,
                     border_color=border_color,
+                    truncated=any_truncated,
+                )
+            if any_truncated:
+                self.dialogue_bubble.continue_requested.connect(
+                    lambda b=self.dialogue_bubble: self._on_continue_requested(b)
                 )
         else:
             bubble = ResultBubble(
@@ -547,9 +570,27 @@ class XianApp(QWidget):
                 original_text=original_combined,
                 anchor_rect=anchor,
                 border_color=border_color,
+                truncated=any_truncated,
             )
+            if any_truncated:
+                bubble.continue_requested.connect(
+                    lambda b=bubble: self._on_continue_requested(b)
+                )
             self._bubbles = [b for b in self._bubbles if b.isVisible()]
             self._bubbles.append(bubble)
+
+        # Auto-continue if enabled
+        if any_truncated:
+            auto_continue = self.settings.value(KEY_AUTO_CONTINUE, "false")
+            if auto_continue == "true" or auto_continue is True:
+                target_bubble = (
+                    self.cinematic_bubble if action == "cinematic"
+                    else self.dialogue_bubble if self.dialogue_mode_active
+                    else bubble
+                )
+                if target_bubble:
+                    logger.info("Auto-continuing truncated translation")
+                    self._on_continue_requested(target_bubble)
 
     def _on_inference_error(self, msg, worker):
         anchor = worker.anchor_rect
@@ -569,6 +610,58 @@ class XianApp(QWidget):
             self._workers.remove(worker)
         except ValueError:
             pass
+
+    def _on_continue_requested(self, bubble: ResultBubble):
+        """User clicked Continue on a truncated result."""
+        messages = self.processor._last_messages
+        partial = self.processor._last_raw_output
+        mode = self.settings.value(KEY_MODE, constants.DEFAULT_MODE)
+
+        if not messages or not partial:
+            logger.warning("No continuation context available")
+            return
+
+        worker = ContinueWorker(
+            self.processor,
+            messages=messages,
+            partial_output=partial,
+            mode=mode,
+        )
+
+        worker.continuation_partial.connect(
+            lambda text, b=bubble: b.update_text(text) if b.isVisible() else None
+        )
+        worker.continuation_done.connect(
+            lambda text, still_truncated, b=bubble: self._on_continue_done(
+                b, text, still_truncated
+            )
+        )
+        worker.error.connect(
+            lambda msg, b=bubble: b.update_text(f"⚠ Continue failed: {msg}") if b.isVisible() else None
+        )
+        worker.finished.connect(lambda w=worker: self._cleanup_worker(w))
+
+        self._workers.append(worker)
+        worker.start()
+
+    def _on_continue_done(self, bubble, text, still_truncated):
+        """Handle completed continuation."""
+        if not bubble.isVisible():
+            return
+        # Re-parse the combined output to extract a proper translation
+        orig, trans, conf = self.processor.parse_response(text)
+        if trans:
+            bubble.update_text(trans, original_text=orig)
+        else:
+            bubble.update_text(text)
+        bubble.show_continue_button(still_truncated)
+
+        # Auto-continue again if enabled and still truncated
+        if still_truncated:
+            auto_continue = self.settings.value(KEY_AUTO_CONTINUE, "false")
+            if auto_continue == "true" or auto_continue is True:
+                logger.info("Auto-continuing again (still truncated)")
+                self._on_continue_requested(bubble)
 
     # ------------------------------------------------------------------
     # Chat

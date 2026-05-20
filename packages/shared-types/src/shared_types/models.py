@@ -59,6 +59,8 @@ class TranslationResult(BaseModel):
 
     translated_text: str
     original_text: str = ""
+    truncated: bool = False
+    raw_output: str = ""
     x: float = 0.0
     y: float = 0.0
     width: float = 0.0

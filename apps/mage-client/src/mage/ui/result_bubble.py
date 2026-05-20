@@ -2,7 +2,7 @@
 
 import logging
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QPushButton, QHBoxLayout, QApplication
-from PyQt6.QtCore import Qt, QTimer, QRect, QPoint
+from PyQt6.QtCore import Qt, QTimer, QRect, QPoint, pyqtSignal
 from PyQt6.QtGui import QFont, QGuiApplication
 from mage.ui.theme import accent_hex
 
@@ -17,9 +17,12 @@ class ResultBubble(QWidget):
     copies the text to the clipboard.
     """
 
+    continue_requested = pyqtSignal()
+
     def __init__(self, text: str, original_text: str = "",
                  anchor_rect: QRect = None, auto_close_ms: int = 30000,
                  border_color: str | None = None,
+                 truncated: bool = False,
                  parent=None):
         super().__init__(parent)
         self.setWindowFlags(
@@ -105,6 +108,16 @@ class ResultBubble(QWidget):
         copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         copy_btn.clicked.connect(self._copy_to_clipboard)
         footer.addWidget(copy_btn)
+
+        self._continue_btn = QPushButton("▶ Continue")
+        self._continue_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._continue_btn.setStyleSheet(
+            "color: #4ecdc4; font-weight: bold; font-size: 11px;"
+        )
+        self._continue_btn.clicked.connect(self._on_continue_clicked)
+        self._continue_btn.setVisible(truncated)
+        footer.addWidget(self._continue_btn)
+
         footer.addStretch()
         layout.addLayout(footer)
 
@@ -172,3 +185,15 @@ class ResultBubble(QWidget):
             self.adjustSize()
         if self._anchor_rect and not self._anchor_rect.isEmpty():
             self._position_near(self._anchor_rect)
+
+    def _on_continue_clicked(self):
+        self._continue_btn.setText("⏳ Continuing...")
+        self._continue_btn.setEnabled(False)
+        self.continue_requested.emit()
+
+    def show_continue_button(self, visible: bool = True) -> None:
+        """Show or hide the continue button (e.g. after continuation completes)."""
+        self._continue_btn.setVisible(visible)
+        if visible:
+            self._continue_btn.setText("▶ Continue")
+            self._continue_btn.setEnabled(True)

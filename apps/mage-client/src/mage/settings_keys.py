@@ -14,3 +14,5 @@ KEY_LEADER_KEY = "leader_key"
 KEY_GPU_UTIL = "gpu_memory_utilization"
 KEY_DIALOGUE_DELAY = "dialogue_delay"
 KEY_CINEMATIC_TRIGGER = "cinematic_trigger"
+KEY_AUTO_CONTINUE = "auto_continue"
+

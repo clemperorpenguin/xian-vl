@@ -56,6 +56,10 @@ class VLProcessor:
         self._last_results: list[TranslationResult] | None = None
         self.last_stream_results: list[TranslationResult] = []
 
+        # Continuation context for truncated responses
+        self._last_messages: list[dict] | None = None
+        self._last_raw_output: str = ""
+
         # Initialize context manager for stateful interactions
         self.context_manager = ContextManager(max_frames=1)
 
@@ -161,11 +165,11 @@ class VLProcessor:
 
         # Extract ORIGINAL and TRANSLATED sections using a highly resilient regex
         orig_match = re.search(
-            r'ORIGINAL.*?:(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:TRANSLAT|CONFIDENCE)|\Z)',
+            r'ORIGINAL[a-zA-Z]*[^\w\n]*[:\n][ \t]*(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:TRANSLAT|CONFIDENCE)|\Z)',
             cleaned, re.DOTALL | re.IGNORECASE
         )
         trans_match = re.search(
-            r'TRANSLAT.*?:(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:CONFIDENCE|ORIGINAL)|\Z)',
+            r'TRANSLAT[a-zA-Z]*[^\w\n]*[:\n][ \t]*(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:CONFIDENCE|ORIGINAL)|\Z)',
             cleaned, re.DOTALL | re.IGNORECASE
         )
 
@@ -262,14 +266,17 @@ class VLProcessor:
                 logger.warning("No choices in response. Full response: %s", response)
 
             final_output = (choice.message.content or "") if choice else ""
+            finish_reason = choice.finish_reason if choice else "stop"
 
             # If the response was truncated while reasoning (content is empty)
-            if not final_output and choice and choice.finish_reason == "length":
+            if not final_output and finish_reason == "length":
                 logger.warning("VLM execution was truncated (finish_reason=length) while thinking. Try increasing max_tokens.")
                 results = [TranslationResult(
                     original_text="",
                     translated_text="⚠️ Translation request truncated (VLM token limit reached).",
-                    confidence=0.0
+                    confidence=0.0,
+                    truncated=True,
+                    raw_output="",
                 )]
             else:
                 # Fallback: if the model spent all tokens on reasoning and produced
@@ -282,12 +289,26 @@ class VLProcessor:
 
                 results = self._build_result(final_output, image)
 
+            # Propagate truncation flag when the model produced partial content
+            if finish_reason == "length" and final_output:
+                if not results:
+                    results = [TranslationResult(
+                        original_text="",
+                        translated_text="⚠️ Translation request truncated (VLM token limit reached).",
+                        confidence=0.0
+                    )]
+                for r in results:
+                    r.truncated = True
+                    r.raw_output = final_output
+
             # Update context manager with extracted data
             extracted = [r.original_text for r in results]
             self.context_manager.update_last_frame_data("\n".join(extracted), results)
 
-            # Cache the result
+            # Cache the result and stash continuation context
             self._last_results = results
+            self._last_messages = messages
+            self._last_raw_output = final_output
 
             return results
 
@@ -343,15 +364,35 @@ class VLProcessor:
                 ),
                 timeout=vision_timeout_for_mode(mode),
             )
+            last_finish = None
             async for chunk in stream:
                 delta = chunk.choices[0].delta.content or "" if chunk.choices else ""
                 accumulated += delta
+                if chunk.choices and chunk.choices[0].finish_reason:
+                    last_finish = chunk.choices[0].finish_reason
                 orig, trans, _ = self.parse_response(accumulated)
                 yield orig, trans
 
             results = self._build_result(accumulated, image)
+
+            # Propagate truncation flag
+            if last_finish == "length":
+                if not results:
+                    results = [TranslationResult(
+                        original_text="",
+                        translated_text="⚠️ Translation request truncated (VLM token limit reached).",
+                        confidence=0.0
+                    )]
+                for r in results:
+                    r.truncated = True
+                    r.raw_output = accumulated
+
             self._last_results = results
             self.last_stream_results = results
+
+            # Stash continuation context
+            self._last_messages = messages
+            self._last_raw_output = accumulated
 
             extracted = [r.original_text for r in results]
             self.context_manager.update_last_frame_data("\n".join(extracted), results)
@@ -362,6 +403,73 @@ class VLProcessor:
 
         except Exception as e:
             logger.error("Error during OpenAI API streaming inference: %s", e, exc_info=True)
+            raise
+
+    async def continue_generation(
+        self,
+        messages: list[dict],
+        partial_output: str,
+        mode: str = "Game",
+    ):
+        """Continue a truncated generation by replaying context.
+
+        Appends the partial output as an assistant message, then asks
+        the model to finish where it left off.  Yields
+        ``(full_text_so_far, finish_reason)`` tuples for streaming.
+        """
+        continuation_messages = list(messages)  # shallow copy
+
+        # Add the truncated assistant reply
+        continuation_messages.append({
+            "role": "assistant",
+            "content": partial_output,
+        })
+
+        # Add a continuation prompt
+        continuation_messages.append({
+            "role": "user",
+            "content": (
+                "Your previous response was cut off. "
+                "Continue EXACTLY where you left off. "
+                "Do NOT repeat any text you already wrote. "
+                "Do NOT restart the ORIGINAL/TRANSLATED/CONFIDENCE format from scratch — "
+                "just output the remaining text."
+            ),
+        })
+
+        max_tok = MODE_MAX_TOKENS.get(mode, self.config.max_tokens)
+        accumulated = ""
+
+        try:
+            stream = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.config.model_name,
+                    messages=continuation_messages,
+                    max_tokens=max_tok,
+                    temperature=self.config.temperature,
+                    stream=True,
+                ),
+                timeout=vision_timeout_for_mode(mode),
+            )
+
+            last_finish = None
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content or "" if chunk.choices else ""
+                accumulated += delta
+                if chunk.choices and chunk.choices[0].finish_reason:
+                    last_finish = chunk.choices[0].finish_reason
+                yield partial_output + accumulated, last_finish
+
+            # Update stored context for potential further continuations
+            self._last_raw_output = partial_output + accumulated
+            self._last_messages = continuation_messages
+
+        except asyncio.TimeoutError:
+            logger.error("Continuation timed out (mode=%s)", mode)
+            raise RuntimeError("Continuation request timed out.") from None
+
+        except Exception as e:
+            logger.error("Error during continuation: %s", e, exc_info=True)
             raise
 
     def create_cinematic_prompt(self, transcript: str, target_lang: str, styles: list[str]) -> str:
