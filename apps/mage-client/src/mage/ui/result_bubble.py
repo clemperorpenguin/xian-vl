@@ -3,7 +3,7 @@
 import logging
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QPushButton, QHBoxLayout, QApplication
 from PyQt6.QtCore import Qt, QTimer, QRect, QPoint, pyqtSignal
-from PyQt6.QtGui import QFont, QGuiApplication
+from PyQt6.QtGui import QFont, QGuiApplication, QCursor
 from mage.ui.theme import accent_hex
 
 logger = logging.getLogger(__name__)
@@ -141,7 +141,10 @@ class ResultBubble(QWidget):
     # ------------------------------------------------------------------
     def _position_near(self, rect: QRect):
         """Place the bubble just below *rect*, clamped to screen edges."""
-        screen = QGuiApplication.primaryScreen()
+        screen = QGuiApplication.screenAt(QCursor.pos())
+        if not screen:
+            screen = QGuiApplication.primaryScreen()
+            
         if not screen:
             return
         sg = screen.availableGeometry()

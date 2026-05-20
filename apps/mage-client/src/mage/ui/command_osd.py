@@ -1,7 +1,7 @@
 import logging
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QFrame, QComboBox
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QGuiApplication, QFont
+from PyQt6.QtGui import QGuiApplication, QFont, QCursor
 
 from mage.ui.theme import accent_hex
 from shared_types.enums import SourceLanguage, TargetLanguage
@@ -104,6 +104,7 @@ class CommandOSD(QWidget):
         options_layout.addWidget(self._create_option("A", "Chat"))
         options_layout.addWidget(self._create_option("O", "Dialogue"))
         options_layout.addWidget(self._create_option("M", "Cinematic"))
+        options_layout.addWidget(self._create_option("T", "Translate"))
         options_layout.addWidget(self._create_option("S", "Settings"))
 
         inner_layout.addLayout(options_layout)
@@ -177,8 +178,8 @@ class CommandOSD(QWidget):
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setStyleSheet("color: #DDD; font-size: 14px; font-weight: bold;")
 
-        layout.addWidget(icon_lbl)
-        layout.addWidget(label)
+        layout.addWidget(icon_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(label, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         return container
 
@@ -212,7 +213,10 @@ class CommandOSD(QWidget):
         self.adjustSize()
         self.setFixedSize(self.size())
         
-        screen = QGuiApplication.primaryScreen()
+        screen = QGuiApplication.screenAt(QCursor.pos())
+        if not screen:
+            screen = QGuiApplication.primaryScreen()
+            
         if screen:
             geo = screen.geometry()
             x = geo.center().x() - self.width() // 2

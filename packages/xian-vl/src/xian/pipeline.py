@@ -111,24 +111,32 @@ class VLProcessor:
         image.save(buffered, format="JPEG")
         return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-    def create_prompt(self, source_lang: str, target_lang: str, mode: str, styles: list[str]) -> str:
-        """Create a terse OCR+Translation prompt tailored by user settings."""
+    def create_prompt(self, source_lang: str, target_lang: str, mode: str, styles: list[str]) -> tuple[str, str]:
+        """Create a terse OCR+Translation prompt tailored by user settings.
+        Returns a tuple of (system_prompt, user_prompt).
+        """
         mode_context = "a web interface" if mode == "Web" else "a video game interface"
         style_context = f" Translate using a {', '.join(styles)} style/tone." if styles else ""
 
-        return (
-            f"OCR the {source_lang} text from this image of {mode_context}, "
-            f"then translate it to {target_lang}.{style_context}\n\n"
-            f"CRITICAL SYSTEM DIRECTIVES:\n"
-            f"- KEEP YOUR REASONING/THINKING EXTREMELY BRIEF (under 2 sentences) or bypass it entirely if possible.\n"
-            f"- DO NOT write any reasoning, thinking process, or explanation.\n"
-            f"- DO NOT self-correct, refine, or write multiple drafts.\n"
-            f"- Output a single confidence estimation float (0.0 to 1.0) based on your certainty of the OCR and translation.\n\n"
-            f"Reply strictly in this 3-part layout with NO other conversational introduction, commentary, or Markdown formatting outside of the markers:\n"
+        system_prompt = (
+            f"You are a highly precise OCR and translation engine. "
+            f"You must strictly follow this exact 3-part layout with NO conversational text, NO reasoning, and NO markdown wrappers:\n"
             f"ORIGINAL:\n[Extracted {source_lang} text]\n\n"
             f"TRANSLATED:\n[Direct translation into {target_lang}]\n\n"
-            f"CONFIDENCE:\n[Confidence float score]"
+            f"CONFIDENCE:\n[Confidence float score between 0.0 and 1.0]\n\n"
+            f"OCR RULES:\n"
+            f"- SKIP game UI icons, decorative symbols, item icons, and non-text graphical elements entirely.\n"
+            f"- If a character is unclear, output your best guess rather than repeating or stalling.\n"
+            f"- Do NOT repeat the same character or word more than it actually appears in the image.\n"
+            f"- If no readable text is found, output ORIGINAL: (none) and TRANSLATED: (none)."
         )
+        
+        user_prompt = (
+            f"OCR the {source_lang} text from this image of {mode_context}, "
+            f"then translate it to {target_lang}.{style_context}"
+        )
+        
+        return system_prompt, user_prompt
 
     def parse_response(self, response: str) -> tuple[str, str, float]:
         """Parse the model response to extract original text, translation, and confidence.
@@ -227,19 +235,23 @@ class VLProcessor:
             logger.info("Returning cached translation result (identical frame)")
             return self._last_results
 
-        prompt = self.create_prompt(source_lang, target_lang, mode, styles)
+        system_prompt, user_prompt = self.create_prompt(source_lang, target_lang, mode, styles)
 
         messages = [
             {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": user_prompt},
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
                 ]
             }
         ]
 
-        max_tok = MODE_MAX_TOKENS.get(mode, self.config.max_tokens)
+        max_tok = max(MODE_MAX_TOKENS.get(mode, self.config.max_tokens), 2048)
 
         try:
             logger.info("Sending translation request to OmniRouter via OpenAI...")
@@ -248,7 +260,8 @@ class VLProcessor:
                     model=self.config.model_name,
                     messages=messages,
                     max_tokens=max_tok,
-                    temperature=self.config.temperature,
+                    temperature=0.1,
+                    frequency_penalty=0.3,
                 ),
                 timeout=vision_timeout_for_mode(mode),
             )
@@ -327,7 +340,7 @@ class VLProcessor:
 
         image = self.preprocess_image(image_data)
         self.context_manager.add_frame(image)
-        prompt = self.create_prompt(source_lang, target_lang, mode, styles)
+        system_prompt, user_prompt = self.create_prompt(source_lang, target_lang, mode, styles)
 
         # Check cache
         b64_image, was_cached = self._get_or_encode_image(image)
@@ -341,15 +354,19 @@ class VLProcessor:
 
         messages = [
             {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": user_prompt},
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
                 ]
             }
         ]
 
-        max_tok = MODE_MAX_TOKENS.get(mode, self.config.max_tokens)
+        max_tok = max(MODE_MAX_TOKENS.get(mode, self.config.max_tokens), 2048)
         accumulated = ""
 
         try:
@@ -359,7 +376,8 @@ class VLProcessor:
                     model=self.config.model_name,
                     messages=messages,
                     max_tokens=max_tok,
-                    temperature=self.config.temperature,
+                    temperature=0.1,
+                    frequency_penalty=0.3,
                     stream=True,
                 ),
                 timeout=vision_timeout_for_mode(mode),
@@ -437,7 +455,7 @@ class VLProcessor:
             ),
         })
 
-        max_tok = MODE_MAX_TOKENS.get(mode, self.config.max_tokens)
+        max_tok = max(MODE_MAX_TOKENS.get(mode, self.config.max_tokens), 2048)
         accumulated = ""
 
         try:
@@ -446,7 +464,8 @@ class VLProcessor:
                     model=self.config.model_name,
                     messages=continuation_messages,
                     max_tokens=max_tok,
-                    temperature=self.config.temperature,
+                    temperature=0.1,
+                    frequency_penalty=0.3,
                     stream=True,
                 ),
                 timeout=vision_timeout_for_mode(mode),

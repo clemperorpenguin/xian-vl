@@ -19,9 +19,10 @@ from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap
 from mage.ui.theme import accent_hex, accent_hover_hex
 
 from xian.pipeline import VLProcessor, VLConfig
-from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker
+from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker, ChatTranslationWorker
 from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
 from mage.ui.chat_sidebar import ChatSidebar
+from mage.ui.how_to_say import HowToSayDialog
 from mage.ui.result_bubble import ResultBubble
 from mage.capture.hotkeys import create_hotkey_listener
 from mage.capture.mouse import create_mouse_listener
@@ -237,6 +238,7 @@ class XianApp(QWidget):
         self.hotkey_listener.trigger_settings.connect(self._open_settings)
         self.hotkey_listener.trigger_dialogue_mode.connect(self.toggle_dialogue_mode)
         self.hotkey_listener.trigger_cinematic_mode.connect(self.toggle_cinematic_mode)
+        self.hotkey_listener.trigger_how_to_say.connect(self.show_how_to_say)
         self.hotkey_listener.cinematic_capture.connect(self._on_cinematic_trigger)
         self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
         if hasattr(self.hotkey_listener, "command_mode_cancelled"):
@@ -273,6 +275,11 @@ class XianApp(QWidget):
 
         # --- Chat sidebar (created once, toggled) ---
         self.chat_sidebar = ChatSidebar(self.processor)
+
+        # --- How to Say Dialog ---
+        self.how_to_say_dialog = HowToSayDialog()
+        self.how_to_say_dialog.translation_requested.connect(self._on_how_to_say_submit)
+        self.how_to_say_dialog.dialog_hidden.connect(self._on_osd_hidden)
 
         # Lens window reference (created on demand)
         self._lens: LensOverlayWindow | None = None
@@ -363,6 +370,8 @@ class XianApp(QWidget):
             self.toggle_dialogue_mode()
         elif key == "M":
             self.toggle_cinematic_mode()
+        elif key == "T":
+            self.show_how_to_say()
         elif key == "S":
             self._open_settings()
 
@@ -674,6 +683,33 @@ class XianApp(QWidget):
         else:
             self.chat_sidebar.show()
             self.chat_sidebar.raise_()
+
+    # ------------------------------------------------------------------
+    # How to say
+    # ------------------------------------------------------------------
+    def show_how_to_say(self):
+        self.hide_osd()
+        target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
+        source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
+        self.how_to_say_dialog.show_centered(target_lang=target_lang, source_lang=source_lang)
+
+    def _on_how_to_say_submit(self, text: str):
+        target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
+        source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
+        
+        worker = ChatTranslationWorker(self.processor, text, target_lang, source_lang)
+        worker.translation_done.connect(self._on_how_to_say_done)
+        worker.error.connect(self._on_how_to_say_error)
+        worker.finished.connect(lambda w=worker: self._cleanup_worker(w))
+        
+        self._workers.append(worker)
+        worker.start()
+
+    def _on_how_to_say_done(self, translated_text: str):
+        self.how_to_say_dialog.set_result(translated_text)
+
+    def _on_how_to_say_error(self, msg: str):
+        self.how_to_say_dialog.set_error(msg)
 
     # ------------------------------------------------------------------
     # Dialogue Mode

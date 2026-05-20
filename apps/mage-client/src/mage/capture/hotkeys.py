@@ -13,6 +13,7 @@ class HotkeyListener(QObject):
     trigger_settings = pyqtSignal()
     trigger_dialogue_mode = pyqtSignal()
     trigger_cinematic_mode = pyqtSignal()
+    trigger_how_to_say = pyqtSignal()
     cinematic_capture = pyqtSignal()
     command_mode_started = pyqtSignal()
     command_mode_cancelled = pyqtSignal()
@@ -209,6 +210,12 @@ if sys.platform == "linux":
                         self.trigger_cinematic_mode.emit()
                         self.command_mode_active = False
 
+                    # KEY_T is 20
+                    elif keycode == 20:
+                        logger.info("EvdevListener: Triggered Translate")
+                        self.trigger_how_to_say.emit()
+                        self.command_mode_active = False
+
 else:
     from pynput import keyboard
 
@@ -315,6 +322,10 @@ else:
                         elif char == 'm':
                             logger.info("PynputListener: Triggered Cinematic Mode")
                             self.trigger_cinematic_mode.emit()
+                            self.command_mode_active = False
+                        elif char == 't':
+                            logger.info("PynputListener: Triggered Translate")
+                            self.trigger_how_to_say.emit()
                             self.command_mode_active = False
                 except Exception as e:
                     logger.debug("PynputListener error: %s", e)

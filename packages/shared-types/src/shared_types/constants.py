@@ -11,9 +11,9 @@ DEFAULT_API_URL = "http://localhost:13305/v1"
 DEFAULT_MODEL = "Qwen3.5-9B-GGUF"
 DEFAULT_MAX_TOKENS = 2048
 MODE_MAX_TOKENS: dict[str, int] = {
-    "Game": 512,
-    "Web": 1024,
-    "Document": 2048,
+    "Game": 4096,
+    "Web": 4096,
+    "Document": 8192,
 }
 
 

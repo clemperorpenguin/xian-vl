@@ -10,7 +10,7 @@ from PyQt6.QtCore import QThread, QRect, pyqtSignal
 
 from mage.capture.audio import capture_system_audio
 from xian.lemonade_client import LemonadeClient
-from xian.timeout import vision_timeout_for_mode
+from xian.timeout import vision_timeout_for_mode, CHAT_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +235,83 @@ class CinematicWorker(QThread):
             self.translation_done.emit(results, "cinematic")
         except Exception as e:
             logger.error("CinematicWorker error: %s", e)
+            self.error.emit(str(e))
+
+
+class ChatTranslationWorker(QThread):
+    """Translate text for in-game chat."""
+
+    translation_done = pyqtSignal(str)
+    error = pyqtSignal(str)
+
+    def __init__(self, processor, text: str, target_lang: str, source_lang: str):
+        super().__init__()
+        self.processor = processor
+        self.text = text
+        self.target_lang = target_lang
+        self.source_lang = source_lang
+
+    async def _run_async(self):
+        system_prompt = (
+            "You are a translation API. You MUST respond with valid JSON ONLY. "
+            "Do NOT include markdown formatting, backticks, or any other text outside the JSON object. "
+            "The JSON object must have exactly one key: 'translation'."
+        )
+        user_prompt = f"Translate from {self.target_lang} to {self.source_lang}:\n\n{self.text}"
+        
+        try:
+            response = await asyncio.wait_for(
+                self.processor.client.chat.completions.create(
+                    model=self.processor.config.model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    max_tokens=self.processor.config.max_tokens,
+                    temperature=0.1,
+                    extra_body={"chat_template_kwargs": {"enable_thinking": False}}
+                ),
+                timeout=CHAT_TIMEOUT_SECONDS,
+            )
+            
+            choice = response.choices[0] if response.choices else None
+            final_output = (choice.message.content or "").strip() if choice else ""
+            
+            import re
+            import json
+            
+            # Strip <think> tags if they exist outside or inside the JSON
+            cleaned_output = re.sub(r'<think>.*?</think>', '', final_output, flags=re.DOTALL).strip()
+            cleaned_output = re.sub(r'<think>.*$', '', cleaned_output, flags=re.DOTALL).strip()
+            
+            # Find the JSON object
+            json_match = re.search(r'\{.*?\}', cleaned_output, flags=re.DOTALL)
+            
+            if json_match:
+                try:
+                    data = json.loads(json_match.group(0))
+                    if "translation" in data:
+                        return data["translation"].strip()
+                except json.JSONDecodeError:
+                    pass
+            
+            # If JSON parsing fails but we have some cleaned output, it might just be the raw string
+            if cleaned_output and not cleaned_output.startswith("{"):
+                return cleaned_output
+                
+            raise ValueError("Failed to parse translation from model output.")
+            
+        except Exception as e:
+            logger.error("Error during chat translation inference: %s", e)
+            raise e
+
+    def run(self):
+        future = self.processor.engine.submit(self._run_async())
+        try:
+            result = future.result(timeout=CHAT_TIMEOUT_SECONDS)
+            self.translation_done.emit(result)
+        except Exception as e:
+            logger.error("ChatTranslationWorker error: %s", e)
             self.error.emit(str(e))
 
 
