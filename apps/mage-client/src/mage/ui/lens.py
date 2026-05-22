@@ -126,7 +126,7 @@ class LensOverlayWindow(QWidget):
             # Save to bytes
             buffer = QBuffer()
             buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-            cropped_pixmap.save(buffer, "JPG", 85)
+            cropped_pixmap.save(buffer, "PNG")
             cropped_data = bytes(buffer.buffer())
             
             self.action_requested.emit(action, rect, cropped_data)

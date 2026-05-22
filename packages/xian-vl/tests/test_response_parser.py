@@ -68,3 +68,83 @@ def test_parse_response_fallback_split(processor: VLProcessor) -> None:
     assert orig == "为维护未成年人"
     assert trans == "To protect minors"
     assert conf == 0.7
+
+
+def test_parse_response_multiple_blocks(processor: VLProcessor) -> None:
+    raw_response = (
+        "4.  **Format Output:**\n"
+        "    *   ORIGINAL: [Text]\n"
+        "    *   TRANSLATED: [Translation]\n"
+        "    *   CONFIDENCE: [Score]\n\n"
+        "Let's assemble the final text.\n\n"
+        "ORIGINAL:\n"
+        "剑侠世界4\n\n"
+        "TRANSLATED:\n"
+        "The Realm of the Sword Hero IV\n\n"
+        "CONFIDENCE:\n"
+        "0.95"
+    )
+    orig, trans, conf = processor.parse_response(raw_response)
+    assert orig == "剑侠世界4"
+    assert trans == "The Realm of the Sword Hero IV"
+    assert conf == 0.95
+
+
+def test_parse_response_placeholders(processor: VLProcessor) -> None:
+    # Test that template placeholders are cleaned/ignored
+    raw_response = (
+        "ORIGINAL:\n"
+        "[Extracted Chinese text]\n\n"
+        "TRANSLATED:\n"
+        "[Direct translation into English]\n\n"
+        "CONFIDENCE:\n"
+        "0.85"
+    )
+    orig, trans, conf = processor.parse_response(raw_response)
+    assert orig == ""
+    assert trans == ""
+    assert conf == 0.85
+
+
+def test_parse_response_unclosed_think(processor: VLProcessor) -> None:
+    # Test that unclosed think blocks containing draft ORIGINAL/TRANSLATED markers are stripped
+    raw_response = (
+        "<think>\n"
+        "Thinking Process:\n"
+        "1. Identify text.\n"
+        "2. Draft ORIGINAL:\n"
+        "   剑侠世界4\n"
+        "   TRANSLATED:\n"
+        "   Sword Hero's Realm 4\n"
+    )
+    orig, trans, conf = processor.parse_response(raw_response)
+    assert orig == ""
+    assert trans == ""
+    assert conf == 0.85
+
+
+def test_parse_response_streaming_phases(processor: VLProcessor) -> None:
+    # Phase 1: Unclosed think block containing drafts
+    p1 = "<think>Thinking... ORIGINAL: draft TRANSLATED: draft"
+    orig, trans, _ = processor.parse_response(p1)
+    assert orig == ""
+    assert trans == ""
+
+    # Phase 2: Closed think block, but final layout not started yet
+    p2 = "<think>Thinking... </think>\n"
+    orig, trans, _ = processor.parse_response(p2)
+    assert orig == ""
+    assert trans == ""
+
+    # Phase 3: ORIGINAL starts streaming
+    p3 = "<think>Thinking... </think>\nORIGINAL:\nReal Original Text"
+    orig, trans, _ = processor.parse_response(p3)
+    assert orig == "Real Original Text"
+    assert trans == ""
+
+    # Phase 4: TRANSLATED starts streaming
+    p4 = "<think>Thinking... </think>\nORIGINAL:\nReal Original Text\n\nTRANSLATED:\nReal Translation"
+    orig, trans, _ = processor.parse_response(p4)
+    assert orig == "Real Original Text"
+    assert trans == "Real Translation"
+

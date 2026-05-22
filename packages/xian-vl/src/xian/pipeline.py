@@ -8,9 +8,10 @@ import os
 import re
 import json
 import threading
+import time
 from dataclasses import dataclass
 
-from PIL import Image
+from PIL import Image, ImageFilter
 from openai import AsyncOpenAI
 import imagehash
 
@@ -109,15 +110,18 @@ class VLProcessor:
 
             image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
+        # Sharpen to make text edges crisper for OCR
+        image = image.filter(ImageFilter.SHARPEN)
+
         return image
 
     def encode_image(self, image: Image.Image) -> str:
-        """Convert PIL Image to base64 string for OpenAI API."""
-        # JPEG does not support alpha channels; screen captures are often RGBA
-        if image.mode != "RGB":
+        """Convert PIL Image to lossless PNG for OCR accuracy."""
+        # Ensure RGBA is converted for compatibility
+        if image.mode == "RGBA":
             image = image.convert("RGB")
         buffered = io.BytesIO()
-        image.save(buffered, format="JPEG")
+        image.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
     def create_prompt(self, source_lang: str, target_lang: str, mode: str, styles: list[str]) -> tuple[str, str]:
@@ -125,11 +129,11 @@ class VLProcessor:
         Returns a tuple of (system_prompt, user_prompt).
         """
         mode_context = "a web interface" if mode == "Web" else "a video game interface"
-        style_context = f" Translate using a {', '.join(styles)} style/tone." if styles else ""
+        style_context = f" (Optionally use {', '.join(styles)} terms if it does not compromise accuracy)" if styles else ""
 
         system_prompt = (
-            f"You are a highly precise OCR and translation engine. "
-            f"You must strictly follow this exact 3-part layout with NO conversational text, NO reasoning, and NO markdown wrappers:\n"
+            f"You are a highly precise OCR and translation engine.\n"
+            f"You must strictly output ONLY this exact 3-part layout with NO markdown wrappers:\n"
             f"ORIGINAL:\n[Extracted {source_lang} text]\n\n"
             f"TRANSLATED:\n[Direct translation into {target_lang}]\n\n"
             f"CONFIDENCE:\n[Confidence float score between 0.0 and 1.0]\n\n"
@@ -139,7 +143,7 @@ class VLProcessor:
             f"- Do NOT repeat the same character or word more than it actually appears in the image.\n"
             f"- If no readable text is found, output ORIGINAL: (none) and TRANSLATED: (none)."
         )
-        
+
         user_prompt = (
             f"OCR the {source_lang} text from this image of {mode_context}, "
             f"then translate it to {target_lang}.{style_context}"
@@ -147,86 +151,130 @@ class VLProcessor:
         
         return system_prompt, user_prompt
 
+    @staticmethod
+    def _detect_repetition_loop(text: str) -> bool:
+        """Detect if the tail of `text` is stuck in a repetition loop."""
+        if len(text) < 20:
+            return False
+            
+        # 1. Simple single character repeat
+        if re.search(r'(.)\1{14,}$', text):
+            return True
+            
+        # 2. Multi-character regex for short patterns
+        match = re.search(r'(.{2,50}?)\1{2,}$', text)
+        if match and len(match.group(0)) >= 20:
+            return True
+            
+        # 3. Detect large structural loops (e.g., 15 to 1000+ chars) via string slicing
+        tail = text[-4000:] if len(text) > 4000 else text
+        max_size = len(tail) // 3
+        if max_size >= 15:
+            for size in range(15, max_size + 1):
+                chunk1 = tail[-size:]
+                chunk2 = tail[-size*2:-size]
+                chunk3 = tail[-size*3:-size*2]
+                if chunk1 == chunk2 and chunk2 == chunk3:
+                    return True
+                    
+        return False
+
     def parse_response(self, response: str) -> tuple[str, str, float]:
         """Parse the model response to extract original text, translation, and confidence.
 
         Returns (original_text, translated_text, confidence_score).
         """
-        preview = (response[:80] + "…") if len(response) > 80 else response
-        logger.debug("parse_response raw input (%d chars), preview=%r", len(response), preview)
-
         # Strip thinking tags if present
         cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
         cleaned = re.sub(r'<think>.*$', '', cleaned, flags=re.DOTALL).strip()
-        if not cleaned:
-            cleaned = response.strip()
 
         # Parse confidence score using keyword search
         confidence = 0.85
-        conf_match = re.search(r'CONFIDENCE\b\D*?([0-9.]+)', cleaned, re.IGNORECASE)
-        if conf_match:
+        conf_pattern = r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?(?:CONFIDENCE)\b|[\(\[]\s*CONFIDENCE\s*[\)\]])\D*?([0-9.]+)'
+        conf_matches = list(re.finditer(conf_pattern, cleaned, re.IGNORECASE))
+        if conf_matches:
             try:
-                confidence = float(conf_match.group(1).strip())
+                confidence = float(conf_matches[-1].group(1).strip())
                 confidence = max(0.0, min(1.0, confidence))  # clamp between 0.0 and 1.0
             except ValueError:
                 pass
 
-        # Split on double-newline for fallback parsing
+        # Split on double-newline for fallback parsing (confidence only)
         parts = re.split(r'\n\s*\n', cleaned, maxsplit=2)
-        if not conf_match and len(parts) == 3:
+        if not conf_matches and len(parts) == 3:
             try:
                 val = float(parts[2].strip())
                 confidence = max(0.0, min(1.0, val))
             except ValueError:
                 pass
 
-        # Extract ORIGINAL and TRANSLATED sections using a highly resilient regex
-        orig_match = re.search(
-            r'ORIGINAL[a-zA-Z]*[^\w\n]*[:\n][ \t]*(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:TRANSLAT|CONFIDENCE)|\Z)',
-            cleaned, re.DOTALL | re.IGNORECASE
-        )
-        trans_match = re.search(
-            r'TRANSLAT[a-zA-Z]*[^\w\n]*[:\n][ \t]*(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:CONFIDENCE|ORIGINAL)|\Z)',
-            cleaned, re.DOTALL | re.IGNORECASE
-        )
+        # Extract ORIGINAL and TRANSLATED sections using a highly resilient regex.
+        # Markers must be formatted either at the start of a line (with optional list/bold prefixes)
+        # or enclosed in brackets/parentheses to avoid matching conversational step titles like "Refine Translation:".
+        orig_marker_pat = r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?ORIGINAL\b|[\(\[]\s*ORIGINAL\s*[\)\]])[^\w\n]*[:\n]?'
+        trans_marker_pat = r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?TRANSLAT[a-zA-Z]*\b|[\(\[]\s*TRANSLAT[a-zA-Z]*\s*[\)\]])[^\w\n]*[:\n]?'
 
-        if orig_match and trans_match:
-            original_text = orig_match.group(1).strip()
-            # Strip markdown and quotes first so prefix stripping works at the absolute start ^
-            original_text = original_text.strip(' \t\n\r"\'`*•-')
+        orig_match = None
+        orig_matches = list(re.finditer(
+            r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?ORIGINAL\b|[\(\[]\s*ORIGINAL\s*[\)\]])[^\w\n]*[:\n][ \t]*(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:[\(\[]?\s*(?:TRANSLAT|CONFIDENCE)|TRANSLAT[a-zA-Z]*\b|CONFIDENCE\b)|\Z)',
+            cleaned, re.DOTALL | re.IGNORECASE
+        ))
+        if orig_matches:
+            orig_match = orig_matches[-1]
+
+        trans_match = None
+        trans_matches = list(re.finditer(
+            r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?TRANSLAT[a-zA-Z]*\b|[\(\[]\s*TRANSLAT[a-zA-Z]*\s*[\)\]])[^\w\n]*[:\n][ \t]*(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:[\(\[]?\s*(?:ORIGINAL|CONFIDENCE)|ORIGINAL\b|CONFIDENCE\b)|\Z)',
+            cleaned, re.DOTALL | re.IGNORECASE
+        ))
+        if trans_matches:
+            trans_match = trans_matches[-1]
+
+        has_orig_marker = bool(re.search(orig_marker_pat, cleaned, re.IGNORECASE))
+        has_trans_marker = bool(re.search(trans_marker_pat, cleaned, re.IGNORECASE))
+
+        # If it has at least one marker, we trust our regex matches (even if empty because it's streaming)
+        if has_orig_marker or has_trans_marker:
+            original_text = ""
+            translation = ""
             
-            # Strip VLM conversational filler
-            original_text = re.sub(
-                r'^(?:The image contains the following text:|The image contains the following.*?text:|The text in the image is:|The extracted text is:|The.*?text is:)\s*',
-                '', original_text, flags=re.IGNORECASE
+            if orig_match:
+                original_text = orig_match.group(1).strip()
+                original_text = original_text.strip(' \t\n\r"\'`*•-')
+                original_text = re.sub(
+                    r'^(?:The image contains.*?text:|The text in the image is:|The extracted text is:|The.*?text is:)\s*',
+                    '', original_text, flags=re.IGNORECASE
+                )
+                original_text = original_text.strip(' \t\n\r"\'`*•-')
+                
+            if trans_match:
+                translation = trans_match.group(1).strip()
+                translation = translation.strip(' \t\n\r"\'`*•-')
+
+            # Filter out template placeholders
+            placeholder_pat = re.compile(
+                r'^\[\s*.*?(?:text|translation|score|original|translated|english|chinese|placeholder|insert|label|here|extract|direct).*?\]$',
+                re.IGNORECASE
             )
-            # Strip again to clean up remaining trailing/leading quotes
-            original_text = original_text.strip(' \t\n\r"\'`*•-')
-            
-            translation = trans_match.group(1).strip()
-            translation = translation.strip(' \t\n\r"\'`*•-')
-            
-            logger.info(
-                "parse_response (markers): original=%d chars, translation=%d chars, confidence=%.2f",
-                len(original_text), len(translation), confidence
-            )
+            if placeholder_pat.match(original_text):
+                original_text = ""
+            if placeholder_pat.match(translation):
+                translation = ""
+                
             return original_text, translation, confidence
 
-        # --- Strategy 2: split on double newline ---
-        if len(parts) >= 2 and len(parts[0].strip()) > 5 and len(parts[1].strip()) > 5:
-            original_text = parts[0].strip()
-            original_text = original_text.strip(' \t\n\r"\'`*•-')
-            translation = parts[1].strip()
-            translation = translation.strip(' \t\n\r"\'`*•-')
-            logger.info(
-                "parse_response (split): original=%d chars, translation=%d chars, confidence=%.2f",
-                len(original_text), len(translation), confidence
-            )
-            return original_text, translation, confidence
+        # If no markers are present AT ALL, it is either still streaming unstructured reasoning,
+        # or the model completely failed the layout. We return empty strings to prevent leaking
+        # unstructured reasoning to the UI, unless the fallback double-newline split succeeded.
+        if len(parts) == 3:
+            try:
+                val = float(parts[2].strip())
+                confidence = max(0.0, min(1.0, val))
+                return parts[0].strip(), parts[1].strip(), confidence
+            except ValueError:
+                pass
 
-        # --- Strategy 3: raw fallback ---
-        logger.info("parse_response: using raw output as translation, confidence=%.2f", confidence)
-        return "", cleaned, confidence
+        return "", "", confidence
 
     async def process_frame(self, image_data: bytes, source_lang: str, target_lang: str, mode: str, styles: list[str]) -> list[TranslationResult]:
         """
@@ -271,68 +319,137 @@ class VLProcessor:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": user_prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_image}"}}
                 ]
             }
         ]
 
         max_tok = max(MODE_MAX_TOKENS.get(mode, self.config.max_tokens), 2048)
-        accumulated = ""
 
-        try:
-            logger.info("Sending streaming translation request to OmniRouter via OpenAI...")
-            stream = await asyncio.wait_for(
-                self.client.chat.completions.create(
-                    model=self.config.model_name,
-                    messages=messages,
-                    max_tokens=max_tok,
-                    temperature=self.config.temperature,
-                    frequency_penalty=0.3,
-                    stream=True,
-                ),
-                timeout=vision_timeout_for_mode(mode),
-            )
-            last_finish = None
-            async for chunk in stream:
-                delta = chunk.choices[0].delta.content or "" if chunk.choices else ""
-                accumulated += delta
-                if chunk.choices and chunk.choices[0].finish_reason:
-                    last_finish = chunk.choices[0].finish_reason
-                orig, trans, _ = self.parse_response(accumulated)
-                yield orig, trans, None
+        max_attempts = 2
+        for attempt in range(max_attempts):
+            accumulated = ""
+            loop_detected = False
 
-            results = self._build_result(accumulated, image)
+            try:
+                # Escalate parameters on retry to break out of loop
+                temp = self.config.temperature if attempt == 0 else min(0.9, self.config.temperature + 0.5)
+                rep_penalty = 1.15 if attempt == 0 else 1.5
 
-            # Propagate truncation flag
-            if last_finish == "length":
-                if not results:
-                    results = [TranslationResult(
-                        original_text="",
-                        translated_text="⚠️ Translation request truncated (VLM token limit reached).",
-                        confidence=0.0
-                    )]
-                for r in results:
-                    r.truncated = True
-                    r.raw_output = accumulated
+                logger.info(
+                    "Sending streaming translation request to OmniRouter via OpenAI (attempt %d/%d, temp=%.1f, rep=%.2f)...",
+                    attempt + 1, max_attempts, temp, rep_penalty,
+                )
+                stream = await asyncio.wait_for(
+                    self.client.chat.completions.create(
+                        model=self.config.model_name,
+                        messages=messages,
+                        max_tokens=max_tok,
+                        temperature=temp,
+                        frequency_penalty=0.6,
+                        presence_penalty=0.2,
+                        stream=True,
+                        extra_body={"repetition_penalty": rep_penalty},
+                    ),
+                    timeout=vision_timeout_for_mode(mode),
+                )
+                last_log_time = time.time()
+                last_log_len = 0
+                last_finish = None
+                in_thinking = False
+                
+                async for chunk in stream:
+                    delta = ""
+                    if chunk.choices:
+                        reasoning = getattr(chunk.choices[0].delta, 'reasoning_content', None)
+                        content = chunk.choices[0].delta.content or ""
+                        
+                        if isinstance(reasoning, str) and reasoning:
+                            if not in_thinking:
+                                delta += "<think>"
+                                in_thinking = True
+                            delta += reasoning
+                        
+                        if content:
+                            if in_thinking:
+                                delta += "</think>"
+                                in_thinking = False
+                            delta += content
+                            
+                    accumulated += delta
+                    if chunk.choices and chunk.choices[0].finish_reason:
+                        last_finish = chunk.choices[0].finish_reason
 
-            with self._lock:
-                self._last_results = results
-                self.last_stream_results = results
-                self._last_messages = messages
-                self._last_raw_output = accumulated
+                    # Throttle stream logging to once per second
+                    current_time = time.time()
+                    if current_time - last_log_time >= 1.0:
+                        new_text = accumulated[last_log_len:]
+                        clean_new = new_text.replace('\n', '\\n')
+                        logger.debug("Stream progress [%d chars]: ...%s", len(accumulated), clean_new)
+                        last_log_time = current_time
+                        last_log_len = len(accumulated)
 
-            extracted = [r.original_text for r in results]
-            self.context_manager.update_last_frame_data("\n".join(extracted), results)
+                    # Check for repetition loop every 60+ chars
+                    if self._detect_repetition_loop(accumulated):
+                        logger.warning(
+                            "Repetition loop detected at %d chars (attempt %d/%d), aborting stream. Tail: %r",
+                            len(accumulated), attempt + 1, max_attempts, accumulated[-80:],
+                        )
+                        loop_detected = True
+                        # Cancel the stream
+                        await stream.response.aclose()
+                        break
 
-            yield orig, trans, (results, messages, accumulated)
+                    orig, trans, _ = self.parse_response(accumulated)
+                    yield orig, trans, None
 
-        except asyncio.TimeoutError:
-            logger.error("OpenAI streaming translation timed out (mode=%s)", mode)
-            raise RuntimeError("Translation request timed out.") from None
+                if in_thinking:
+                    accumulated += "</think>"
+                    in_thinking = False
 
-        except Exception as e:
-            logger.error("Error during OpenAI API streaming inference: %s", e, exc_info=True)
-            raise
+                if loop_detected:
+                    if attempt < max_attempts - 1:
+                        logger.info("Retrying with escalated parameters...")
+                        continue
+                    else:
+                        # Final attempt also looped — truncate the repeated tail and use what we have
+                        logger.warning("Loop persisted after %d attempts, truncating repeated content", max_attempts)
+                        # Strip the repeated tail
+                        accumulated = re.sub(r'(.{1,12}?)\1{4,}$', r'\1', accumulated)
+
+                results = self._build_result(accumulated, image)
+
+                # Propagate truncation flag
+                if last_finish == "length":
+                    if not results:
+                        results = [TranslationResult(
+                            original_text="",
+                            translated_text="⚠️ Translation request truncated (VLM token limit reached).",
+                            confidence=0.0
+                        )]
+                    for r in results:
+                        r.truncated = True
+                        r.raw_output = accumulated
+
+                with self._lock:
+                    self._last_results = results
+                    self.last_stream_results = results
+                    self._last_messages = messages
+                    self._last_raw_output = accumulated
+
+                extracted = [r.original_text for r in results]
+                self.context_manager.update_last_frame_data("\n".join(extracted), results)
+
+                yield orig, trans, (results, messages, accumulated)
+                return  # Success, exit the retry loop
+
+            except asyncio.TimeoutError:
+                logger.error("OpenAI streaming translation timed out (mode=%s)", mode)
+                raise RuntimeError("Translation request timed out.") from None
+
+            except Exception as e:
+                logger.error("Error during OpenAI API streaming inference: %s", e, exc_info=True)
+                raise
 
     async def continue_generation(
         self,
@@ -375,9 +492,11 @@ class VLProcessor:
                     model=self.config.model_name,
                     messages=continuation_messages,
                     max_tokens=max_tok,
-                    temperature=self.config.temperature,
-                    frequency_penalty=0.3,
+                    temperature=0.2,
+                    frequency_penalty=0.6,
+                    presence_penalty=0.2,
                     stream=True,
+                    extra_body={"repetition_penalty": 1.15},
                 ),
                 timeout=vision_timeout_for_mode(mode),
             )
@@ -407,17 +526,15 @@ class VLProcessor:
 
     def create_cinematic_prompt(self, transcript: str, target_lang: str, styles: list[str], source_lang: str = "Chinese") -> str:
         """Create a prompt combining audio transcript and visual OCR for cinematic mode."""
-        style_context = f" Translate using a {', '.join(styles)} style/tone." if styles else ""
+        style_context = f" (Optionally use {', '.join(styles)} terms if it does not compromise accuracy)" if styles else ""
         return (
             f"Translate the following dialogue to {target_lang}. Use the provided system audio transcription for context, "
             f"and cross-reference it with the OCR from the provided image of the game interface to ensure accurate character names and tone.{style_context}\n\n"
             f"Audio Transcript: {transcript}\n\n"
             f"CRITICAL SYSTEM DIRECTIVES:\n"
-            f"- KEEP YOUR REASONING/THINKING EXTREMELY BRIEF (under 2 sentences) or bypass it entirely if possible.\n"
-            f"- DO NOT write any reasoning, thinking process, or explanation.\n"
-            f"- DO NOT self-correct, refine, or write multiple drafts.\n"
-            f"- Output a single confidence estimation float (0.0 to 1.0) based on your certainty of the OCR and translation.\n\n"
-            f"Reply strictly in this 3-part layout with NO other conversational introduction, commentary, or Markdown formatting outside of the markers:\n"
+            f"- Output a single confidence estimation float (0.0 to 1.0) based on your certainty of the OCR and translation.\n"
+            f"- Output ONLY the 3-part layout below.\n\n"
+            f"Reply strictly in this 3-part layout with NO conversational introduction or Markdown formatting:\n"
             f"ORIGINAL:\n[Extracted {source_lang} dialogue text]\n\n"
             f"TRANSLATED:\n[Direct translation into {target_lang}]\n\n"
             f"CONFIDENCE:\n[Confidence float score]"
@@ -443,42 +560,69 @@ class VLProcessor:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_image}"}}
                 ]
             }
         ]
 
         try:
-            logger.info("Sending cinematic translation request to OmniRouter via OpenAI...")
-            response = await asyncio.wait_for(
-                self.client.chat.completions.create(
-                    model=self.config.model_name,
-                    messages=messages,
-                    max_tokens=self.config.max_tokens,
-                    temperature=self.config.temperature,
-                ),
-                timeout=vision_timeout_for_mode("Document"),
-            )
+            max_attempts = 2
+            results = []
+            
+            for attempt in range(max_attempts):
+                temp = 0.2 if attempt == 0 else 0.7
+                rep_penalty = 1.15 if attempt == 0 else 1.5
+                
+                logger.info(
+                    "Sending cinematic translation request to OmniRouter via OpenAI (attempt %d/%d, temp=%.1f, rep=%.2f)...",
+                    attempt + 1, max_attempts, temp, rep_penalty
+                )
+                response = await asyncio.wait_for(
+                    self.client.chat.completions.create(
+                        model=self.config.model_name,
+                        messages=messages,
+                        max_tokens=self.config.max_tokens,
+                        temperature=temp,
+                        frequency_penalty=0.6,
+                        presence_penalty=0.2,
+                        extra_body={"repetition_penalty": rep_penalty},
+                    ),
+                    timeout=vision_timeout_for_mode("Document"),
+                )
 
-            choice = response.choices[0] if response.choices else None
-            final_output = (choice.message.content or "") if choice else ""
+                choice = response.choices[0] if response.choices else None
+                final_output = (choice.message.content or "") if choice else ""
 
-            # If the response was truncated while reasoning (content is empty)
-            if not final_output and choice and choice.finish_reason == "length":
-                logger.warning("VLM execution was truncated (finish_reason=length) while thinking. Try increasing max_tokens.")
-                results = [TranslationResult(
-                    original_text="",
-                    translated_text="⚠️ Translation request truncated (VLM token limit reached).",
-                    confidence=0.0
-                )]
-            else:
-                # Fallback
+                # Fallback for reasoning models that return content in reasoning_content
                 if not final_output and choice:
-                    reasoning = getattr(choice.message, 'reasoning_content', None) or ""
-                    if reasoning:
+                    reasoning = getattr(choice.message, 'reasoning_content', None)
+                    if isinstance(reasoning, str):
                         final_output = reasoning
 
+                # If the response was truncated while reasoning (content is empty)
+                if not final_output and choice and choice.finish_reason == "length":
+                    logger.warning("VLM execution was truncated (finish_reason=length) while thinking. Try increasing max_tokens.")
+                    results = [TranslationResult(
+                        original_text="",
+                        translated_text="⚠️ Translation request truncated (VLM token limit reached).",
+                        confidence=0.0
+                    )]
+                    break
+
+                # Loop detection for non-streaming response
+                if self._detect_repetition_loop(final_output):
+                    if attempt < max_attempts - 1:
+                        logger.warning(
+                            "Repetition loop detected in cinematic output (attempt %d/%d), retrying.",
+                            attempt + 1, max_attempts
+                        )
+                        continue
+                    else:
+                        logger.warning("Loop persisted after %d attempts, truncating repeated content", max_attempts)
+                        final_output = re.sub(r'(.{1,12}?)\1{4,}$', r'\1', final_output)
+                        
                 results = self._build_result(final_output, image)
+                break
 
             extracted = [r.original_text for r in results]
             self.context_manager.update_last_frame_data("\n".join(extracted), results)
@@ -517,9 +661,9 @@ class VLProcessor:
                 timeout=CHAT_AUX_TIMEOUT_SECONDS,
             )
             ch0 = response.choices[0] if response.choices else None
-            translated = (ch0.message.content or "").strip() if ch0 else ""
             # Strip thinking tags if present
             translated = re.sub(r'<think>.*?</think>', '', translated, flags=re.DOTALL).strip()
+            translated = re.sub(r'<think>.*$', '', translated, flags=re.DOTALL).strip()
             if translated:
                 logger.info("Translated query '%s' → '%s'", query, translated)
                 return translated
@@ -554,7 +698,7 @@ class VLProcessor:
                     frame = self.context_manager.get_latest_frame()
                     if frame:
                         b64_img = self.encode_image(frame)
-                        openai_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}})
+                        openai_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_img}"}})
 
             # OpenAI requires content to be a string if it's just text, or list if multimodal
             if len(openai_content) == 1 and openai_content[0]["type"] == "text":
@@ -728,6 +872,7 @@ class VLProcessor:
                         final_output = response.choices[0].message.content or ""
 
             cleaned_output = re.sub(r'<think>.*?</think>', '', final_output, flags=re.DOTALL).strip()
+            cleaned_output = re.sub(r'<think>.*$', '', cleaned_output, flags=re.DOTALL).strip()
             # Strip any residual tool_call tags the model may have emitted
             cleaned_output = re.sub(r'<tool_call>.*?</tool_call>', '', cleaned_output, flags=re.DOTALL).strip()
 
