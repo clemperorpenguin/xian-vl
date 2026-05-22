@@ -224,6 +224,7 @@ class CinematicWorker(QThread):
 
         # 3. Await audio recording completion
         audio_bytes = await audio_task
+        self.audio_bytes = audio_bytes
         
         transcript = ""
         if audio_bytes:
@@ -245,7 +246,8 @@ class CinematicWorker(QThread):
             self.styles,
             b64_image=b64_image,
             image=image,
-            source_lang=self.source_lang
+            source_lang=self.source_lang,
+            audio_bytes=audio_bytes
         )
         return results
 
@@ -335,6 +337,104 @@ class ChatTranslationWorker(QThread):
             self.translation_done.emit(result)
         except Exception as e:
             logger.error("ChatTranslationWorker error: %s", e)
+            self.error.emit(str(e))
+
+
+class RaidWorker(QThread):
+    """Run Raid Mode handling audio capture, transcription, translation, and TTS voice cloning.
+
+    No screen/image processing is involved.
+    """
+
+    # (original_text, translated_text)
+    raid_done = pyqtSignal(str, str)
+    error = pyqtSignal(str)
+
+    def __init__(self, processor, *, target_lang: str = "English", source_lang: str = "Chinese"):
+        super().__init__()
+        self.processor = processor
+        self.target_lang = target_lang
+        self.source_lang = source_lang
+        self.audio_bytes = None
+
+    async def _run_async(self):
+        # 1. Capture system audio (4 seconds recording)
+        audio_bytes = await capture_system_audio(duration_seconds=4.0)
+        self.audio_bytes = audio_bytes
+        if not audio_bytes:
+            raise ValueError("No audio captured.")
+
+        # 2. Transcribe via Lemonade ASR
+        base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
+        base_url_no_v1 = base_url.removesuffix("/v1")
+        
+        client = LemonadeClient(base_url=base_url_no_v1)
+        try:
+            transcript = await client.transcribe(audio_bytes, language="zh" if "chin" in self.source_lang.lower() else "en")
+        finally:
+            await client.close()
+
+        if not transcript or not transcript.strip():
+            raise ValueError("No speech detected.")
+
+        # 3. Translate transcript from source_lang to target_lang
+        system_prompt = (
+            "You are a translation API. You MUST respond with valid JSON ONLY. "
+            "Do NOT include markdown formatting, backticks, or any other text outside the JSON object. "
+            "The JSON object must have exactly one key: 'translation'."
+        )
+        user_prompt = f"Translate from {self.source_lang} to {self.target_lang}:\n\n{transcript}"
+        
+        response = await asyncio.wait_for(
+            self.processor.client.chat.completions.create(
+                model=self.processor.config.model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=self.processor.config.max_tokens,
+                temperature=0.1,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}}
+            ),
+            timeout=CHAT_TIMEOUT_SECONDS,
+        )
+        
+        choice = response.choices[0] if response.choices else None
+        final_output = (choice.message.content or "").strip() if choice else ""
+        
+        import re
+        import json
+        
+        # Strip <think> tags
+        cleaned_output = re.sub(r'<think>.*?</think>', '', final_output, flags=re.DOTALL).strip()
+        cleaned_output = re.sub(r'<think>.*$', '', cleaned_output, flags=re.DOTALL).strip()
+        
+        # Parse JSON
+        json_match = re.search(r'\{.*?\}', cleaned_output, flags=re.DOTALL)
+        translation = ""
+        if json_match:
+            try:
+                data = json.loads(json_match.group(0))
+                if "translation" in data:
+                    translation = data["translation"].strip()
+            except json.JSONDecodeError:
+                pass
+        
+        if not translation:
+            if cleaned_output and not cleaned_output.startswith("{"):
+                translation = cleaned_output
+            else:
+                raise ValueError("Failed to parse translation from model output.")
+
+        return transcript, translation
+
+    def run(self):
+        future = self.processor.engine.submit(self._run_async())
+        try:
+            transcript, translation = future.result(timeout=CHAT_TIMEOUT_SECONDS + 10.0)
+            self.raid_done.emit(transcript, translation)
+        except Exception as e:
+            logger.error("RaidWorker error: %s", e)
             self.error.emit(str(e))
 
 

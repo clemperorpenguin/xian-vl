@@ -19,7 +19,7 @@ from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap
 from mage.ui.theme import accent_hex, accent_hover_hex
 
 from xian.pipeline import VLProcessor, VLConfig
-from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker, ChatTranslationWorker
+from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker, ChatTranslationWorker, RaidWorker
 from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
 from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.how_to_say import HowToSayDialog
@@ -27,6 +27,7 @@ from mage.ui.result_bubble import ResultBubble
 from mage.capture.hotkeys import create_hotkey_listener
 from mage.capture.mouse import create_mouse_listener
 from mage.capture.screen import ScreenCapture
+from mage.capture.audio import play_audio_async
 from xian.dictionary import LocalDictionary
 from xian.lemonade_url import normalize_lemonade_api_base_url, should_warn_http_to_non_loopback
 from mage.ui.command_osd import CommandOSD
@@ -36,7 +37,7 @@ from mage.settings_keys import (
     KEY_API_URL, KEY_API_MODEL, KEY_SOURCE_LANG, KEY_TARGET_LANG,
     KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY,
     KEY_GPU_UTIL, KEY_DIALOGUE_DELAY, KEY_CINEMATIC_TRIGGER,
-    KEY_AUTO_CONTINUE,
+    KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK,
 )
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,12 @@ class SettingsDialog(QDialog):
         self.auto_continue_cb.setChecked(auto_val == "true" or auto_val is True)
         layout.addRow(self.auto_continue_cb)
 
+        # Auto-speak translations
+        self.auto_speak_cb = QCheckBox("Auto-speak translations (Text-to-Speech)")
+        speak_val = settings.value(KEY_AUTO_SPEAK, "false")
+        self.auto_speak_cb.setChecked(speak_val == "true" or speak_val is True)
+        layout.addRow(self.auto_speak_cb)
+
         # Buttons
         btn_row = QHBoxLayout()
         save_btn = QPushButton("Save")
@@ -197,6 +204,7 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_GPU_UTIL, self.gpu_combo.currentText())
         self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
+        self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
         self.accept()
 
 
@@ -240,6 +248,7 @@ class XianApp(QWidget):
         self.hotkey_listener.trigger_dialogue_mode.connect(self.toggle_dialogue_mode)
         self.hotkey_listener.trigger_cinematic_mode.connect(self.toggle_cinematic_mode)
         self.hotkey_listener.trigger_how_to_say.connect(self.show_how_to_say)
+        self.hotkey_listener.trigger_raid_mode.connect(self.start_raid_mode)
         self.hotkey_listener.cinematic_capture.connect(self._on_cinematic_trigger)
         self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
         if hasattr(self.hotkey_listener, "command_mode_cancelled"):
@@ -249,6 +258,9 @@ class XianApp(QWidget):
         # --- Cinematic Mode ---
         self.cinematic_mode_active = False
         self.cinematic_bubble = None
+
+        # --- Raid Mode ---
+        self.raid_bubble = None
 
         # --- Dialogue Mode ---
         self.dialogue_mode_active = False
@@ -381,6 +393,8 @@ class XianApp(QWidget):
             self.toggle_cinematic_mode()
         elif key == "T":
             self.show_how_to_say()
+        elif key == "R":
+            self.start_raid_mode()
         elif key == "S":
             self._open_settings()
 
@@ -479,6 +493,7 @@ class XianApp(QWidget):
                 old.close()
             self._bubbles = self._bubbles[-19:]
         self._bubbles.append(bubble)
+        self._setup_bubble_connections(bubble)
 
     def _replace_persistent_bubble(self, attr_name: str, text: str, original_text: str = "", anchor: QRect = QRect(), border_color: str | None = None, truncated: bool = False) -> ResultBubble:
         """Helper to close and recreate a persistent dialogue or cinematic bubble."""
@@ -502,6 +517,7 @@ class XianApp(QWidget):
             bubble.continue_requested.connect(
                 lambda b=bubble: self._on_continue_requested(b)
             )
+        self._setup_bubble_connections(bubble)
         return bubble
 
     def _on_inference_thinking(self, worker):
@@ -617,6 +633,15 @@ class XianApp(QWidget):
                     else:
                         logger.warning("Max auto-continue limit reached")
 
+        # Store captured audio bytes on target_bubble if available
+        if target_bubble:
+            target_bubble.captured_audio_bytes = getattr(worker, "audio_bytes", None)
+
+        # Auto-speak if in Cinematic Mode, or if Auto-speak setting is checked
+        auto_speak = self.settings.value(KEY_AUTO_SPEAK, "false")
+        if action == "cinematic" or auto_speak == "true" or auto_speak is True:
+            self._speak_text(translation_combined, source=False, voice_ref_bytes=getattr(worker, "audio_bytes", None))
+
     def _on_inference_error(self, msg, worker):
         anchor = worker.anchor_rect
         bubble = self._active_bubbles.pop(worker, None)
@@ -634,6 +659,63 @@ class XianApp(QWidget):
             self._workers.remove(worker)
         except ValueError:
             pass
+
+    def _setup_bubble_connections(self, bubble):
+        bubble.speak_source_requested.connect(
+            lambda b=bubble: self._on_speak_requested(b, source=True)
+        )
+        bubble.speak_target_requested.connect(
+            lambda b=bubble: self._on_speak_requested(b, source=False)
+        )
+
+    def _on_speak_requested(self, bubble, source: bool):
+        text = bubble._original if source else bubble._text
+        if not text:
+            return
+        voice_ref_bytes = getattr(bubble, "captured_audio_bytes", None)
+        self._speak_text(text, source=source, voice_ref_bytes=voice_ref_bytes)
+
+    def _speak_text(self, text: str, source: bool, voice_ref_bytes: bytes | None = None):
+        """Synthesize text and play it back, optionally using voice cloning if voice_ref_bytes is provided."""
+        if not text:
+            return
+
+        async def _synthesize_and_play():
+            import tempfile
+            from pathlib import Path
+            from xian.lemonade_client import LemonadeClient
+            
+            base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
+            base_url_no_v1 = base_url.removesuffix("/v1")
+            
+            # Zero-shot voice cloning
+            voice_param = "af_heart"
+            temp_wav_path = None
+            if voice_ref_bytes:
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                        tmp.write(voice_ref_bytes)
+                        temp_wav_path = tmp.name
+                    voice_param = temp_wav_path
+                except Exception as e:
+                    logger.warning("Failed to write voice cloning reference audio: %s", e)
+            
+            try:
+                client = LemonadeClient(base_url=base_url_no_v1)
+                audio_bytes = await client.tts(text, voice=voice_param)
+                await client.close()
+                play_audio_async(audio_bytes)
+            except Exception as e:
+                logger.error("TTS synthesis failed: %s", e)
+            finally:
+                if temp_wav_path:
+                    try:
+                        Path(temp_wav_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+        self.processor.engine.submit(_synthesize_and_play())
+
 
     def _on_continue_requested(self, bubble: ResultBubble):
         """User clicked Continue on a truncated result."""
@@ -907,6 +989,60 @@ class XianApp(QWidget):
         self._workers.append(worker)
         worker.start()
         logger.info("CinematicWorker started")
+
+    # ------------------------------------------------------------------
+    # Raid Mode
+    # ------------------------------------------------------------------
+    def start_raid_mode(self):
+        self.hide_osd()
+        logger.info("Triggered Raid Mode")
+        self.raid_bubble = self._replace_persistent_bubble("raid_bubble", "Recording raid leader...")
+
+        source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
+        target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
+
+        worker = RaidWorker(
+            self.processor,
+            target_lang=target_lang,
+            source_lang=source_lang,
+        )
+
+        worker.raid_done.connect(
+            lambda transcript, translation, w=worker: self._on_raid_done(transcript, translation, w)
+        )
+        worker.error.connect(
+            lambda msg, w=worker: self._on_raid_error(msg, w)
+        )
+        worker.finished.connect(lambda w=worker: self._cleanup_worker(w))
+
+        self._workers.append(worker)
+        worker.start()
+        logger.info("RaidWorker started")
+
+    def _on_raid_done(self, transcript, translation, worker):
+        logger.info("Raid translation done: %s -> %s", transcript, translation)
+        
+        target_bubble = self._replace_persistent_bubble(
+            "raid_bubble",
+            translation,
+            original_text=transcript,
+        )
+        if target_bubble:
+            target_bubble.captured_audio_bytes = getattr(worker, "audio_bytes", None)
+
+        # Raid Mode automatically plays audio (translating and cloning voices)
+        self._speak_text(translation, source=False, voice_ref_bytes=getattr(worker, "audio_bytes", None))
+
+    def _on_raid_error(self, msg, worker):
+        logger.error("Raid Mode error: %s", msg)
+        if hasattr(self, "raid_bubble") and self.raid_bubble and self.raid_bubble.isVisible():
+            self.raid_bubble.update_text(f"⚠ Error: {msg}")
+        else:
+            bubble = ResultBubble(
+                f"⚠ Raid Mode Error: {msg}",
+                auto_close_ms=8000,
+            )
+            self._add_bubble(bubble)
 
     # ------------------------------------------------------------------
     # Health check

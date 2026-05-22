@@ -105,6 +105,7 @@ class CommandOSD(QWidget):
         options_layout.addWidget(self._create_option("O", "Dialogue"))
         options_layout.addWidget(self._create_option("M", "Cinematic"))
         options_layout.addWidget(self._create_option("T", "Translate"))
+        options_layout.addWidget(self._create_option("R", "Raid"))
         options_layout.addWidget(self._create_option("S", "Settings"))
 
         inner_layout.addLayout(options_layout)

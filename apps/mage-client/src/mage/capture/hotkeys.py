@@ -17,6 +17,7 @@ class HotkeyListener(QObject):
     cinematic_capture = pyqtSignal()
     command_mode_started = pyqtSignal()
     command_mode_cancelled = pyqtSignal()
+    trigger_raid_mode = pyqtSignal()
 
     def start(self):
         pass
@@ -220,6 +221,13 @@ if sys.platform == "linux":
                         self.trigger_how_to_say.emit()
                         self.command_mode_active = False
 
+                    # KEY_R is 19
+                    elif keycode == 19:
+                        logger.info("EvdevListener: Triggered Raid Mode")
+                        self.trigger_raid_mode.emit()
+                        self.command_mode_active = False
+
+
 else:
     from pynput import keyboard
 
@@ -333,6 +341,10 @@ else:
                             elif char == 't':
                                 logger.info("PynputListener: Triggered Translate")
                                 self.trigger_how_to_say.emit()
+                                self.command_mode_active = False
+                            elif char == 'r':
+                                logger.info("PynputListener: Triggered Raid Mode")
+                                self.trigger_raid_mode.emit()
                                 self.command_mode_active = False
                     except Exception as e:
                         logger.debug("PynputListener error: %s", e)

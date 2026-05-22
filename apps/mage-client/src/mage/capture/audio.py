@@ -94,3 +94,39 @@ async def capture_system_audio(
         return None
     finally:
         Path(outpath).unlink(missing_ok=True)
+
+
+def play_audio(audio_bytes: bytes):
+    """Play WAV audio bytes using pw-play, paplay, or aplay."""
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    
+    player = None
+    for cmd in ("pw-play", "paplay", "aplay"):
+        if shutil.which(cmd):
+            player = cmd
+            break
+            
+    if not player:
+        logger.warning("No audio player found (pw-play, paplay, aplay). Cannot play audio.")
+        return
+        
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+        
+    try:
+        subprocess.run([player, tmp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        logger.error("Failed to play audio with %s: %s", player, e)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def play_audio_async(audio_bytes: bytes):
+    """Play WAV audio bytes in a background thread."""
+    import threading
+    t = threading.Thread(target=play_audio, args=(audio_bytes,), daemon=True)
+    t.start()

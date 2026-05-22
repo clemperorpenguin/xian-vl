@@ -418,7 +418,28 @@ class LocalWikiSearcher:
             return []
 
         results = []
-        query_terms = query.lower().split()
+        if any('\u4e00' <= char <= '\u9fff' for char in query) and ' ' not in query:
+            # Segment CJK characters individually, keeping contiguous non-CJK alnum segments
+            query_terms = []
+            current_term = ""
+            for char in query:
+                if '\u4e00' <= char <= '\u9fff':
+                    if current_term:
+                        query_terms.append(current_term.lower())
+                        current_term = ""
+                    query_terms.append(char)
+                else:
+                    if char.isalnum():
+                        current_term += char
+                    else:
+                        if current_term:
+                            query_terms.append(current_term.lower())
+                            current_term = ""
+            if current_term:
+                query_terms.append(current_term.lower())
+        else:
+            query_terms = query.lower().split()
+
         if not query_terms:
             return []
 

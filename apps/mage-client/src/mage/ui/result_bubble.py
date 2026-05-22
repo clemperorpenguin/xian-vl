@@ -18,6 +18,8 @@ class ResultBubble(QWidget):
     """
 
     continue_requested = pyqtSignal()
+    speak_source_requested = pyqtSignal()
+    speak_target_requested = pyqtSignal()
 
     def __init__(self, text: str, original_text: str = "",
                  anchor_rect: QRect = None, auto_close_ms: int = 30000,
@@ -118,6 +120,17 @@ class ResultBubble(QWidget):
         self._continue_btn.setVisible(truncated)
         footer.addWidget(self._continue_btn)
 
+        self._speak_src_btn = QPushButton("🔊 Speak (Src)")
+        self._speak_src_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._speak_src_btn.clicked.connect(self._on_speak_src_clicked)
+        self._speak_src_btn.setEnabled(bool(original_text))
+        footer.addWidget(self._speak_src_btn)
+
+        self._speak_tgt_btn = QPushButton("🔊 Speak (Tgt)")
+        self._speak_tgt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._speak_tgt_btn.clicked.connect(self._on_speak_tgt_clicked)
+        footer.addWidget(self._speak_tgt_btn)
+
         footer.addStretch()
         layout.addLayout(footer)
 
@@ -179,6 +192,8 @@ class ResultBubble(QWidget):
             if self._orig_label:
                 self._orig_label.setText(original_text)
                 self._orig_label.show()
+            if hasattr(self, "_speak_src_btn"):
+                self._speak_src_btn.setEnabled(bool(original_text))
         
         self.adjustSize()
         # Clamp width
@@ -200,3 +215,9 @@ class ResultBubble(QWidget):
         if visible:
             self._continue_btn.setText("▶ Continue")
             self._continue_btn.setEnabled(True)
+
+    def _on_speak_src_clicked(self):
+        self.speak_source_requested.emit()
+
+    def _on_speak_tgt_clicked(self):
+        self.speak_target_requested.emit()
