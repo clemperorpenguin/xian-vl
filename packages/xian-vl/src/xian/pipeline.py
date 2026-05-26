@@ -177,6 +177,20 @@ class VLProcessor:
 
             image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
+        # Pad to a square to prevent the Vision Transformer from stretching the image
+        width, height = image.size
+        if width != height:
+            target_dim = max(width, height)
+            new_image = Image.new("RGB", (target_dim, target_dim), (0, 0, 0))
+            
+            if image.mode == "RGBA":
+                image = image.convert("RGB")
+                
+            paste_x = (target_dim - width) // 2
+            paste_y = (target_dim - height) // 2
+            new_image.paste(image, (paste_x, paste_y))
+            image = new_image
+
         # Sharpen to make text edges crisper for OCR
         image = image.filter(ImageFilter.SHARPEN)
 
@@ -1076,7 +1090,15 @@ class VLProcessor:
                     return
 
                 logger.info("Pre-warming model '%s' in GPU VRAM...", self.config.model_name)
-                await client.load_model(self.config.model_name)
+                try:
+                    await client.load_model(self.config.model_name)
+                except Exception as load_err:
+                    logger.debug("Explicit /v1/load failed, falling back to dummy inference: %s", load_err)
+                    await self.client.chat.completions.create(
+                        model=self.config.model_name,
+                        messages=[{"role": "user", "content": "warmup"}],
+                        max_tokens=1
+                    )
         except Exception as e:
             logger.warning("VRAM Pre-warming failed: %s", e)
 

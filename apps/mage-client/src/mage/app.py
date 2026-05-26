@@ -150,6 +150,18 @@ class SettingsDialog(QDialog):
         self.auto_speak_cb.setChecked(speak_val == "true" or speak_val is True)
         layout.addRow(self.auto_speak_cb)
 
+        # Live Voice Translation (Raid Mode)
+        self.live_voice_raid_cb = QCheckBox("Live Voice Translation (Raid Mode)")
+        lv_raid_val = settings.value("live_voice_raid", "false")
+        self.live_voice_raid_cb.setChecked(lv_raid_val == "true" or lv_raid_val is True)
+        layout.addRow(self.live_voice_raid_cb)
+        
+        # Save Raid Notes to LORE
+        self.live_raid_lore_save_cb = QCheckBox("Save Raid Notes to LORE")
+        lr_lore_val = settings.value("live_raid_lore_save", "false")
+        self.live_raid_lore_save_cb.setChecked(lr_lore_val == "true" or lr_lore_val is True)
+        layout.addRow(self.live_raid_lore_save_cb)
+
         # Buttons
         btn_row = QHBoxLayout()
         save_btn = QPushButton("Save")
@@ -205,6 +217,8 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
+        self.settings.setValue("live_voice_raid", "true" if self.live_voice_raid_cb.isChecked() else "false")
+        self.settings.setValue("live_raid_lore_save", "true" if self.live_raid_lore_save_cb.isChecked() else "false")
         self.accept()
 
 
@@ -702,7 +716,14 @@ class XianApp(QWidget):
             
             try:
                 client = LemonadeClient(base_url=base_url_no_v1)
-                audio_bytes = await client.tts(text, voice=voice_param)
+                
+                # Discover downloaded TTS model
+                models = await client.list_models(show_all=True)
+                tts_model = next((m["id"] for m in models if "tts" in m.get("labels", []) and m.get("downloaded", False)), None)
+                if not tts_model:
+                    raise ValueError("No TTS model available on the server.")
+                
+                audio_bytes = await client.tts(text, voice=voice_param, model=tts_model)
                 await client.close()
                 play_audio_async(audio_bytes)
             except Exception as e:
@@ -1001,17 +1022,23 @@ class XianApp(QWidget):
         source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
 
+        save_lore = self.settings.value("live_raid_lore_save", "false")
+
         worker = RaidWorker(
             self.processor,
             target_lang=target_lang,
             source_lang=source_lang,
+            save_lore=(save_lore == "true" or save_lore is True)
         )
 
-        worker.raid_done.connect(
-            lambda transcript, translation, w=worker: self._on_raid_done(transcript, translation, w)
+        worker.chunk_translated.connect(
+            lambda transcript, translation, w=worker: self._on_chunk_translated(transcript, translation, w)
         )
         worker.error.connect(
             lambda msg, w=worker: self._on_raid_error(msg, w)
+        )
+        worker.progress.connect(
+            lambda text, w=worker: self._on_raid_progress(text, w)
         )
         worker.finished.connect(lambda w=worker: self._cleanup_worker(w))
 
@@ -1019,19 +1046,33 @@ class XianApp(QWidget):
         worker.start()
         logger.info("RaidWorker started")
 
-    def _on_raid_done(self, transcript, translation, worker):
-        logger.info("Raid translation done: %s -> %s", transcript, translation)
-        
-        target_bubble = self._replace_persistent_bubble(
-            "raid_bubble",
-            translation,
-            original_text=transcript,
-        )
-        if target_bubble:
-            target_bubble.captured_audio_bytes = getattr(worker, "audio_bytes", None)
+    def _on_raid_progress(self, text, worker):
+        if hasattr(self, "raid_bubble") and self.raid_bubble and self.raid_bubble.isVisible():
+            self.raid_bubble.update_text(text)
 
-        # Raid Mode automatically plays audio (translating and cloning voices)
-        self._speak_text(translation, source=False, voice_ref_bytes=getattr(worker, "audio_bytes", None))
+    def _on_chunk_translated(self, transcript, translation, worker):
+        logger.info("Raid chunk translated: %s -> %s", transcript, translation)
+        
+        if hasattr(self, "raid_bubble") and self.raid_bubble and self.raid_bubble.isVisible():
+            current_text = getattr(self.raid_bubble, "_raid_text_buffer", [])
+            current_text.append(translation)
+            if len(current_text) > 5:
+                current_text = current_text[-5:]
+            self.raid_bubble._raid_text_buffer = current_text
+            
+            display_text = " ".join(current_text)
+            self.raid_bubble.update_text(display_text)
+            # Update original text dynamically too
+            if hasattr(self.raid_bubble, "original_text"):
+                self.raid_bubble.original_text = transcript
+        else:
+            self.raid_bubble = self._replace_persistent_bubble("raid_bubble", translation, original_text=transcript)
+            self.raid_bubble._raid_text_buffer = [translation]
+
+        # Raid Mode optionally plays audio (translating and cloning voices)
+        live_voice_raid = self.settings.value("live_voice_raid", "false")
+        if live_voice_raid == "true" or live_voice_raid is True:
+            self._speak_text(translation, source=False)
 
     def _on_raid_error(self, msg, worker):
         logger.error("Raid Mode error: %s", msg)

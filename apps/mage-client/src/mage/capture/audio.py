@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import shutil
+import struct
 import subprocess
 import tempfile
 from pathlib import Path
@@ -54,7 +56,6 @@ async def capture_system_audio(
         if recorder == "pw-record":
             cmd = [
                 "pw-record",
-                "--target", "0",  # default monitor source
                 "--rate", str(sample_rate),
                 "--channels", "1",
                 "--format", "s16",
@@ -80,7 +81,12 @@ async def capture_system_audio(
         # Let it record for the requested duration, then terminate
         await asyncio.sleep(duration_seconds)
         proc.terminate()
-        await proc.wait()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            logger.warning("Audio capture process did not exit on SIGTERM. Killing it.")
+            proc.kill()
+            await proc.wait()
 
         audio_path = Path(outpath)
         if audio_path.exists() and audio_path.stat().st_size > 44:  # > WAV header
@@ -94,6 +100,137 @@ async def capture_system_audio(
         return None
     finally:
         Path(outpath).unlink(missing_ok=True)
+
+
+class ContinuousAudioStreamer:
+    """Streams continuous system audio from parecord, chunking by VAD."""
+    
+    def __init__(
+        self, 
+        sample_rate: int = 16000, 
+        silence_threshold_rms: int = 300, 
+        min_chunk_sec: float = 1.0, 
+        max_chunk_sec: float = 5.0, 
+        silence_duration_sec: float = 0.5
+    ):
+        self.sample_rate = sample_rate
+        self.silence_threshold_rms = silence_threshold_rms
+        self.min_chunk_sec = min_chunk_sec
+        self.max_chunk_sec = max_chunk_sec
+        self.silence_duration_sec = silence_duration_sec
+        self._running = False
+        self._proc = None
+
+    async def start(self):
+        recorder = _find_recorder()
+        if not recorder:
+            raise RuntimeError("No audio recorder found.")
+        
+        if recorder == "pw-record":
+            cmd = ["pw-record", "--rate", str(self.sample_rate), "--channels", "1", "--format", "s16", "-"]
+        else:
+            cmd = ["parecord", "--rate", str(self.sample_rate), "--channels", "1", "--format", "s16le", "--device", "@DEFAULT_MONITOR@", "-"]
+            
+        self._proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        self._running = True
+
+    async def stop(self):
+        self._running = False
+        if self._proc:
+            self._proc.terminate()
+            try:
+                await asyncio.wait_for(self._proc.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                self._proc.kill()
+                await self._proc.wait()
+            self._proc = None
+
+    async def read_chunks(self):
+        """Yields WAV-encoded audio bytes whenever a chunk is ready."""
+        if not self._proc or not self._proc.stdout:
+            return
+
+        chunk_bytes = bytearray()
+        bytes_per_sample = 2
+        bytes_per_sec = self.sample_rate * bytes_per_sample
+        read_size = int(self.sample_rate * 0.1) * bytes_per_sample # 100ms
+        
+        silence_bytes = 0
+        silence_limit_bytes = int(self.silence_duration_sec * bytes_per_sec)
+        max_limit_bytes = int(self.max_chunk_sec * bytes_per_sec)
+        min_limit_bytes = int(self.min_chunk_sec * bytes_per_sec)
+
+        while self._running:
+            try:
+                # Use a timeout. If the audio system suspends the sink (like PulseAudio does
+                # when no audio is playing), readexactly will block forever.
+                # A timeout lets us inject synthetic silence or just trigger the VAD flush.
+                data = await asyncio.wait_for(self._proc.stdout.readexactly(read_size), timeout=0.5)
+                
+                chunk_bytes.extend(data)
+                
+                samples_count = len(data) // 2
+                if samples_count > 0:
+                    samples = struct.unpack(f'<{samples_count}h', data[:samples_count*2])
+                    rms = math.sqrt(sum(s*s for s in samples) / samples_count)
+                else:
+                    rms = 0
+            except asyncio.TimeoutError:
+                # No audio produced. Treat as pure silence.
+                data = b'\x00' * read_size
+                chunk_bytes.extend(data)
+                rms = 0
+            except asyncio.IncompleteReadError as e:
+                data = e.partial
+                if not data:
+                    break
+                chunk_bytes.extend(data)
+                rms = 0
+            except Exception:
+                break
+            
+            if rms < self.silence_threshold_rms:
+                silence_bytes += len(data)
+            else:
+                silence_bytes = 0
+
+            if len(chunk_bytes) >= max_limit_bytes or (silence_bytes >= silence_limit_bytes and len(chunk_bytes) >= min_limit_bytes):
+                wav_data = self._pcm_to_wav(bytes(chunk_bytes))
+                if wav_data:
+                    yield wav_data
+                chunk_bytes.clear()
+                silence_bytes = 0
+
+    def _pcm_to_wav(self, pcm_data: bytes) -> bytes:
+        """Wrap raw s16le PCM in a valid WAV header."""
+        num_channels = 1
+        bytes_per_sample = 2
+        sample_rate = self.sample_rate
+        byte_rate = sample_rate * num_channels * bytes_per_sample
+        block_align = num_channels * bytes_per_sample
+        data_size = len(pcm_data)
+        
+        header = struct.pack(
+            '<4sI4s4sIHHIIHH4sI',
+            b'RIFF',
+            36 + data_size,
+            b'WAVE',
+            b'fmt ',
+            16,
+            1,
+            num_channels,
+            sample_rate,
+            byte_rate,
+            block_align,
+            bytes_per_sample * 8,
+            b'data',
+            data_size
+        )
+        return header + pcm_data
 
 
 def play_audio(audio_bytes: bytes):
