@@ -46,7 +46,6 @@ if sys.platform == "linux":
             self._threads = []
             
             self.leader_mod = 'shift'
-            self.leader_key = 57  # KEY_SPACE
             self.command_mode_active = False
             self.command_mode_end_time = 0.0
             
@@ -55,6 +54,7 @@ if sys.platform == "linux":
             # Track modifier states per device
             self.modifiers = {}
             self.mod_clean = {}
+            self.last_leader_press_time = {}
             
             # Setup devices
             self._find_keyboards()
@@ -81,11 +81,18 @@ if sys.platform == "linux":
                 logger.error("EvdevListener: Failed to find keyboards (are you in the 'input' group?): %s", e)
 
         def set_leader_key(self, leader_string: str):
-            parts = leader_string.lower().split('+')
-            if len(parts) == 2:
-                self.leader_mod = parts[0]
-                key_name = f"KEY_{parts[1].upper()}"
-                self.leader_key = evdev.ecodes.ecodes.get(key_name, 57)
+            # Handle both "Double-Tap Shift" and legacy "Shift+Space"
+            leader_string = leader_string.lower().replace('+space', '')
+            parts = leader_string.split()
+            if len(parts) > 0:
+                self.leader_mod = parts[-1]  # "shift", "ctrl", "alt", "super"
+
+        def _is_leader_mod_key(self, keycode):
+            if self.leader_mod == 'shift': return keycode in (42, 54)
+            if self.leader_mod == 'ctrl': return keycode in (29, 97)
+            if self.leader_mod == 'alt': return keycode in (56, 100)
+            if self.leader_mod == 'super': return keycode in (125, 126)
+            return False
 
         def start(self):
             """Start listening threads for all keyboards."""
@@ -151,24 +158,26 @@ if sys.platform == "linux":
                 
             # Check hotkeys only on key down (1)
             if event.keystate == 1:
-                if is_modifier:
-                    self.mod_clean[device_path] = True
-                elif keycode != self.leader_key:
+                if not is_modifier:
                     self.mod_clean[device_path] = False
 
-                mods = self.modifiers[device_path]
-                
-                if keycode == self.leader_key and mods.get(self.leader_mod) and self.mod_clean.get(device_path, True):
-                    if self.command_mode_active:
-                        logger.info("EvdevListener: Command Mode TOGGLED OFF via leader combo")
-                        self.command_mode_active = False
-                        self.command_mode_cancelled.emit()
+                if self._is_leader_mod_key(keycode):
+                    if self.mod_clean.get(device_path, True) and (now - self.last_leader_press_time.get(device_path, 0)) < 0.4:
+                        # Double-tap detected!
+                        self.last_leader_press_time[device_path] = 0.0 # reset
+                        if self.command_mode_active:
+                            logger.info("EvdevListener: Command Mode TOGGLED OFF via leader double-tap")
+                            self.command_mode_active = False
+                            self.command_mode_cancelled.emit()
+                        else:
+                            self.command_mode_active = True
+                            self.command_mode_end_time = now + 15.0
+                            logger.info("EvdevListener: Command Mode ACTIVATED via double-tap %s", self.leader_mod)
+                            self.command_mode_started.emit()
+                        return
                     else:
-                        self.command_mode_active = True
-                        self.command_mode_end_time = now + 15.0
-                        logger.info("EvdevListener: Command Mode ACTIVATED via %s+space", self.leader_mod)
-                        self.command_mode_started.emit()
-                    return
+                        self.last_leader_press_time[device_path] = now
+                        self.mod_clean[device_path] = True
 
                 # KEY_ESC is 1
                 if self.command_mode_active and keycode == 1:
@@ -242,18 +251,25 @@ else:
             self.lock = threading.RLock()
             self.current_keys = set()
             self.leader_mod = 'shift'
-            self.leader_key_name = 'space'
             self.command_mode_active = False
             self.command_mode_end_time = 0.0
             self.cinematic_mode_active = False
             self.mod_clean = True
+            self.last_leader_press_time = 0.0
 
         def set_leader_key(self, leader_string: str):
             with self.lock:
-                parts = leader_string.lower().split('+')
-                if len(parts) == 2:
-                    self.leader_mod = parts[0]
-                    self.leader_key_name = parts[1]
+                leader_string = leader_string.lower().replace('+space', '')
+                parts = leader_string.split()
+                if len(parts) > 0:
+                    self.leader_mod = parts[-1]
+
+        def _is_leader_mod_key(self, key):
+            if self.leader_mod == 'shift': return key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r)
+            if self.leader_mod == 'ctrl': return key in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r)
+            if self.leader_mod == 'alt': return key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r)
+            if self.leader_mod == 'super': return key in (keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r)
+            return False
             
         def on_press(self, key):
             with self.lock:
@@ -264,43 +280,30 @@ else:
                 if self.command_mode_active and now > self.command_mode_end_time:
                     self.command_mode_active = False
 
-                has_mod = False
-                if self.leader_mod == 'shift':
-                    has_mod = keyboard.Key.shift in self.current_keys or keyboard.Key.shift_l in self.current_keys or keyboard.Key.shift_r in self.current_keys
-                elif self.leader_mod == 'ctrl':
-                    has_mod = keyboard.Key.ctrl in self.current_keys or keyboard.Key.ctrl_l in self.current_keys or keyboard.Key.ctrl_r in self.current_keys
-                elif self.leader_mod == 'alt':
-                    has_mod = keyboard.Key.alt in self.current_keys or keyboard.Key.alt_l in self.current_keys or keyboard.Key.alt_r in self.current_keys
-                elif self.leader_mod == 'super':
-                    has_mod = keyboard.Key.cmd in self.current_keys or keyboard.Key.cmd_l in self.current_keys or keyboard.Key.cmd_r in self.current_keys
-
-                is_leader_key = False
-                if hasattr(key, 'char') and key.char:
-                    is_leader_key = key.char.lower() == self.leader_key_name
-                elif hasattr(key, 'name') and key.name:
-                    is_leader_key = key.name == self.leader_key_name
-
                 if is_new_press:
                     is_modifier = key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r,
                                           keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r,
                                           keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r,
                                           keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r)
-                    if is_modifier:
-                        self.mod_clean = True
-                    elif not is_leader_key:
+                    if not is_modifier:
                         self.mod_clean = False
 
-                if has_mod and is_leader_key and self.mod_clean:
-                    if self.command_mode_active:
-                        logger.info("PynputListener: Command Mode TOGGLED OFF via leader combo")
-                        self.command_mode_active = False
-                        self.command_mode_cancelled.emit()
-                    else:
-                        self.command_mode_active = True
-                        self.command_mode_end_time = now + 15.0
-                        logger.info("PynputListener: Command Mode ACTIVATED via %s+%s", self.leader_mod, self.leader_key_name)
-                        self.command_mode_started.emit()
-                    return
+                    if self._is_leader_mod_key(key):
+                        if self.mod_clean and (now - self.last_leader_press_time) < 0.4:
+                            self.last_leader_press_time = 0.0
+                            if self.command_mode_active:
+                                logger.info("PynputListener: Command Mode TOGGLED OFF via leader double-tap")
+                                self.command_mode_active = False
+                                self.command_mode_cancelled.emit()
+                            else:
+                                self.command_mode_active = True
+                                self.command_mode_end_time = now + 15.0
+                                logger.info("PynputListener: Command Mode ACTIVATED via double-tap %s", self.leader_mod)
+                                self.command_mode_started.emit()
+                            return
+                        else:
+                            self.last_leader_press_time = now
+                            self.mod_clean = True
 
                 if self.command_mode_active and key == keyboard.Key.esc:
                     logger.info("PynputListener: Command Mode CANCELLED via ESC")

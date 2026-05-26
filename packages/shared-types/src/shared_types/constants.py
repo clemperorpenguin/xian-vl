@@ -28,7 +28,7 @@ ORGANIZATION_NAME = "Xian"
 APPLICATION_NAME = "VideoGameTranslator"
 
 # ── Hotkeys ──────────────────────────────────────────────────────────
-DEFAULT_LEADER_KEY = "Shift+Space"
+DEFAULT_LEADER_KEY = "Double-Tap Shift"
 
 # ── GPU ──────────────────────────────────────────────────────────────
 DEFAULT_GPU_MEMORY_UTILIZATION = "Default"

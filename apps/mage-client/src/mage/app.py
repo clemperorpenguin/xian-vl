@@ -103,8 +103,12 @@ class SettingsDialog(QDialog):
 
         # Leader Key
         self.leader_combo = QComboBox()
-        self.leader_combo.addItems(["Shift+Space", "Ctrl+Space", "Alt+Space", "Super+Space"])
-        self.leader_combo.setCurrentText(settings.value(KEY_LEADER_KEY, constants.DEFAULT_LEADER_KEY))
+        self.leader_combo.addItems(["Double-Tap Shift", "Double-Tap Ctrl", "Double-Tap Alt", "Double-Tap Super"])
+        leader_val = settings.value(KEY_LEADER_KEY, constants.DEFAULT_LEADER_KEY)
+        if leader_val == "Shift+Space": leader_val = "Double-Tap Shift"
+        idx = self.leader_combo.findText(leader_val)
+        if idx >= 0:
+            self.leader_combo.setCurrentIndex(idx)
         layout.addRow("Leader Key:", self.leader_combo)
 
         # Styles

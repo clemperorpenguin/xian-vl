@@ -7,7 +7,7 @@ Xian-MAGE acts as a lightweight client powered by the **[Lemonade-SDK OmniRouter
 ## Features
 
 - **Configurable Action Key**: Seamlessly trigger actions via global Wayland hotkeys (requires `evdev`).
-  - `Shift+Space`: Opens the Action Key menu (default).
+  - `Double-Tap Shift`: Opens the Action Key menu (default).
 - **Contextual Memory**: Xian-MAGE maintains a sliding-window memory of your recent screen captures and chat history, allowing you to ask follow-up questions about what you just captured.
 - **Visual Grounding**: Ask the assistant "where do I click?" and watch it highlight the UI element directly on your screen.
 - **Instant Dictionary Lookups**: Hover over translated text bubbles and press `Alt` for real-time CC-CEDICT dictionary breakdowns.
@@ -28,6 +28,6 @@ uv run --package mage-client mage
 ```
 
 ### Hotkeys
-- **Capture & Translate** — Action Key (`Shift+Space`), then `C` to freeze the screen. Drag to select, then Translate / Explain / Chat.
+- **Capture & Translate** — Action Key (`Double-Tap Shift`), then `C` to freeze the screen. Drag to select, then Translate / Explain / Chat.
 - **Chat Sidebar** — Action Key, then `A`.
 - **Settings** — Action Key, then `S`.
