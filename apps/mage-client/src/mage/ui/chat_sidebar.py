@@ -92,7 +92,7 @@ class ChatSidebar(QWidget):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
+            Qt.WindowType.BypassWindowManagerHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
@@ -254,5 +254,7 @@ class ChatSidebar(QWidget):
         self.history_display.append(html)
         
     def showEvent(self, event):
-        self.input_field.setFocus()
         super().showEvent(event)
+        self.activateWindow()
+        self.raise_()
+        self.input_field.setFocus()
