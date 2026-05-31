@@ -2,12 +2,13 @@ import logging
 import asyncio
 import re
 import io
+import os
 from PIL import Image
 from html import escape as html_escape
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushButton, QHBoxLayout
+    QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushButton, QHBoxLayout, QTextBrowser
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QRect, QSettings
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QRect, QSettings, QBuffer, QIODevice
 from PyQt6.QtGui import QGuiApplication
 from mage.ui.grounding import GroundingHighlight
 from mage.ui.theme import accent_hex, accent_hover_hex
@@ -116,7 +117,7 @@ class ChatSidebar(QWidget):
                 color: white;
                 border-left: 1px solid {accent_hex()};
             }}
-            QTextEdit {{
+            QTextEdit, QTextBrowser {{
                 background-color: transparent;
                 border: none;
                 font-size: 14px;
@@ -142,8 +143,10 @@ class ChatSidebar(QWidget):
         """)
         
         # History
-        self.history_display = QTextEdit()
+        self.history_display = QTextBrowser()
         self.history_display.setReadOnly(True)
+        self.history_display.setOpenLinks(False)
+        self.history_display.anchorClicked.connect(self._on_anchor_clicked)
         layout.addWidget(self.history_display)
         
         # Input area
@@ -151,6 +154,10 @@ class ChatSidebar(QWidget):
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Ask the assistant...")
         self.input_field.returnPressed.connect(self._send_message)
+        
+        self.attach_btn = QPushButton("Attach")
+        self.attach_btn.setStyleSheet("background-color: #f57c00;")
+        self.attach_btn.clicked.connect(self._attach_screenshot)
         
         self.send_btn = QPushButton("Send")
         self.send_btn.clicked.connect(self._send_message)
@@ -160,6 +167,7 @@ class ChatSidebar(QWidget):
         self.close_btn.clicked.connect(self.hide)
         
         input_layout.addWidget(self.input_field)
+        input_layout.addWidget(self.attach_btn)
         input_layout.addWidget(self.send_btn)
         input_layout.addWidget(self.close_btn)
         
@@ -175,7 +183,16 @@ class ChatSidebar(QWidget):
         try:
             image = Image.open(io.BytesIO(image_data))
             self.processor.context_manager.add_frame(image)
-            self._append_message("System", "📷 Image captured from Lens (will be included in next message)", "#FF9800")
+            
+            # Save the captured image to the media folder
+            media_dir = os.path.join(self.processor.wiki_dir, "media")
+            os.makedirs(media_dir, exist_ok=True)
+            import time
+            filename = f"capture_{int(time.time())}.png"
+            filepath = os.path.join(media_dir, filename)
+            image.save(filepath)
+            
+            self._append_message("System", f"📷 Screenshot attached:<br><img src='file://{filepath}' width='150'>", "#FF9800")
             logger.info("Image context pushed to chat")
         except Exception as e:
             logger.error("Failed to add image context: %s", e)
@@ -249,9 +266,47 @@ class ChatSidebar(QWidget):
         
     def _append_message(self, sender: str, text: str, color: str):
         safe_sender = html_escape(sender)
-        safe_text = html_escape(text).replace(chr(10), "<br>")
-        html = f'<p><b style="color:{color}">{safe_sender}:</b> {safe_text}</p>'
+        
+        if sender == "System" and "📷 Screenshot attached" in text:
+            safe_text = text
+        else:
+            safe_text = html_escape(text).replace(chr(10), "<br>")
+            
+            def repl_img(match):
+                filepath = match.group(1)
+                return f'<br><img src="file://{filepath}" width="280"><br><a href="file://{filepath}">View Image</a>'
+            
+            safe_text = re.sub(r'file://([^\s\'"&<>]+?\.(?:png|jpg|jpeg))', repl_img, safe_text, flags=re.IGNORECASE)
+            
+            def repl_audio(match):
+                filepath = match.group(1)
+                return f'<br>🎵 <a href="play_audio://{filepath}">Play Synthesized Audio</a>'
+                
+            safe_text = re.sub(r'file://([^\s\'"&<>]+?\.(?:wav|mp3))', repl_audio, safe_text, flags=re.IGNORECASE)
+
+        html = f'<p><b style="color:{color}">{safe_sender}:</b><br>{safe_text}</p>'
         self.history_display.append(html)
+
+    def _attach_screenshot(self):
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            pixmap = screen.grabWindow(0)
+            buffer = QBuffer()
+            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+            pixmap.save(buffer, "PNG")
+            self.add_image_context(buffer.data().data())
+
+    def _on_anchor_clicked(self, url):
+        url_str = url.toString()
+        if url_str.startswith("play_audio://"):
+            audio_path = url_str.replace("play_audio://", "")
+            try:
+                with open(audio_path, "rb") as f:
+                    audio_bytes = f.read()
+                from mage.capture.audio import play_audio_async
+                play_audio_async(audio_bytes)
+            except Exception as e:
+                logger.error("Failed to replay audio: %s", e)
         
     def showEvent(self, event):
         super().showEvent(event)

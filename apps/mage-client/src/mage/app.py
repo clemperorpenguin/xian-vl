@@ -721,9 +721,10 @@ class XianApp(QWidget):
             try:
                 client = LemonadeClient(base_url=base_url_no_v1)
                 
-                # Discover downloaded TTS model
-                models = await client.list_models(show_all=True)
-                tts_model = next((m["id"] for m in models if "tts" in m.get("labels", []) and m.get("downloaded", False)), None)
+                # Discover downloaded TTS model via router
+                if not self.processor.router.tts():
+                    await self.processor.router.discover_async()
+                tts_model = self.processor.router.tts()
                 if not tts_model:
                     raise ValueError("No TTS model available on the server.")
                 
@@ -1098,14 +1099,26 @@ class XianApp(QWidget):
         self._status_worker.status_changed.connect(self._on_health_result)
         self._status_worker.start()
 
-    def _on_health_result(self, available: bool, models: list):
+    def _on_health_result(self, available: bool, models: list, raw_models: list = None):
         if available:
             logger.info("Lemonade server connected. Models: %s", models)
             self._available_models = models
             self.osd.update_models(models)
             
-            # Ensure the default model is pulled
+            # Update the central router
+            self.processor.router.update_with_models(raw_models or [])
+            
+            # Prefer Omni model as default if detected
             target_model = self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
+            if self.processor.router.omni_detected:
+                omni_id = self.processor.router.omni_model_id
+                if omni_id and (target_model in (None, "", constants.DEFAULT_MODEL, "omni-router", "default")):
+                    logger.info("Omni model '%s' detected, setting as default.", omni_id)
+                    self.settings.setValue(KEY_API_MODEL, omni_id)
+                    self.processor.config.model_name = omni_id
+                    target_model = omni_id
+
+            # Ensure the default model is pulled
             if target_model not in models and not self._model_pull_attempted:
                 logger.info("Model '%s' not found on server, pulling...", target_model)
                 self._model_pull_attempted = True
@@ -1144,6 +1157,8 @@ class XianApp(QWidget):
             self.processor.engine.reconfigure(
                 base_url=self.processor.config.api_url
             )
+            from xian.omni_router import OmniModelRouter
+            self.processor.router = OmniModelRouter(self.processor.config.api_url)
             # Re-run health check
             self._run_health_check()
             

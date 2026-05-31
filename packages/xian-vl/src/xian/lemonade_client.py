@@ -157,3 +157,55 @@ class LemonadeClient:
         resp = await self._client.post("/v1/audio/speech", json=payload)
         resp.raise_for_status()
         return resp.content
+
+    async def generate_image(
+        self,
+        prompt: str,
+        *,
+        model: str = "",
+        size: str = "1024x1024",
+        response_format: str = "b64_json",
+    ) -> dict[str, Any]:
+        """Generate an image from prompt.  ``POST /v1/images/generations``."""
+        payload: dict[str, Any] = {
+            "prompt": prompt,
+            "size": size,
+            "response_format": response_format,
+        }
+        if model:
+            payload["model"] = model
+        resp = await self._client.post("/v1/images/generations", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def edit_image(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        mask_bytes: bytes | None = None,
+        model: str = "",
+        size: str = "1024x1024",
+        response_format: str = "b64_json",
+    ) -> dict[str, Any]:
+        """Edit an existing image.  ``POST /v1/images/edits``."""
+        files = {"image": ("image.png", image_bytes, "image/png")}
+        if mask_bytes:
+            files["mask"] = ("mask.png", mask_bytes, "image/png")
+        
+        data = {
+            "prompt": prompt,
+            "size": size,
+            "response_format": response_format,
+        }
+        if model:
+            data["model"] = model
+
+        resp = await self._client.post(
+            "/v1/images/edits",
+            files=files,
+            data=data,
+        )
+        resp.raise_for_status()
+        return resp.json()
+

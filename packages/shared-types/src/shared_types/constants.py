@@ -8,7 +8,7 @@ shared defaults; individual apps may override them via settings or CLI.
 DEFAULT_API_URL = "http://localhost:13305/v1"
 
 # ── Model Defaults ───────────────────────────────────────────────────
-DEFAULT_MODEL = "Qwen3.5-9B-GGUF"
+DEFAULT_MODEL = "Qwen3.5-0.8B-GGUF"
 DEFAULT_MAX_TOKENS = 2048
 MODE_MAX_TOKENS: dict[str, int] = {
     "Game": 4096,

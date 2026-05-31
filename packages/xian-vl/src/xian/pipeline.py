@@ -29,8 +29,43 @@ from xian.timeout import (
 )
 from xian.async_engine import AsyncEngine
 from xian.lemonade_client import LemonadeClient
+from xian.omni_router import OmniModelRouter
+from xian.tools import OMNI_TOOLS
 
 logger = logging.getLogger(__name__)
+
+
+def play_audio_simple(audio_bytes: bytes):
+    """Play WAV audio bytes using a subprocess runner in a background thread."""
+    import shutil
+    import subprocess
+    import tempfile
+    import threading
+    from pathlib import Path
+
+    def run():
+        player = None
+        for cmd in ("pw-play", "paplay", "aplay"):
+            if shutil.which(cmd):
+                player = cmd
+                break
+        if not player:
+            logger.warning("No audio player found for simple playback.")
+            return
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+        try:
+            subprocess.run([player, tmp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            logger.error("Simple playback failed: %s", e)
+        finally:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 @dataclass
@@ -53,6 +88,8 @@ class VLProcessor:
             api_key=os.environ.get("LEMONADE_API_KEY", "not-needed")
         )
         self.engine.start()
+        self.router = OmniModelRouter(os.environ.get("LEMONADE_API_URL", self.config.api_url))
+
 
         # Thread lock for caching properties
         self._lock = threading.Lock()
@@ -75,6 +112,19 @@ class VLProcessor:
     @property
     def client(self) -> AsyncOpenAI:
         return self.engine.client
+
+    def get_model_name(self) -> str:
+        """Resolve the model name to use for standard completions/vision tasks."""
+        if self.config.model_name in ("omni-router", "default"):
+            return self.router.llm()
+        return self.config.model_name
+
+    def get_vision_model_name(self) -> str:
+        """Resolve the model name to use for vision completions tasks."""
+        if self.config.model_name in ("omni-router", "default"):
+            return self.router.vision()
+        return self.config.model_name
+
 
     async def init_engine(self):
         """No-op stub for backward compatibility."""
@@ -447,7 +497,7 @@ class VLProcessor:
                 )
                 stream = await asyncio.wait_for(
                     self.client.chat.completions.create(
-                        model=self.config.model_name,
+                        model=self.get_vision_model_name(),
                         messages=messages,
                         max_tokens=max_tok,
                         temperature=temp,
@@ -594,7 +644,7 @@ class VLProcessor:
         try:
             stream = await asyncio.wait_for(
                 self.client.chat.completions.create(
-                    model=self.config.model_name,
+                    model=self.get_vision_model_name(),
                     messages=continuation_messages,
                     max_tokens=max_tok,
                     temperature=0.2,
@@ -723,7 +773,7 @@ class VLProcessor:
                 )
                 response = await asyncio.wait_for(
                     self.client.chat.completions.create(
-                        model=self.config.model_name,
+                        model=self.get_vision_model_name(),
                         messages=messages,
                         max_tokens=self.config.max_tokens,
                         temperature=temp,
@@ -788,7 +838,7 @@ class VLProcessor:
         try:
             response = await asyncio.wait_for(
                 self.client.chat.completions.create(
-                    model=self.config.model_name,
+                    model=self.get_model_name(),
                     messages=[
                         {
                             "role": "system",
@@ -855,10 +905,10 @@ class VLProcessor:
         system_msg = {
             "role": "system",
             "content": (
-                "You are an AI assistant with access to a search tool. "
+                "You are an AI assistant with access to various tools (generating/editing images, text-to-speech, transcription, vision, knowledge search).\n"
                 "If the user asks a question about facts, lore, games, or real-world information, "
                 "you MUST call the search tool INSTEAD of answering from memory.\n\n"
-                "To search, output EXACTLY this format (and nothing else):\n"
+                "To search, you can use the search_knowledge tool or output EXACTLY this format (and nothing else):\n"
                 "<tool_call>\n"
                 "<function=search_knowledge>\n"
                 "<parameter=query>your search query here</parameter>\n"
@@ -872,49 +922,223 @@ class VLProcessor:
         }
         openai_messages.insert(0, system_msg)
 
+        model_to_use = self.get_model_name()
+
         try:
-            logger.info("Sending chat request to OmniRouter via OpenAI...")
-            response = await asyncio.wait_for(
-                self.client.chat.completions.create(
-                    model=self.config.model_name,
-                    messages=openai_messages,
-                    max_tokens=self.config.max_tokens,
-                    temperature=0.7,  # Higher temp for chat
-                ),
-                timeout=CHAT_TIMEOUT_SECONDS,
-            )
-
             final_output = ""
-            if response.choices:
-                final_output = response.choices[0].message.content or ""
+            for turn in range(3):
+                logger.info("Sending chat request to OmniRouter via OpenAI (turn %d)...", turn + 1)
+                response = await asyncio.wait_for(
+                    self.client.chat.completions.create(
+                        model=model_to_use,
+                        messages=openai_messages,
+                        max_tokens=self.config.max_tokens,
+                        temperature=0.7,  # Higher temp for chat
+                        tools=OMNI_TOOLS,
+                    ),
+                    timeout=CHAT_TIMEOUT_SECONDS,
+                )
 
-            # Detect text-based tool calls emitted by models that don't
-            # support the structured OpenAI tools protocol.
-            # Format: <tool_call>\n<function=search_knowledge>\n<parameter=query>…</parameter>\n</function>\n</tool_call>
-            tool_call_match = re.search(
-                r'<tool_call>.*?<function=(\w+)>(.*?)</function>.*?</tool_call>',
-                final_output, re.DOTALL,
-            )
-            # Also try structured tool_calls if the server supports it
-            structured_tool_call = None
-            if response.choices and response.choices[0].message.tool_calls:
-                tc = response.choices[0].message.tool_calls[0]
-                if tc.function.name in ("perform_web_search", "search_knowledge"):
-                    structured_tool_call = tc
+                choice = response.choices[0] if response.choices else None
+                if not choice:
+                    break
 
-            if tool_call_match or structured_tool_call:
-                if structured_tool_call:
-                    query = ""
-                    language = "zh-CN"
-                    raw_args = getattr(structured_tool_call.function, "arguments", None) or "{}"
-                    try:
-                        args = json.loads(raw_args)
-                        query = args.get("query", "") or ""
-                        language = args.get("language", "zh-CN") or "zh-CN"
-                    except json.JSONDecodeError:
-                        logger.warning("Malformed structured tool_call.arguments JSON; skipping search.")
-                else:
-                    # Parse text-based tool call
+                msg = choice.message
+                final_output = msg.content or ""
+
+                # Handle structured tool calls
+                if msg.tool_calls:
+                    # Append assistant message with tool calls
+                    openai_messages.append(msg)
+
+                    for tool_call in msg.tool_calls:
+                        func_name = tool_call.function.name
+                        raw_args = tool_call.function.arguments or "{}"
+                        logger.info("Executing tool call: %s with args: %s", func_name, raw_args)
+                        try:
+                            args = json.loads(raw_args)
+                        except json.JSONDecodeError:
+                            args = {}
+
+                        tool_result = None
+                        try:
+                            if func_name == "generate_image":
+                                prompt = args.get("prompt", "")
+                                size = args.get("size", "1024x1024")
+                                
+                                media_dir = os.path.join(self.wiki_dir, "media")
+                                os.makedirs(media_dir, exist_ok=True)
+                                
+                                base_url = os.environ.get("LEMONADE_API_URL", self.config.api_url)
+                                base_url_no_v1 = base_url.removesuffix("/v1")
+                                async with LemonadeClient(base_url=base_url_no_v1) as lemonade:
+                                    res = await lemonade.generate_image(prompt, model=self.router.image(), size=size)
+                                
+                                img_data = res["data"][0]["b64_json"]
+                                img_bytes = base64.b64decode(img_data)
+                                filename = f"gen_{int(time.time())}.png"
+                                filepath = os.path.join(media_dir, filename)
+                                with open(filepath, "wb") as f:
+                                    f.write(img_bytes)
+                                    
+                                tool_result = {"status": "success", "image_path": filepath, "url": f"file://{filepath}"}
+                                
+                            elif func_name == "edit_image":
+                                prompt = args.get("prompt", "")
+                                img_path = args.get("image_path", "")
+                                
+                                clean_path = img_path.replace("file://", "").strip()
+                                with open(clean_path, "rb") as f:
+                                    img_bytes = f.read()
+                                    
+                                media_dir = os.path.join(self.wiki_dir, "media")
+                                os.makedirs(media_dir, exist_ok=True)
+                                
+                                base_url = os.environ.get("LEMONADE_API_URL", self.config.api_url)
+                                base_url_no_v1 = base_url.removesuffix("/v1")
+                                async with LemonadeClient(base_url=base_url_no_v1) as lemonade:
+                                    res = await lemonade.edit_image(img_bytes, prompt, model=self.router.edit())
+                                    
+                                out_data = res["data"][0]["b64_json"]
+                                out_bytes = base64.b64decode(out_data)
+                                filename = f"edit_{int(time.time())}.png"
+                                filepath = os.path.join(media_dir, filename)
+                                with open(filepath, "wb") as f:
+                                    f.write(out_bytes)
+                                    
+                                tool_result = {"status": "success", "image_path": filepath, "url": f"file://{filepath}"}
+                                
+                            elif func_name == "text_to_speech":
+                                text = args.get("text", "")
+                                voice = args.get("voice", "af_heart")
+                                
+                                media_dir = os.path.join(self.wiki_dir, "media")
+                                os.makedirs(media_dir, exist_ok=True)
+                                
+                                base_url = os.environ.get("LEMONADE_API_URL", self.config.api_url)
+                                base_url_no_v1 = base_url.removesuffix("/v1")
+                                async with LemonadeClient(base_url=base_url_no_v1) as lemonade:
+                                    audio_bytes = await lemonade.tts(text, voice=voice, model=self.router.tts())
+                                    
+                                filename = f"speech_{int(time.time())}.wav"
+                                filepath = os.path.join(media_dir, filename)
+                                with open(filepath, "wb") as f:
+                                    f.write(audio_bytes)
+                                    
+                                play_audio_simple(audio_bytes)
+                                
+                                tool_result = {"status": "success", "audio_path": filepath, "url": f"file://{filepath}"}
+                                
+                            elif func_name == "transcribe_audio":
+                                audio_path = args.get("audio_path", "").replace("file://", "").strip()
+                                
+                                with open(audio_path, "rb") as f:
+                                    audio_bytes = f.read()
+                                    
+                                base_url = os.environ.get("LEMONADE_API_URL", self.config.api_url)
+                                base_url_no_v1 = base_url.removesuffix("/v1")
+                                async with LemonadeClient(base_url=base_url_no_v1) as lemonade:
+                                    transcript = await lemonade.transcribe(audio_bytes, model=self.router.asr())
+                                    
+                                tool_result = {"status": "success", "transcript": transcript}
+                                
+                            elif func_name == "analyze_image":
+                                img_path = args.get("image_path", "").replace("file://", "").strip()
+                                question = args.get("question", "")
+                                
+                                with open(img_path, "rb") as f:
+                                    img_bytes = f.read()
+                                b64_img = base64.b64encode(img_bytes).decode("utf-8")
+                                
+                                response_vision = await self.client.chat.completions.create(
+                                    model=self.router.vision(),
+                                    messages=[
+                                        {
+                                            "role": "user",
+                                            "content": [
+                                                {"type": "text", "text": question},
+                                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_img}"}}
+                                            ]
+                                        }
+                                    ],
+                                    max_tokens=self.config.max_tokens,
+                                )
+                                analysis = response_vision.choices[0].message.content or ""
+                                tool_result = {"status": "success", "analysis": analysis}
+                                
+                            elif func_name in ("perform_web_search", "search_knowledge"):
+                                query = args.get("query", "")
+                                language = args.get("language", "zh-CN")
+                                
+                                local_searcher = LocalWikiSearcher(wiki_dir=self.wiki_dir)
+                                local_results = local_searcher.search(query, num_results=3)
+
+                                web_results = []
+                                searcher = None
+                                try:
+                                    searcher = WebSearcher()
+                                    translated_query = await self.translate_query(query, source_lang)
+                                    web_results = await searcher.dual_search(
+                                        query=query,
+                                        target_lang=language,
+                                        translated_query=translated_query,
+                                        source_lang=source_lang,
+                                    )
+                                except Exception as e:
+                                    logger.warning("Web search failed: %s. Relying on local wiki.", e)
+                                finally:
+                                    if searcher is not None:
+                                        await searcher.close()
+
+                                results = local_results + web_results
+
+                                if web_results:
+                                    compiler = WikiCompiler(wiki_dir=self.wiki_dir)
+                                    content_lines = []
+                                    for r in web_results:
+                                        title = r.get("title", "No Title")
+                                        href = markdown_http_https_url_or_none(r.get("url", ""))
+                                        if href:
+                                            content_lines.append(f"### [{title}]({href})")
+                                        else:
+                                            content_lines.append(
+                                                f"### {title}\n*(source URL omitted — unsupported or disallowed scheme)*"
+                                            )
+                                        content_lines.append(r.get("content", ""))
+                                    compiler.compile(query, "\n".join(content_lines), metadata={"sources": web_results})
+
+                                summary_parts = []
+                                for i, r in enumerate(results[:6], 1):
+                                    title = r.get('title', 'Untitled')
+                                    content = r.get('content', '')
+                                    url = r.get('url', '')
+                                    summary_parts.append(
+                                        f"--- Source {i}: {title} ---\n"
+                                        f"URL: {url}\n"
+                                        f"{content}\n"
+                                    )
+                                summary = "\n".join(summary_parts)
+                                tool_result = {"status": "success", "search_results": summary}
+                            else:
+                                tool_result = {"error": f"Unknown function: {func_name}"}
+                        except Exception as ex:
+                            logger.error("Error executing tool %s: %s", func_name, ex, exc_info=True)
+                            tool_result = {"error": str(ex)}
+
+                        openai_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": func_name,
+                            "content": json.dumps(tool_result)
+                        })
+                    continue
+
+                # Detect text-based search/knowledge tool calls
+                tool_call_match = re.search(
+                    r'<tool_call>.*?<function=(\w+)>(.*?)</function>.*?</tool_call>',
+                    final_output, re.DOTALL,
+                )
+                if tool_call_match:
                     func_body = tool_call_match.group(2)
                     query_match = re.search(
                         r'<parameter=query>\s*(.*?)\s*</parameter>',
@@ -927,97 +1151,77 @@ class VLProcessor:
                     query = query_match.group(1).strip() if query_match else ""
                     language = lang_match.group(1).strip() if lang_match else "zh-CN"
 
-                if query:
-                    logger.info("Agent requested search for: %s (lang: %s, source: %s)", query, language, source_lang)
+                    if query:
+                        logger.info("Agent requested search for: %s (lang: %s, source: %s)", query, language, source_lang)
+                        local_searcher = LocalWikiSearcher(wiki_dir=self.wiki_dir)
+                        local_results = local_searcher.search(query, num_results=3)
 
-                    # Search local wiki
-                    local_searcher = LocalWikiSearcher(wiki_dir=self.wiki_dir)
-                    local_results = local_searcher.search(query, num_results=3)
-
-                    # Dual-language web search
-                    searcher: WebSearcher | None = None
-                    try:
-                        searcher = WebSearcher()
-                        # Translate query to source language for parallel search
-                        translated_query = await self.translate_query(query, source_lang)
-                        web_results = await searcher.dual_search(
-                            query=query,
-                            target_lang=language,
-                            translated_query=translated_query,
-                            source_lang=source_lang,
-                        )
-                    except Exception as e:
-                        logger.warning("Web search failed: %s. Relying on local wiki.", e)
                         web_results = []
-                    finally:
-                        if searcher is not None:
-                            await searcher.close()
+                        searcher = None
+                        try:
+                            searcher = WebSearcher()
+                            translated_query = await self.translate_query(query, source_lang)
+                            web_results = await searcher.dual_search(
+                                query=query,
+                                target_lang=language,
+                                translated_query=translated_query,
+                                source_lang=source_lang,
+                            )
+                        except Exception as e:
+                            logger.warning("Web search failed: %s. Relying on local wiki.", e)
+                        finally:
+                            if searcher is not None:
+                                await searcher.close()
 
-                    # Combine results
-                    results = local_results + web_results
+                        results = local_results + web_results
 
-                    # 1. Database/UI State (Persistent): Save web results to LORE
-                    if web_results:
-                        compiler = WikiCompiler(wiki_dir=self.wiki_dir)
-                        content_lines = []
-                        for r in web_results:
-                            title = r.get("title", "No Title")
-                            href = markdown_http_https_url_or_none(r.get("url", ""))
-                            if href:
-                                content_lines.append(f"### [{title}]({href})")
-                            else:
-                                content_lines.append(
-                                    f"### {title}\n*(source URL omitted — unsupported or disallowed scheme)*"
-                                )
-                            content_lines.append(r.get("content", ""))
-                        compiler.compile(query, "\n".join(content_lines), metadata={"sources": web_results})
+                        if web_results:
+                            compiler = WikiCompiler(wiki_dir=self.wiki_dir)
+                            content_lines = []
+                            for r in web_results:
+                                title = r.get("title", "No Title")
+                                href = markdown_http_https_url_or_none(r.get("url", ""))
+                                if href:
+                                    content_lines.append(f"### [{title}]({href})")
+                                else:
+                                    content_lines.append(
+                                        f"### {title}\n*(source URL omitted — unsupported or disallowed scheme)*"
+                                    )
+                                content_lines.append(r.get("content", ""))
+                            compiler.compile(query, "\n".join(content_lines), metadata={"sources": web_results})
 
-                    # 2. LLM State (Ephemeral): Build context from search results
-                    summary_parts = []
-                    for i, r in enumerate(results[:6], 1):
-                        title = r.get('title', 'Untitled')
-                        content = r.get('content', '')
-                        url = r.get('url', '')
-                        summary_parts.append(
-                            f"--- Source {i}: {title} ---\n"
-                            f"URL: {url}\n"
-                            f"{content}\n"
-                        )
-                    summary = "\n".join(summary_parts)
+                        summary_parts = []
+                        for i, r in enumerate(results[:6], 1):
+                            title = r.get('title', 'Untitled')
+                            content = r.get('content', '')
+                            url = r.get('url', '')
+                            summary_parts.append(
+                                f"--- Source {i}: {title} ---\n"
+                                f"URL: {url}\n"
+                                f"{content}\n"
+                            )
+                        summary = "\n".join(summary_parts)
 
-                    # Re-prompt: replace the tool-call output with the search context
-                    openai_messages.append({
-                        "role": "assistant",
-                        "content": f"I searched for '{query}' and found several relevant sources.",
-                    })
-                    openai_messages.append({
-                        "role": "user",
-                        "content": (
-                            f"Here is the information I found:\n\n{summary}\n\n"
-                            "Based on these sources, please answer my original question "
-                            "thoroughly and in detail. Synthesize the information from "
-                            "all sources into a clear, comprehensive response."
-                        ),
-                    })
+                        openai_messages.append({
+                            "role": "assistant",
+                            "content": f"I searched for '{query}' and found several relevant sources.",
+                        })
+                        openai_messages.append({
+                            "role": "user",
+                            "content": (
+                                f"Here is the information I found:\n\n{summary}\n\n"
+                                "Based on these sources, please answer my original question "
+                                "thoroughly and in detail. Synthesize the information from "
+                                "all sources into a clear, comprehensive response."
+                            ),
+                        })
+                        continue
 
-                    logger.info("Sending follow-up chat request after search...")
-                    response = await asyncio.wait_for(
-                        self.client.chat.completions.create(
-                            model=self.config.model_name,
-                            messages=openai_messages,
-                            max_tokens=self.config.max_tokens,
-                            temperature=0.7,
-                        ),
-                        timeout=CHAT_TIMEOUT_SECONDS,
-                    )
-
-                    final_output = ""
-                    if response.choices:
-                        final_output = response.choices[0].message.content or ""
+                # No tool calls or match, break out of loop
+                break
 
             cleaned_output = re.sub(r'<think>.*?</think>', '', final_output, flags=re.DOTALL).strip()
             cleaned_output = re.sub(r'<think>.*$', '', cleaned_output, flags=re.DOTALL).strip()
-            # Strip any residual tool_call tags the model may have emitted
             cleaned_output = re.sub(r'<tool_call>.*?</tool_call>', '', cleaned_output, flags=re.DOTALL).strip()
 
             # Add assistant message to context
@@ -1067,11 +1271,18 @@ class VLProcessor:
 
     async def prewarm_model(self) -> None:
         """Pre-load the target model into Lemonade Server VRAM."""
-        if not self.config.model_name or self.config.model_name in ("omni-router", "default"):
-            logger.info("Model '%s' is a virtual routing endpoint. Skipping VRAM pre-warming.", self.config.model_name)
-            return
-
         await self.init_engine()
+        
+        # Discover models
+        await self.router.discover_async()
+        
+        model_to_load = self.config.model_name
+        if not model_to_load or model_to_load in ("omni-router", "default"):
+            model_to_load = self.router.llm()
+            if not model_to_load:
+                logger.info("No LLM model resolved for virtual routing. Skipping prewarming.")
+                return
+
         base_url = os.environ.get("LEMONADE_API_URL", self.config.api_url)
         base_url_no_v1 = base_url.removesuffix("/v1")
         try:
@@ -1081,21 +1292,21 @@ class VLProcessor:
                 pulled_models = await client.list_models()
                 pulled_ids = [m.get("id") for m in pulled_models if m.get("id")]
                 
-                if self.config.model_name not in pulled_ids:
+                if model_to_load not in pulled_ids:
                     logger.warning(
                         "Model '%s' is not pulled/available on Lemonade server. "
                         "Pulled models: %s. Skipping VRAM pre-warming.",
-                        self.config.model_name, pulled_ids
+                        model_to_load, pulled_ids
                     )
                     return
 
-                logger.info("Pre-warming model '%s' in GPU VRAM...", self.config.model_name)
+                logger.info("Pre-warming model '%s' in GPU VRAM...", model_to_load)
                 try:
-                    await client.load_model(self.config.model_name)
+                    await client.load_model(model_to_load)
                 except Exception as load_err:
                     logger.debug("Explicit /v1/load failed, falling back to dummy inference: %s", load_err)
                     await self.client.chat.completions.create(
-                        model=self.config.model_name,
+                        model=model_to_load,
                         messages=[{"role": "user", "content": "warmup"}],
                         max_tokens=1
                     )

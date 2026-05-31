@@ -233,7 +233,10 @@ class CinematicWorker(QThread):
                 base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
                 base_url_no_v1 = base_url.removesuffix("/v1")
                 client = LemonadeClient(base_url=base_url_no_v1)
-                transcript = await client.transcribe(audio_bytes)
+                if not self.processor.router.asr():
+                    await self.processor.router.discover_async()
+                asr_model = self.processor.router.asr()
+                transcript = await client.transcribe(audio_bytes, model=asr_model)
                 await client.close()
             except Exception as e:
                 logger.warning("Audio transcription failed: %s", e)
@@ -287,7 +290,7 @@ class ChatTranslationWorker(QThread):
         try:
             response = await asyncio.wait_for(
                 self.processor.client.chat.completions.create(
-                    model=self.processor.config.model_name,
+                    model=self.processor.get_model_name(),
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
@@ -375,8 +378,9 @@ class RaidWorker(QThread):
         client = LemonadeClient(base_url=base_url_no_v1)
         
         try:
-            models = await client.list_models(show_all=True)
-            asr_model = next((m["id"] for m in models if "transcription" in m.get("labels", []) and m.get("downloaded", False)), None)
+            if not self.processor.router.asr():
+                await self.processor.router.discover_async()
+            asr_model = self.processor.router.asr()
             if not asr_model:
                 raise ValueError("No transcription model available on the server.")
 
@@ -407,7 +411,7 @@ class RaidWorker(QThread):
                 
                 response = await asyncio.wait_for(
                     self.processor.client.chat.completions.create(
-                        model=self.processor.config.model_name,
+                        model=self.processor.get_model_name(),
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt}
@@ -484,8 +488,8 @@ class RaidWorker(QThread):
 class StatusWorker(QThread):
     """Check Lemonade server availability via HTTP GET /models."""
 
-    # (is_available, list_of_model_ids)
-    status_changed = pyqtSignal(bool, list)
+    # (is_available, list_of_model_ids, raw_models_data)
+    status_changed = pyqtSignal(bool, list, list)
 
     def __init__(self, api_url: str = "http://localhost:13305/v1"):
         super().__init__()
@@ -495,14 +499,15 @@ class StatusWorker(QThread):
         try:
             base_url = os.environ.get("LEMONADE_API_URL", self.api_url)
             with httpx.Client(timeout=5.0) as client:
-                resp = client.get(f"{base_url}/models")
+                resp = client.get(f"{base_url}/models", params={"show_all": "true"})
                 resp.raise_for_status()
                 body = resp.json()
-                models = [m.get("id", "unknown") for m in body.get("data", [])]
-                self.status_changed.emit(True, models if models else ["omni-router"])
+                data = body.get("data", [])
+                models = [m.get("id", "unknown") for m in data if m.get("downloaded", True)]
+                self.status_changed.emit(True, models if models else ["omni-router"], data)
         except Exception as e:
             logger.warning("Lemonade health check failed: %s", e)
-            self.status_changed.emit(False, [])
+            self.status_changed.emit(False, [], [])
 
 
 class ModelPullWorker(QThread):
