@@ -4,8 +4,10 @@ Migrated from the original ``xian/constants.py``.  Values here are
 shared defaults; individual apps may override them via settings or CLI.
 """
 
+import os
+
 # ── Lemonade Server ──────────────────────────────────────────────────
-DEFAULT_API_URL = "http://localhost:13305/v1"
+DEFAULT_API_URL = os.environ.get("XIAN_API_URL", "http://192.168.0.183:13305/v1")
 
 # ── Model Defaults ───────────────────────────────────────────────────
 DEFAULT_MODEL = "Qwen3.5-0.8B-GGUF"

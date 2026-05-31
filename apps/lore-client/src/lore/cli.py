@@ -3,6 +3,15 @@ import json
 import logging
 import os
 import sys
+import uuid
+from urllib.parse import urljoin, urlparse
+
+import httpx
+from bs4 import BeautifulSoup
+
+import base64
+from xian.omni_router import OmniModelRouter
+from xian.lemonade_client import LemonadeClient
 
 import typer
 from rich.console import Console
@@ -270,6 +279,144 @@ def ingest(filepath: str = typer.Argument(..., help="Path to the JSON payload ex
         )
         
     console.print(f"[bold green]MASHA export successfully ingested![/bold green] File saved to: {out_path}")
+
+async def download_images_and_replace(html: str, base_url: str, wiki_dir: str, router: OmniModelRouter, translate_images: bool) -> str:
+    soup = BeautifulSoup(html, "lxml")
+    images_dir = os.path.join(wiki_dir, "images")
+    os.makedirs(images_dir, exist_ok=True)
+    
+    async with httpx.AsyncClient() as client:
+        for img in soup.find_all("img"):
+            src = img.get("src")
+            if not src:
+                continue
+                
+            img_url = urljoin(base_url, src)
+            try:
+                if not img_url.startswith(("http://", "https://")):
+                    continue
+                    
+                resp = await client.get(img_url, timeout=10.0)
+                if resp.status_code == 200:
+                    ext = os.path.splitext(urlparse(img_url).path)[1]
+                    if not ext:
+                        ext = ".jpg"
+                    filename = f"{uuid.uuid4().hex}{ext}"
+                    local_path = os.path.join(images_dir, filename)
+                    
+                    image_bytes = resp.content
+                    
+                    if translate_images:
+                        try:
+                            async with LemonadeClient() as l_client:
+                                edit_resp = await l_client.edit_image(
+                                    image_bytes=image_bytes,
+                                    prompt="Translate all Chinese text in this image to English, keeping the original background and style.",
+                                    model=router.edit(),
+                                    response_format="b64_json"
+                                )
+                                data = edit_resp.get("data", [])
+                                if data and "b64_json" in data[0]:
+                                    image_bytes = base64.b64decode(data[0]["b64_json"])
+                        except Exception as e:
+                            logger.warning(f"Failed to translate image {img_url}: {e}")
+                    
+                    with open(local_path, "wb") as f:
+                        f.write(image_bytes)
+                        
+                    img["src"] = f"images/{filename}"
+            except Exception as e:
+                logger.warning(f"Failed to download image {img_url}: {e}")
+                
+    return str(soup)
+
+async def translate_html_to_markdown(html_content: str, title: str, router: OmniModelRouter) -> str:
+    client = AsyncOpenAI(base_url=DEFAULT_API_URL, api_key="not-needed")
+    
+    system_prompt = (
+        "You are an expert Chinese-to-English translator specializing in game lore, "
+        "wuxia/xianxia terms, and Chinese encyclopedias. "
+        "Your task is to translate the provided HTML content accurately into English, "
+        "and format the output as clean Markdown. "
+        "Preserve all images by converting them to Markdown image syntax `![alt text](src)`. "
+        "Output ONLY the translated Markdown content."
+    )
+    
+    try:
+        response = await client.chat.completions.create(
+            model=router.llm(),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Title: {title}\\n\\nContent HTML:\\n{html_content}"},
+            ],
+            max_tokens=4096,
+        )
+        content = response.choices[0].message.content
+        if not content:
+            console.print("\\n[bold red]Error:[/bold red] The model returned an empty response.")
+            return ""
+        return content
+    except Exception as e:
+        console.print(f"\\n[bold red]Translation API Error:[/bold red] {e}")
+        return ""
+
+async def process_url(url: str, user_agent: str | None, translate_images: bool):
+    scraper = PlaywrightScraper(user_agent=user_agent)
+    wiki_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "wiki")
+    compiler = WikiCompiler(wiki_dir=wiki_dir)
+    
+    router = OmniModelRouter(DEFAULT_API_URL)
+    with console.status("[bold blue]Discovering Lemonade Models...[/bold blue]"):
+        await router.discover_async()
+    
+    console.print(f"[bold green]Processing URL:[/bold green] {url}")
+    
+    with console.status("[bold blue]Scraping webpage...[/bold blue]"):
+        scraped_data = await scraper.scrape(url)
+        
+    if not scraped_data:
+        console.print("[bold red]Failed to scrape URL.[/bold red]")
+        return
+        
+    html_content = scraped_data.get("html")
+    title = scraped_data.get("title", "Untitled")
+    
+    if not html_content:
+        console.print("[bold red]No HTML content extracted.[/bold red]")
+        return
+        
+    with console.status("[bold blue]Downloading images...[/bold blue]"):
+        local_html = await download_images_and_replace(html_content, url, wiki_dir, router, translate_images)
+        
+    with console.status("[bold blue]Translating and converting to Markdown...[/bold blue]"):
+        translated_md = await translate_html_to_markdown(local_html, title, router)
+        
+    if not translated_md:
+        console.print("[bold red]Failed to translate content.[/bold red]")
+        return
+        
+    with console.status("[bold blue]Compiling Wiki file...[/bold blue]"):
+        metadata = {
+            "sources": [{"title": title, "url": url}],
+        }
+        
+        filepath = compiler.compile(
+            entity_name=title,
+            content=translated_md,
+            metadata=metadata,
+            infobox={}
+        )
+        
+    console.print(f"[bold green]Wiki compilation complete![/bold green] File saved to: {filepath}")
+
+@app.command()
+def url(
+    target_url: str = typer.Argument(..., help="The URL to fetch, translate, and convert to Markdown"),
+    user_agent: str = typer.Option(None, "--user-agent", "-a", help="Override the user agent used by the browser"),
+    translate_images: bool = typer.Option(False, "--translate-images", help="Translate Chinese text within downloaded images using Lemonade API")
+):
+    """Fetch a URL, download its images, convert it to Markdown, and translate it to English."""
+    asyncio.run(process_url(target_url, user_agent, translate_images))
 
 if __name__ == "__main__":
     app()

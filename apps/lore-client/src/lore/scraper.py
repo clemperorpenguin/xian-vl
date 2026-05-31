@@ -15,8 +15,8 @@ class PlaywrightScraper:
     """Scrapes content using Playwright and cleans it using Readability.
     """
     
-    def __init__(self):
-        self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    def __init__(self, user_agent: str | None = None):
+        self.user_agent = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
     async def scrape(self, url: str) -> dict | None:
         """Fetches URL and returns cleaned content and metadata.
@@ -53,6 +53,9 @@ class PlaywrightScraper:
             
             page = await context.new_page()
             await page.route("**/*", _block_unsafe_route)
+            
+            # Anti-bot evasion
+            await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
             try:
                 # Set a reasonable timeout
