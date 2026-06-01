@@ -24,7 +24,7 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
         "--windowed",
         "--onedir",
         "--icon", str(base_dir / "xian.png"),
-        "--add-data", f"{base_dir / 'xian.png'}:.",
+        "--add-data", f"{base_dir / 'xian.png'}{os.pathsep}.",
         "--noconfirm",
         str(app_dir / "src" / "mage" / "main.py")
     ]

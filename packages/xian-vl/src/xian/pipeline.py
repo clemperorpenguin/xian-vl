@@ -1373,10 +1373,16 @@ class VLProcessor:
         await self.router.discover_async()
         
         model_to_load = self.config.model_name
+        is_omni = False
+        
         if not model_to_load or model_to_load in ("omni-router", "default"):
-            model_to_load = self.router.llm()
+            if self.router.omni_model_id:
+                model_to_load = self.router.omni_model_id
+                is_omni = True
+            else:
+                model_to_load = self.router.llm()
         elif self.router.is_omni_model(model_to_load):
-            model_to_load = self.router.llm(model_to_load)
+            is_omni = True
 
         if not model_to_load:
             logger.info("No LLM model resolved for virtual routing. Skipping prewarming.")
@@ -1386,29 +1392,44 @@ class VLProcessor:
         base_url_no_v1 = base_url.removesuffix("/v1")
         try:
             async with LemonadeClient(base_url=base_url_no_v1) as client:
-                # Query locally pulled models to verify availability
-                logger.debug("Checking pulled models on Lemonade server...")
+                logger.debug("Checking models on Lemonade server...")
+                # Get pulled and registered models
                 pulled_models = await client.list_models()
                 pulled_ids = [m.get("id") for m in pulled_models if m.get("id")]
                 
-                if model_to_load not in pulled_ids:
-                    logger.warning(
-                        "Model '%s' is not pulled/available on Lemonade server. "
-                        "Pulled models: %s. Skipping VRAM pre-warming.",
-                        model_to_load, pulled_ids
-                    )
-                    return
+                registered_models = await client.list_models(show_all=True)
+                registered_ids = [m.get("id") for m in registered_models if m.get("id")]
 
-                logger.info("Pre-warming model '%s' in GPU VRAM...", model_to_load)
+                if is_omni:
+                    if model_to_load not in registered_ids:
+                        logger.warning(
+                            "Omni model '%s' is not registered on Lemonade server. "
+                            "Registered models: %s. Skipping pre-warming.",
+                            model_to_load, registered_ids
+                        )
+                        return
+                else:
+                    if model_to_load not in pulled_ids:
+                        logger.warning(
+                            "Model '%s' is not pulled/available on Lemonade server. "
+                            "Pulled models: %s. Skipping VRAM pre-warming.",
+                            model_to_load, pulled_ids
+                        )
+                        return
+
+                logger.info("Pre-warming model '%s' (is_omni=%s) in Lemonade Server...", model_to_load, is_omni)
                 try:
                     await client.load_model(model_to_load)
                 except Exception as load_err:
-                    logger.debug("Explicit /v1/load failed, falling back to dummy inference: %s", load_err)
-                    await self.client.chat.completions.create(
-                        model=model_to_load,
-                        messages=[{"role": "user", "content": "warmup"}],
-                        max_tokens=1
-                    )
+                    if not is_omni:
+                        logger.debug("Explicit /v1/load failed, falling back to dummy inference: %s", load_err)
+                        await self.client.chat.completions.create(
+                            model=model_to_load,
+                            messages=[{"role": "user", "content": "warmup"}],
+                            max_tokens=1
+                        )
+                    else:
+                        logger.warning("Failed to load omni model '%s': %s", model_to_load, load_err)
         except Exception as e:
             logger.warning("VRAM Pre-warming failed: %s", e)
 

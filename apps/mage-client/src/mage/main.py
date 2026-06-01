@@ -21,11 +21,13 @@ def main() -> None:
     """Launch the MAGE Gaming HUD."""
     setup_logger(level=logging.DEBUG)
 
+    from mage.resources import get_resource_path
+
     app = QApplication(sys.argv)
     app.setOrganizationName(ORGANIZATION_NAME)
     app.setApplicationName(APPLICATION_NAME)
     app.setQuitOnLastWindowClosed(False)
-    app.setWindowIcon(QIcon("xian.png"))
+    app.setWindowIcon(QIcon(get_resource_path("xian.png")))
 
     # Allow Ctrl+C to terminate the application
     signal.signal(signal.SIGINT, lambda *args: QApplication.quit())

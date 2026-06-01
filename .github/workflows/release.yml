@@ -149,6 +149,10 @@ jobs:
           chmod +x AppDir/AppRun
           cp scripts/mage.desktop AppDir/
           cp xian.png AppDir/
+          mkdir -p AppDir/usr/share/icons/hicolor/512x512/apps
+          cp xian.png AppDir/usr/share/icons/hicolor/512x512/apps/xian.png
+          cp xian.png AppDir/usr/share/icons/hicolor/512x512/apps/mage.png
+          cp xian.png AppDir/mage.png
           
           ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir mage-client-full-x86_64.AppImage
 

@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 import time
 import pytest
@@ -72,3 +73,80 @@ def test_dictionary_ready_event(tmp_path, monkeypatch):
     assert results[0][0] == "測試"
     assert results[0][1] == "ce4 shi4"
     assert results[0][2] == "to test/trial"
+
+def test_get_resource_path(monkeypatch):
+    import sys
+    import os
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    mage_src = os.path.join(base_dir, "apps", "mage-client", "src")
+    sys.path.insert(0, mage_src)
+    try:
+        from mage.resources import get_resource_path
+        
+        # Test dev mode
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
+        path = get_resource_path("xian.png")
+        assert os.path.isabs(path)
+        assert os.path.exists(path)
+        assert path.endswith("xian.png")
+        
+        # Test frozen mode
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        fake_mei = "/fake/_MEIPASS"
+        monkeypatch.setattr(sys, "_MEIPASS", fake_mei, raising=False)
+        orig_exists = os.path.exists
+        monkeypatch.setattr(os.path, "exists", lambda p: True if fake_mei in p else orig_exists(p))
+        path_frozen = get_resource_path("xian.png")
+        assert path_frozen == os.path.join(fake_mei, "xian.png")
+    finally:
+        if mage_src in sys.path:
+            sys.path.remove(mage_src)
+
+@pytest.mark.anyio
+async def test_prewarm_model_collection(monkeypatch):
+    config = VLConfig()
+    config.model_name = "LMX-Omni-5.5B-Lite"
+    processor = VLProcessor(config)
+    
+    # Mock router discover and properties
+    class DummyRouter:
+        omni_model_id = "LMX-Omni-5.5B-Lite"
+        async def discover_async(self):
+            pass
+        def is_omni_model(self, name):
+            return name == "LMX-Omni-5.5B-Lite"
+        def llm(self, name=None):
+            return "Qwen3.5-4B-MTP-GGUF"
+            
+    processor.router = DummyRouter()
+    
+    # Mock init_engine
+    async def dummy_init_engine():
+        pass
+    monkeypatch.setattr(processor, "init_engine", dummy_init_engine)
+    
+    # Mock LemonadeClient
+    loaded_model_id = None
+    class MockLemonadeClient:
+        def __init__(self, base_url, timeout=120.0):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def list_models(self, show_all=False):
+            if show_all:
+                return [{"id": "LMX-Omni-5.5B-Lite"}, {"id": "Qwen3.5-4B-MTP-GGUF"}]
+            else:
+                return []  # Not pulled yet
+        async def load_model(self, name):
+            nonlocal loaded_model_id
+            loaded_model_id = name
+            return {"status": "success"}
+            
+    monkeypatch.setattr("xian.pipeline.LemonadeClient", MockLemonadeClient)
+    
+    await processor.prewarm_model()
+    
+    # Verify that the omni model itself (LMX-Omni-5.5B-Lite) was loaded directly
+    assert loaded_model_id == "LMX-Omni-5.5B-Lite"

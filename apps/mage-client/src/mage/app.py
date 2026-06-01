@@ -386,14 +386,8 @@ class XianApp(QWidget):
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(self)
         # Try to load icon, fall back to a theme icon
-        import os
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        icon_path = os.path.join(base_dir, "xian.png")
-        if not os.path.exists(icon_path):
-            # Fall back to checking root of workspace/repo
-            icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(base_dir)))), "xian.png")
-        if not os.path.exists(icon_path):
-            icon_path = "xian.png"
+        from mage.resources import get_resource_path
+        icon_path = get_resource_path("xian.png")
         icon = QIcon(icon_path)
         if icon.isNull():
             icon = QIcon.fromTheme("applications-graphics")
