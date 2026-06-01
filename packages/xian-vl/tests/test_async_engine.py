@@ -254,3 +254,27 @@ async def test_vlprocessor_process_frame():
     assert results[0].translated_text == "Test"
     
     await processor.close()
+
+
+@pytest.mark.anyio
+async def test_vlprocessor_translate_query():
+    mock_create = AsyncMock()
+    mock_response = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.message.content = "<think>some thought</think>translated text"
+    mock_response.choices = [mock_choice]
+    mock_create.return_value = mock_response
+
+    processor = VLProcessor(VLConfig())
+    processor.engine = MagicMock()
+    processor.engine.client = MagicMock()
+    processor.engine.client.chat.completions.create = mock_create
+
+    result = await processor.translate_query("query", "English")
+    assert result == "translated text"
+
+    # Verify that it disables thinking block
+    kwargs = mock_create.call_args.kwargs
+    assert kwargs["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+
+    await processor.close()

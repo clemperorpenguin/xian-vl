@@ -10,7 +10,7 @@ from PyQt6.QtCore import QThread, QRect, pyqtSignal
 
 from mage.capture.audio import capture_system_audio
 from xian.lemonade_client import LemonadeClient
-from xian.timeout import vision_timeout_for_mode, CHAT_TIMEOUT_SECONDS
+from xian.timeout import vision_timeout_for_mode, CHAT_TIMEOUT_SECONDS, CHAT_AUX_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -392,12 +392,20 @@ class RaidWorker(QThread):
                 if not self._running:
                     break
 
-                self.progress.emit("Transcribing audio...")
-                transcript = await client.transcribe(
-                    wav_chunk,
-                    language="zh" if "chin" in self.source_lang.lower() else "en",
-                    model=asr_model
-                )
+                try:
+                    self.progress.emit("Transcribing audio...")
+                    transcript = await asyncio.wait_for(
+                        client.transcribe(
+                            wav_chunk,
+                            language="zh" if "chin" in self.source_lang.lower() else "en",
+                            model=asr_model
+                        ),
+                        timeout=15.0
+                    )
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.warning("Raid Mode transcription failed or timed out: %s", e)
+                    self.progress.emit(f"Transcription failed ({e}), listening...")
+                    continue
 
                 if not transcript or not transcript.strip():
                     self.progress.emit("Listening for speech...")
@@ -411,22 +419,26 @@ class RaidWorker(QThread):
                 )
                 user_prompt = f"Translate from {self.source_lang} to {self.target_lang}:\n\n{transcript}"
                 
-                response = await asyncio.wait_for(
-                    self.processor.client.chat.completions.create(
-                        model=self.processor.get_model_name(),
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt}
-                        ],
-                        max_tokens=self.processor.config.max_tokens,
-                        temperature=0.1,
-                        extra_body={"chat_template_kwargs": {"enable_thinking": False}}
-                    ),
-                    timeout=CHAT_TIMEOUT_SECONDS,
-                )
-                
-                choice = response.choices[0] if response.choices else None
-                final_output = (choice.message.content or "").strip() if choice else ""
+                try:
+                    response = await asyncio.wait_for(
+                        self.processor.client.chat.completions.create(
+                            model=self.processor.get_model_name(),
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt}
+                            ],
+                            max_tokens=self.processor.config.max_tokens,
+                            temperature=0.1,
+                            extra_body={"chat_template_kwargs": {"enable_thinking": False}}
+                        ),
+                        timeout=CHAT_AUX_TIMEOUT_SECONDS,
+                    )
+                    choice = response.choices[0] if response.choices else None
+                    final_output = (choice.message.content or "").strip() if choice else ""
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.warning("Raid Mode translation failed or timed out: %s", e)
+                    self.progress.emit(f"Translation failed ({e}), listening...")
+                    continue
                 
                 import re
                 import json

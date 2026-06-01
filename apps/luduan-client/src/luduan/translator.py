@@ -65,6 +65,7 @@ class DocumentTranslator:
                     {"role": "user", "content": text},
                 ],
                 max_tokens=2048,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
             return response.choices[0].message.content or text
         except Exception:

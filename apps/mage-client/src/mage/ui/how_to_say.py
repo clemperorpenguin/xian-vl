@@ -19,8 +19,7 @@ class HowToSayDialog(QWidget):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.SplashScreen |
-            Qt.WindowType.BypassWindowManagerHint
+            Qt.WindowType.SplashScreen
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
@@ -245,3 +244,17 @@ class HowToSayDialog(QWidget):
     def hideEvent(self, event):
         super().hideEvent(event)
         self.dialog_hidden.emit()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_position)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)

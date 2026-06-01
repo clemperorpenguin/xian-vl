@@ -40,7 +40,7 @@ OMNI_TOOLS: list[dict[str, Any]] = [
                     },
                     "image_path": {
                         "type": "string",
-                        "description": "The path or identifier of the image to edit.",
+                        "description": "The local file path of the image to edit, or 'screenshot'/'image' to modify the current screen capture.",
                     }
                 },
                 "required": ["prompt", "image_path"],
@@ -96,7 +96,7 @@ OMNI_TOOLS: list[dict[str, Any]] = [
                 "properties": {
                     "image_path": {
                         "type": "string",
-                        "description": "The file path or identifier of the image/screenshot to analyze.",
+                        "description": "The local file path of the image/screenshot to analyze, or 'screenshot'/'image' to analyze the current screen.",
                     },
                     "question": {
                         "type": "string",

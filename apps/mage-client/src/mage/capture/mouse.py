@@ -29,7 +29,6 @@ if sys.platform == "linux":
             self.running = False
             self.devices = []
             self._threads = []
-            self._find_mice()
             
         def _find_mice(self):
             """Find all mouse devices in /dev/input/"""
@@ -46,11 +45,24 @@ if sys.platform == "linux":
                 logger.error("EvdevMouseListener: Failed to find mice: %s", e)
 
         def start(self):
+            if self.running:
+                return
+
+            # Clean up and ensure fresh open devices
+            for device in self.devices:
+                try:
+                    device.close()
+                except Exception:
+                    pass
+            self.devices = []
+
+            self._find_mice()
             if not self.devices:
                 logger.warning("EvdevMouseListener: No mice found to listen to.")
                 return
                 
             self.running = True
+            self._threads = []
             for device in self.devices:
                 thread = threading.Thread(target=self._listen_device, args=(device,), daemon=True)
                 thread.start()
@@ -65,6 +77,8 @@ if sys.platform == "linux":
                     device.close()
                 except Exception:
                     pass
+            self.devices = []
+            self._threads = []
 
         def _listen_device(self, device: evdev.InputDevice):
             try:

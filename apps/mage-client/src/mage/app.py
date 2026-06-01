@@ -37,8 +37,9 @@ from mage.settings_keys import (
     KEY_API_URL, KEY_API_MODEL, KEY_SOURCE_LANG, KEY_TARGET_LANG,
     KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY,
     KEY_GPU_UTIL, KEY_DIALOGUE_DELAY, KEY_CINEMATIC_TRIGGER,
-    KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK,
+    KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE,
 )
+from mage.utils.window_binder import WindowBinder
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +140,7 @@ class SettingsDialog(QDialog):
         self.delay_spin = QSpinBox()
         self.delay_spin.setRange(100, 10000)
         self.delay_spin.setSingleStep(100)
-        self.delay_spin.setValue(int(settings.value(KEY_DIALOGUE_DELAY, 1500)))
+        self.delay_spin.setValue(int(settings.value(KEY_DIALOGUE_DELAY, 1000)))
         layout.addRow("Dialogue Delay (ms):", self.delay_spin)
 
         # Auto-continue truncated translations
@@ -165,6 +166,12 @@ class SettingsDialog(QDialog):
         lr_lore_val = settings.value("live_raid_lore_save", "false")
         self.live_raid_lore_save_cb.setChecked(lr_lore_val == "true" or lr_lore_val is True)
         layout.addRow(self.live_raid_lore_save_cb)
+
+        # Target Window Title
+        self.target_window_title_edit = QLineEdit()
+        self.target_window_title_edit.setPlaceholderText("e.g. Genshin Impact (Leave empty for normal mode)")
+        self.target_window_title_edit.setText(settings.value(KEY_TARGET_WINDOW_TITLE, ""))
+        layout.addRow("Target Window Title:", self.target_window_title_edit)
 
         # Buttons
         btn_row = QHBoxLayout()
@@ -223,6 +230,7 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
         self.settings.setValue("live_voice_raid", "true" if self.live_voice_raid_cb.isChecked() else "false")
         self.settings.setValue("live_raid_lore_save", "true" if self.live_raid_lore_save_cb.isChecked() else "false")
+        self.settings.setValue(KEY_TARGET_WINDOW_TITLE, self.target_window_title_edit.text().strip())
         self.accept()
 
 
@@ -238,6 +246,9 @@ class XianApp(QWidget):
         self.hide()  # never shown
 
         self.settings = QSettings(ORGANIZATION, APP_NAME)
+        # Migrate deprecated MAGE model setting
+        if self.settings.value(KEY_API_MODEL) == "MAGE":
+            self.settings.setValue(KEY_API_MODEL, constants.DEFAULT_MODEL)
         self._available_models: list = []
 
         # --- Core objects ---
@@ -329,6 +340,16 @@ class XianApp(QWidget):
         # --- Initial health check ---
         self._run_health_check()
 
+        # --- Target Window Binding ---
+        self.target_binder = None
+        self._target_last_geometry = None
+        self._target_was_active = False
+        self._target_was_minimized = False
+        self.window_tracking_timer = QTimer(self)
+        self.window_tracking_timer.timeout.connect(self._track_target_window)
+        self.window_tracking_timer.start(100) # Check every 100ms
+        self._setup_window_binder()
+
     # ------------------------------------------------------------------
     # System tray
     # ------------------------------------------------------------------
@@ -381,6 +402,15 @@ class XianApp(QWidget):
 
     def _on_command_mode_started(self):
         self.osd.show_centered()
+        if self.target_binder:
+            self._apply_transient_parent(self.osd)
+            geom = self.target_binder.get_geometry()
+            if geom:
+                tx, ty, tw, th = geom
+                self.osd.move(
+                    tx + (tw - self.osd.width()) // 2,
+                    ty + (th - self.osd.height()) // 2
+                )
         self.osd_timer.start(15000)
         
     def _on_osd_setting_changed(self, key: str, value: str):
@@ -419,7 +449,7 @@ class XianApp(QWidget):
     # ------------------------------------------------------------------
     # Lens
     # ------------------------------------------------------------------
-    def show_lens(self):
+    def show_lens(self, dialogue_mode: bool = False):
         """Capture the screen and open the Lens overlay."""
         self.hide_osd()
         logger.info("Opening Lens overlay")
@@ -432,6 +462,7 @@ class XianApp(QWidget):
 
         self._lens = LensOverlayWindow(
             previous_rect=LensOverlayWindow._last_rect,
+            dialogue_mode=dialogue_mode,
         )
         self._lens.action_requested.connect(self._on_lens_action)
         self._lens.closed.connect(self._on_lens_closed)
@@ -444,11 +475,35 @@ class XianApp(QWidget):
         """Handle an action from the Lens action bar."""
         logger.info("Lens action: %s, rect: %s", action, rect)
 
+        if action == "dialogue":
+            LensOverlayWindow._last_rect = rect
+            self.dialogue_mode_active = True
+            self.mouse_listener.start()
+            
+            # Instantly translate the selected dialogue region using the clean crop
+            self._run_inference(image_data, "translate", rect)
+            
+            bubble = ResultBubble("Dialogue Mode ON", anchor_rect=rect, auto_close_ms=3000)
+            self._add_bubble(bubble)
+            logger.info("Dialogue Mode Activated via Lens")
+            return
+
         if action == "chat":
             # Push image into chat context and open sidebar
             self.chat_sidebar.add_image_context(image_data)
             if not self.chat_sidebar.isVisible():
                 self.chat_sidebar.show()
+                if self.target_binder:
+                    self._apply_transient_parent(self.chat_sidebar)
+                    geom = self.target_binder.get_geometry()
+                    if geom:
+                        tx, ty, tw, th = geom
+                        self.chat_sidebar.setGeometry(
+                            tx + tw - self.chat_sidebar.width(),
+                            ty,
+                            self.chat_sidebar.width(),
+                            th
+                        )
             self.chat_sidebar.raise_()
             return
 
@@ -513,7 +568,7 @@ class XianApp(QWidget):
         self._bubbles.append(bubble)
         self._setup_bubble_connections(bubble)
 
-    def _replace_persistent_bubble(self, attr_name: str, text: str, original_text: str = "", anchor: QRect = QRect(), border_color: str | None = None, truncated: bool = False) -> ResultBubble:
+    def _replace_persistent_bubble(self, attr_name: str, text: str, original_text: str = "", anchor: QRect = QRect(), border_color: str | None = None, truncated: bool = False, auto_close_ms: int = 0) -> ResultBubble:
         """Helper to close and recreate a persistent dialogue or cinematic bubble."""
         old_bubble = getattr(self, attr_name, None)
         if old_bubble is not None:
@@ -526,7 +581,7 @@ class XianApp(QWidget):
             text,
             original_text=original_text,
             anchor_rect=anchor,
-            auto_close_ms=0,
+            auto_close_ms=auto_close_ms,
             border_color=border_color,
             truncated=truncated,
         )
@@ -617,6 +672,7 @@ class XianApp(QWidget):
                 anchor=anchor,
                 border_color=border_color,
                 truncated=any_truncated,
+                auto_close_ms=30000,
             )
         else:
             bubble = ResultBubble(
@@ -679,6 +735,7 @@ class XianApp(QWidget):
             pass
 
     def _setup_bubble_connections(self, bubble):
+        self._apply_transient_parent(bubble)
         bubble.speak_source_requested.connect(
             lambda b=bubble: self._on_speak_requested(b, source=True)
         )
@@ -831,6 +888,17 @@ class XianApp(QWidget):
             self.chat_sidebar.hide()
         else:
             self.chat_sidebar.show()
+            if self.target_binder:
+                self._apply_transient_parent(self.chat_sidebar)
+                geom = self.target_binder.get_geometry()
+                if geom:
+                    tx, ty, tw, th = geom
+                    self.chat_sidebar.setGeometry(
+                        tx + tw - self.chat_sidebar.width(),
+                        ty,
+                        self.chat_sidebar.width(),
+                        th
+                    )
             self.chat_sidebar.raise_()
 
     # ------------------------------------------------------------------
@@ -841,6 +909,15 @@ class XianApp(QWidget):
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
         source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
         self.how_to_say_dialog.show_centered(target_lang=target_lang, source_lang=source_lang)
+        if self.target_binder:
+            self._apply_transient_parent(self.how_to_say_dialog)
+            geom = self.target_binder.get_geometry()
+            if geom:
+                tx, ty, tw, th = geom
+                self.how_to_say_dialog.move(
+                    tx + (tw - self.how_to_say_dialog.width()) // 2,
+                    ty + (th - self.how_to_say_dialog.height()) // 2
+                )
 
     def _on_how_to_say_submit(self, text: str):
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
@@ -879,12 +956,15 @@ class XianApp(QWidget):
             logger.info("Dialogue Mode Deactivated")
         else:
             if LensOverlayWindow._last_rect is None or LensOverlayWindow._last_rect.isEmpty():
-                bubble = ResultBubble("Please use Lens (Leader+C) to select a dialogue area first.", auto_close_ms=5000)
-                self._add_bubble(bubble)
+                logger.info("No dialogue area selected. Opening Lens in dialogue mode.")
+                self.show_lens(dialogue_mode=True)
                 return
 
             self.dialogue_mode_active = True
             self.mouse_listener.start()
+            
+            # Immediately trigger the first translation
+            self.capture_dialogue()
             
             bubble = ResultBubble("Dialogue Mode ON", anchor_rect=LensOverlayWindow._last_rect, auto_close_ms=3000)
             self._add_bubble(bubble)
@@ -892,7 +972,7 @@ class XianApp(QWidget):
 
     def on_dialogue_click(self):
         if self.dialogue_mode_active:
-            delay = int(self.settings.value(KEY_DIALOGUE_DELAY, 1500))
+            delay = int(self.settings.value(KEY_DIALOGUE_DELAY, 1000))
             self.dialogue_timer.start(delay)
 
     def capture_dialogue(self):
@@ -1122,8 +1202,14 @@ class XianApp(QWidget):
             
             # Prefer Omni model as default if detected
             target_model = self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
+            if target_model == "MAGE":
+                target_model = constants.DEFAULT_MODEL
+                self.settings.setValue(KEY_API_MODEL, target_model)
+
             if self.processor.router.omni_detected:
                 omni_id = self.processor.router.omni_model_id
+                if omni_id == "MAGE":
+                    omni_id = constants.DEFAULT_MODEL
                 if omni_id and (target_model in (None, "", constants.DEFAULT_MODEL, "omni-router", "default")):
                     logger.info("Omni model '%s' detected, setting as default.", omni_id)
                     self.settings.setValue(KEY_API_MODEL, omni_id)
@@ -1136,6 +1222,9 @@ class XianApp(QWidget):
                 logger.info("Model '%s' not found on server, pulling...", target_model)
                 self._model_pull_attempted = True
                 self._pull_model(target_model)
+            
+            # Set the active model on the router to rebuild modality mappings
+            self.processor.router.active_model = target_model
         else:
             logger.warning("Lemonade server not reachable")
             self._available_models = []
@@ -1184,4 +1273,218 @@ class XianApp(QWidget):
             if hasattr(self.hotkey_listener, "set_leader_key"):
                 self.hotkey_listener.set_leader_key(new_leader)
                 
+            self._setup_window_binder()
             logger.info("Settings updated and applied")
+
+    def _is_valid_widget(self, w):
+        if w is None:
+            return False
+        try:
+            from PyQt6 import sip
+            return not sip.isdeleted(w)
+        except Exception:
+            try:
+                import sip
+                return not sip.isdeleted(w)
+            except Exception:
+                return False
+
+    def _setup_window_binder(self):
+        """Initializes or updates the WindowBinder based on the current settings."""
+        if hasattr(self, "target_binder") and self.target_binder:
+            try:
+                self.target_binder.close()
+            except Exception:
+                pass
+            self.target_binder = None
+
+        target_title = self.settings.value(KEY_TARGET_WINDOW_TITLE, "")
+        if target_title:
+            logger.info("Setting up window binding for target title: '%s'", target_title)
+            self.target_binder = WindowBinder(target_title)
+            self._target_last_geometry = None
+            self._target_was_active = False
+            self._target_was_minimized = False
+            
+            # Apply transient parent to already created widgets
+            self._apply_transient_parent(self.osd)
+            self._apply_transient_parent(self.chat_sidebar)
+            self._apply_transient_parent(self.how_to_say_dialog)
+        else:
+            self.target_binder = None
+
+    def _apply_transient_parent(self, widget):
+        if not self.target_binder or not self._is_valid_widget(widget):
+            return
+        native_id = self.target_binder.get_native_id()
+        if native_id:
+            try:
+                from PyQt6.QtGui import QWindow
+                widget.winId()
+                handle = widget.windowHandle()
+                if handle:
+                    foreign_window = QWindow.fromWinId(native_id)
+                    if foreign_window:
+                        handle.setTransientParent(foreign_window)
+            except Exception as e:
+                logger.debug("Failed to set transient parent for widget %s: %s", widget, e)
+
+    def _track_target_window(self):
+        if not self.target_binder:
+            return
+
+        try:
+            exists = self.target_binder.exists()
+            if not exists:
+                return
+
+            geom = self.target_binder.get_geometry()
+            # If we cannot retrieve geometry (e.g. Wayland), fall back to floating mode
+            if not geom:
+                return
+
+            is_minimized = self.target_binder.is_minimized()
+            is_active = self.target_binder.is_active()
+
+            # Check if focus is on any of our own overlays
+            our_window_active = False
+            active_win = QApplication.activeWindow()
+            if active_win and self._is_valid_widget(active_win):
+                our_window_active = (
+                    active_win == self.osd or
+                    active_win == self.chat_sidebar or
+                    active_win == self.how_to_say_dialog or
+                    any(active_win == b for b in self._bubbles if self._is_valid_widget(b)) or
+                    any(active_win == b for b in self._active_bubbles.values() if self._is_valid_widget(b)) or
+                    active_win == self.cinematic_bubble or
+                    active_win == self.raid_bubble or
+                    active_win == self.dialogue_bubble
+                )
+
+            target_should_be_visible = not is_minimized and (is_active or our_window_active)
+
+            # Get list of all overlay windows
+            raw_overlays = []
+            if self.osd:
+                raw_overlays.append(self.osd)
+            if self.chat_sidebar:
+                raw_overlays.append(self.chat_sidebar)
+            if self.how_to_say_dialog:
+                raw_overlays.append(self.how_to_say_dialog)
+
+            raw_overlays.extend(self._bubbles)
+            raw_overlays.extend(self._active_bubbles.values())
+
+            if self.cinematic_bubble:
+                raw_overlays.append(self.cinematic_bubble)
+            if self.raid_bubble:
+                raw_overlays.append(self.raid_bubble)
+            if self.dialogue_bubble:
+                raw_overlays.append(self.dialogue_bubble)
+
+            overlays = []
+            for w in raw_overlays:
+                if self._is_valid_widget(w):
+                    overlays.append(w)
+
+            # Update visibility based on target active state
+            for overlay in overlays:
+                if not target_should_be_visible:
+                    # Hide overlay if visible and not already marked
+                    if overlay.isVisible():
+                        overlay.setVisible(False)
+                        overlay._temp_hidden_by_binder = True
+                else:
+                    # Restore visibility if temporarily hidden by binder
+                    if getattr(overlay, "_temp_hidden_by_binder", False):
+                        overlay.setVisible(True)
+                        overlay._temp_hidden_by_binder = False
+
+            if is_minimized or not target_should_be_visible:
+                return
+
+            # Geometry tracking and overlay tracking / translation
+            if self._target_last_geometry is None:
+                self._align_overlays_to_target(geom)
+            elif geom != self._target_last_geometry:
+                old_x, old_y, old_w, old_h = self._target_last_geometry
+                new_x, new_y, new_w, new_h = geom
+                dx = new_x - old_x
+                dy = new_y - old_y
+                self._translate_overlays_by_delta(dx, dy, new_w - old_w, new_h - old_h, geom)
+
+            self._target_last_geometry = geom
+
+        except Exception as e:
+            logger.error("Error in _track_target_window: %s", e)
+
+    def _align_overlays_to_target(self, geom):
+        """Align active overlays to the target window geometry initially."""
+        tx, ty, tw, th = geom
+
+        if self._is_valid_widget(self.osd) and self.osd.isVisible():
+            self.osd.move(
+                tx + (tw - self.osd.width()) // 2,
+                ty + (th - self.osd.height()) // 2
+            )
+
+        if self._is_valid_widget(self.how_to_say_dialog) and self.how_to_say_dialog.isVisible():
+            self.how_to_say_dialog.move(
+                tx + (tw - self.how_to_say_dialog.width()) // 2,
+                ty + (th - self.how_to_say_dialog.height()) // 2
+            )
+
+        if self._is_valid_widget(self.chat_sidebar) and self.chat_sidebar.isVisible():
+            self.chat_sidebar.setGeometry(
+                tx + tw - self.chat_sidebar.width(),
+                ty,
+                self.chat_sidebar.width(),
+                th
+            )
+
+    def _translate_overlays_by_delta(self, dx, dy, dw, dh, target_geom):
+        """Translate or resize overlays based on target window movement delta."""
+        tx, ty, tw, th = target_geom
+
+        bubbles = []
+        for b in self._bubbles:
+            if self._is_valid_widget(b):
+                bubbles.append(b)
+        for b in self._active_bubbles.values():
+            if self._is_valid_widget(b):
+                bubbles.append(b)
+        for b in [self.cinematic_bubble, self.raid_bubble, self.dialogue_bubble]:
+            if self._is_valid_widget(b):
+                bubbles.append(b)
+
+        for bubble in bubbles:
+            if bubble.isVisible():
+                bubble.move(bubble.x() + dx, bubble.y() + dy)
+
+        if self._is_valid_widget(self.osd) and self.osd.isVisible():
+            self.osd.move(
+                tx + (tw - self.osd.width()) // 2,
+                ty + (th - self.osd.height()) // 2
+            )
+
+        if self._is_valid_widget(self.how_to_say_dialog) and self.how_to_say_dialog.isVisible():
+            self.how_to_say_dialog.move(
+                tx + (tw - self.how_to_say_dialog.width()) // 2,
+                ty + (th - self.how_to_say_dialog.height()) // 2
+            )
+
+        if self._is_valid_widget(self.chat_sidebar) and self.chat_sidebar.isVisible():
+            self.chat_sidebar.setGeometry(
+                tx + tw - self.chat_sidebar.width(),
+                ty,
+                self.chat_sidebar.width(),
+                th
+            )
+
+    def closeEvent(self, event):
+        if hasattr(self, "target_binder") and self.target_binder:
+            try:
+                self.target_binder.close()
+            except Exception:
+                pass
+        super().closeEvent(event)

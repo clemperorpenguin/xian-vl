@@ -26,15 +26,27 @@ class OmniModelRouter:
         self._downloaded_models: list[dict[str, Any]] = []
         self._omni_detected = False
         self._omni_model_id: str | None = None
-        self.active_model: str | None = None
+        self._active_model: str | None = None
+
+    @property
+    def active_model(self) -> str | None:
+        return self._active_model
+
+    @active_model.setter
+    def active_model(self, value: str | None) -> None:
+        self._active_model = value
+        self._rebuild_routing_table()
 
     def update_with_models(self, models_data: list[dict[str, Any]]) -> None:
         """Populate the routing table from the raw model response.
         This parses the models list and maps labels/recipes to modalities.
         """
         self._downloaded_models = [m for m in models_data if m.get("downloaded", True)]
-        
-        # Reset mappings
+        self._rebuild_routing_table()
+
+    def _rebuild_routing_table(self) -> None:
+        """Rebuild self._models routing table, applying active Omni model overrides if set."""
+        # 1. Reset mappings
         self._models = {}
         self._omni_detected = False
         self._omni_model_id = None
@@ -49,7 +61,7 @@ class OmniModelRouter:
                 logger.info("Omni model detected: %s", m_id)
                 break
 
-        # Map labels to modalities
+        # Map labels to modalities globally first
         for m in self._downloaded_models:
             m_id = m.get("id", "")
             labels = m.get("labels", [])
@@ -63,8 +75,10 @@ class OmniModelRouter:
             lower_id = m_id.lower()
             if "whisper" in lower_id:
                 self._models.setdefault("transcription", m_id)
+                self._models.setdefault("asr", m_id)
             elif "kokoro" in lower_id or "tts" in lower_id:
                 self._models.setdefault("tts", m_id)
+                self._models.setdefault("text-to-speech", m_id)
             elif "flux" in lower_id or "sd" in lower_id or "stable-diffusion" in lower_id:
                 self._models.setdefault("image", m_id)
                 self._models.setdefault("edit", m_id)
@@ -73,6 +87,50 @@ class OmniModelRouter:
             elif "qwen" in lower_id or "llama" in lower_id or "mistral" in lower_id or "gemma" in lower_id:
                 self._models.setdefault("chat", m_id)
                 self._models.setdefault("tool-calling", m_id)
+
+        # 2. If an Omni model is active, override self._models mapping with its components
+        active = self._active_model or self._omni_model_id
+        if active and self.is_omni_model(active):
+            components = []
+            for m in self._downloaded_models:
+                if m.get("id") == active:
+                    components = m.get("components", [])
+                    break
+            
+            if components:
+                # Clear all standard modality mappings to prevent pollution from non-components
+                self._models = {}
+                
+                # Re-map only from components
+                for comp_id in components:
+                    comp_info = next((m for m in self._downloaded_models if m.get("id") == comp_id), None)
+                    comp_labels = comp_info.get("labels", []) if comp_info else []
+                    
+                    # Map explicit labels
+                    for label in comp_labels:
+                        self._models[label] = comp_id
+                        
+                    # Map heuristics
+                    lower_id = comp_id.lower()
+                    if "whisper" in lower_id:
+                        self._models["transcription"] = comp_id
+                        self._models["asr"] = comp_id
+                    elif "kokoro" in lower_id or "tts" in lower_id:
+                        self._models["tts"] = comp_id
+                        self._models["text-to-speech"] = comp_id
+                    elif "flux" in lower_id or "sd" in lower_id or "stable-diffusion" in lower_id:
+                        self._models["image"] = comp_id
+                        self._models["edit"] = comp_id
+                    elif "vision" in lower_id or "vl" in lower_id or "qwen-vl" in lower_id:
+                        self._models["vision"] = comp_id
+                    elif "qwen" in lower_id or "llama" in lower_id or "mistral" in lower_id or "gemma" in lower_id:
+                        self._models["chat"] = comp_id
+                        self._models["tool-calling"] = comp_id
+                        self._models["reasoning"] = comp_id
+
+                # Fallback for vision inside the collection
+                if "vision" not in self._models and ("chat" in self._models or "tool-calling" in self._models):
+                    self._models["vision"] = self._models.get("tool-calling") or self._models.get("chat")
 
         # Print routing table for debugging
         logger.debug("OmniModelRouter mapped labels: %s", self._models)

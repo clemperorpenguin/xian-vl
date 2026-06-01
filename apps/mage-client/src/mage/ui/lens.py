@@ -42,6 +42,9 @@ class ActionBarWidget(QWidget):
         btn_translate = QPushButton("Translate")
         btn_translate.clicked.connect(lambda: self._on_click("translate"))
         
+        btn_dialogue = QPushButton("Dialogue")
+        btn_dialogue.clicked.connect(lambda: self._on_click("dialogue"))
+        
         btn_explain = QPushButton("Explain")
         btn_explain.clicked.connect(lambda: self._on_click("explain"))
         
@@ -52,6 +55,7 @@ class ActionBarWidget(QWidget):
         btn_chat.clicked.connect(lambda: self._on_click("chat"))
         
         layout.addWidget(btn_translate)
+        layout.addWidget(btn_dialogue)
         layout.addWidget(btn_explain)
         layout.addWidget(btn_dictionary)
         layout.addWidget(btn_chat)
@@ -68,8 +72,9 @@ class LensOverlayWindow(QWidget):
     # Persists across instances so the next overlay can recall it
     _last_rect: ClassVar[QRect | None] = None
     
-    def __init__(self, previous_rect: QRect | None = None):
+    def __init__(self, previous_rect: QRect | None = None, dialogue_mode: bool = False):
         super().__init__()
+        self.dialogue_mode = dialogue_mode
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
@@ -154,7 +159,10 @@ class LensOverlayWindow(QWidget):
             self.selected_rect = QRect(self.start_pos, self.current_pos).normalized()
             
             if self.selected_rect.width() > 10 and self.selected_rect.height() > 10:
-                self._show_action_bar()
+                if self.dialogue_mode:
+                    self._handle_action("dialogue", self.selected_rect)
+                else:
+                    self._show_action_bar()
             else:
                 self.selected_rect = QRect()
             self.update()

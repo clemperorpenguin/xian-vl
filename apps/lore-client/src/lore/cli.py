@@ -83,6 +83,7 @@ async def translate_content(text: str, entity_name: str) -> str:
                 {"role": "user", "content": f"Entity: {entity_name}\n\nContent:\n{text}"},
             ],
             max_tokens=4096,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
         return response.choices[0].message.content or text
     except Exception as e:
@@ -119,6 +120,7 @@ async def extract_and_translate_infobox(raw_html: str, entity_name: str) -> dict
                 {"role": "user", "content": infobox_str},
             ],
             response_format={"type": "json_object"},
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
         return json.loads(response.choices[0].message.content or "{}")
     except Exception as e:
@@ -350,6 +352,7 @@ async def translate_html_to_markdown(html_content: str, title: str, router: Omni
                 {"role": "user", "content": f"Title: {title}\\n\\nContent HTML:\\n{html_content}"},
             ],
             max_tokens=4096,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
         content = response.choices[0].message.content
         if not content:

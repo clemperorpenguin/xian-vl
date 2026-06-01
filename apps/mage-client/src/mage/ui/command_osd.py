@@ -62,7 +62,7 @@ class CommandOSD(QWidget):
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.SplashScreen |
-            Qt.WindowType.BypassWindowManagerHint
+            Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -133,6 +133,7 @@ class CommandOSD(QWidget):
         )
 
         for cb in (self.source_lang_combo, self.target_lang_combo, self.model_combo):
+            cb.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
             cb.setStyleSheet(f"""
                 QComboBox {{
                     background-color: #2A2A2A;
@@ -228,3 +229,17 @@ class CommandOSD(QWidget):
     def hideEvent(self, event):
         super().hideEvent(event)
         self.osd_hidden.emit()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_position)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)

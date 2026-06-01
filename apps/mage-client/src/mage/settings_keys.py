@@ -16,5 +16,4 @@ KEY_DIALOGUE_DELAY = "dialogue_delay"
 KEY_CINEMATIC_TRIGGER = "cinematic_trigger"
 KEY_AUTO_CONTINUE = "auto_continue"
 KEY_AUTO_SPEAK = "auto_speak"
-
-
+KEY_TARGET_WINDOW_TITLE = "target_window_title"

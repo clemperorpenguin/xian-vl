@@ -115,6 +115,7 @@ class VLProcessor:
 
     def get_model_name(self) -> str:
         """Resolve the model name to use for standard completions/vision tasks."""
+        self.router.active_model = self.config.model_name
         if self.config.model_name in ("omni-router", "default"):
             return self.router.llm()
         if self.router.is_omni_model(self.config.model_name):
@@ -123,6 +124,7 @@ class VLProcessor:
 
     def get_vision_model_name(self) -> str:
         """Resolve the model name to use for vision completions tasks."""
+        self.router.active_model = self.config.model_name
         if self.config.model_name in ("omni-router", "default"):
             return self.router.vision()
         if self.router.is_omni_model(self.config.model_name):
@@ -276,7 +278,10 @@ class VLProcessor:
             f"- SKIP game UI icons, decorative symbols, item icons, and non-text graphical elements entirely.\n"
             f"- If a character is unclear, output your best guess rather than repeating or stalling.\n"
             f"- Do NOT repeat the same character or word more than it actually appears in the image.\n"
-            f"- If no readable text is found, output ORIGINAL: (none) and TRANSLATED: (none)."
+            f"- If no readable text is found, output ORIGINAL: (none) and TRANSLATED: (none).\n\n"
+            f"REASONING CONSTRAINTS:\n"
+            f"- Keep your thinking process (if any) extremely brief, concise, and focused on resolving ambiguous characters.\n"
+            f"- Do NOT write out coordinate grids, row-by-row lists, or long tables in your reasoning."
         )
 
         # 1. Load Glossary from Wiki
@@ -313,20 +318,29 @@ class VLProcessor:
     @staticmethod
     def _detect_repetition_loop(text: str) -> bool:
         """Detect if the tail of `text` is stuck in a repetition loop."""
-        if len(text) < 20:
+        cleaned = text
+        if "<think>" in text:
+            if "</think>" in text:
+                cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+            else:
+                # If the model is currently in the thinking block (has <think> but no closing tag),
+                # we skip repetition detection entirely to allow the reasoning process to complete.
+                return False
+
+        if len(cleaned) < 20:
             return False
             
         # 1. Simple single character repeat
-        if re.search(r'(.)\1{14,}$', text):
+        if re.search(r'(.)\1{14,}$', cleaned):
             return True
             
         # 2. Multi-character regex for short patterns
-        match = re.search(r'(.{2,50}?)\1{2,}$', text)
+        match = re.search(r'(.{2,50}?)\1{2,}$', cleaned)
         if match and len(match.group(0)) >= 20:
             return True
             
         # 3. Detect large structural loops (e.g., 15 to 1000+ chars) via string slicing
-        tail = text[-4000:] if len(text) > 4000 else text
+        tail = cleaned[-4000:] if len(cleaned) > 4000 else cleaned
         max_size = len(tail) // 3
         if max_size >= 15:
             for size in range(15, max_size + 1):
@@ -508,7 +522,10 @@ class VLProcessor:
                         frequency_penalty=0.6,
                         presence_penalty=0.2,
                         stream=True,
-                        extra_body={"repetition_penalty": rep_penalty},
+                        extra_body={
+                            "repetition_penalty": rep_penalty,
+                            "chat_template_kwargs": {"enable_thinking": False}
+                        },
                     ),
                     timeout=vision_timeout_for_mode(mode),
                 )
@@ -655,7 +672,10 @@ class VLProcessor:
                     frequency_penalty=0.6,
                     presence_penalty=0.2,
                     stream=True,
-                    extra_body={"repetition_penalty": 1.15},
+                    extra_body={
+                        "repetition_penalty": 1.15,
+                        "chat_template_kwargs": {"enable_thinking": False}
+                    },
                 ),
                 timeout=vision_timeout_for_mode(mode),
             )
@@ -696,7 +716,10 @@ class VLProcessor:
             f"Reply strictly in this 3-part layout with NO conversational introduction or Markdown formatting:\n"
             f"ORIGINAL:\n[Extracted {source_lang} dialogue text]\n\n"
             f"TRANSLATED:\n[Direct translation into {target_lang}]\n\n"
-            f"CONFIDENCE:\n[Confidence float score]"
+            f"CONFIDENCE:\n[Confidence float score]\n\n"
+            f"REASONING CONSTRAINTS:\n"
+            f"- Keep your thinking process (if any) extremely brief, concise, and focused entirely on cross-referencing and translation alignment.\n"
+            f"- Do NOT write long explanations or list translations repeatedly in your reasoning."
         )
 
         # 1. Load Glossary from Wiki
@@ -783,7 +806,10 @@ class VLProcessor:
                         temperature=temp,
                         frequency_penalty=0.6,
                         presence_penalty=0.2,
-                        extra_body={"repetition_penalty": rep_penalty},
+                        extra_body={
+                            "repetition_penalty": rep_penalty,
+                            "chat_template_kwargs": {"enable_thinking": False}
+                        },
                     ),
                     timeout=vision_timeout_for_mode("Document"),
                 )
@@ -855,10 +881,12 @@ class VLProcessor:
                     ],
                     max_tokens=200,
                     temperature=0.1,
+                    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
                 ),
                 timeout=CHAT_AUX_TIMEOUT_SECONDS,
             )
             ch0 = response.choices[0] if response.choices else None
+            translated = ch0.message.content or "" if ch0 else ""
             # Strip thinking tags if present
             translated = re.sub(r'<think>.*?</think>', '', translated, flags=re.DOTALL).strip()
             translated = re.sub(r'<think>.*$', '', translated, flags=re.DOTALL).strip()
@@ -921,7 +949,11 @@ class VLProcessor:
                 "</tool_call>\n\n"
                 "The language parameter is optional (defaults to zh-CN). "
                 "Use en-US for English queries. "
-                "Do NOT answer factual questions without searching first."
+                "Do NOT answer factual questions without searching first.\n\n"
+                "IMPORTANT TOOL GUIDELINES:\n"
+                "1. Only call tools if they are directly relevant to fulfilling the user's request. Do not call image generation tools for simple questions.\n"
+                "2. Do not use analyze_image for images already visible in the conversation history unless the user explicitly requests a detailed analysis of that specific image/screenshot.\n"
+                "3. If the user asks to analyze the current screen or screenshot, use 'screenshot' or 'image' as the image_path in analyze_image."
             ),
         }
         openai_messages.insert(0, system_msg)
@@ -992,6 +1024,16 @@ class VLProcessor:
                                 img_path = args.get("image_path", "")
                                 
                                 clean_path = img_path.replace("file://", "").strip()
+                                if clean_path.lower() in ("image", "screenshot", "current", "active", "latest") or not clean_path:
+                                    frame = self.context_manager.get_latest_frame()
+                                    if frame:
+                                        media_dir = os.path.join(self.wiki_dir, "media")
+                                        os.makedirs(media_dir, exist_ok=True)
+                                        screenshot_path = os.path.join(media_dir, "current_screenshot.png")
+                                        frame.save(screenshot_path, "PNG")
+                                        clean_path = screenshot_path
+                                        logger.info("Intercepted symbolic image path. Saved latest frame to %s", clean_path)
+
                                 with open(clean_path, "rb") as f:
                                     img_bytes = f.read()
                                     
@@ -1050,7 +1092,18 @@ class VLProcessor:
                                 img_path = args.get("image_path", "").replace("file://", "").strip()
                                 question = args.get("question", "")
                                 
-                                with open(img_path, "rb") as f:
+                                clean_path = img_path
+                                if clean_path.lower() in ("image", "screenshot", "current", "active", "latest") or not clean_path:
+                                    frame = self.context_manager.get_latest_frame()
+                                    if frame:
+                                        media_dir = os.path.join(self.wiki_dir, "media")
+                                        os.makedirs(media_dir, exist_ok=True)
+                                        screenshot_path = os.path.join(media_dir, "current_screenshot.png")
+                                        frame.save(screenshot_path, "PNG")
+                                        clean_path = screenshot_path
+                                        logger.info("Intercepted symbolic image path. Saved latest frame to %s", clean_path)
+
+                                with open(clean_path, "rb") as f:
                                     img_bytes = f.read()
                                 b64_img = base64.b64encode(img_bytes).decode("utf-8")
                                 
@@ -1125,6 +1178,9 @@ class VLProcessor:
                                 tool_result = {"status": "success", "search_results": summary}
                             else:
                                 tool_result = {"error": f"Unknown function: {func_name}"}
+                        except FileNotFoundError as ex:
+                            logger.warning("Error executing tool %s (file not found): %s", func_name, ex)
+                            tool_result = {"error": f"File not found: {ex.filename or str(ex)}"}
                         except Exception as ex:
                             logger.error("Error executing tool %s: %s", func_name, ex, exc_info=True)
                             tool_result = {"error": str(ex)}
@@ -1283,9 +1339,12 @@ class VLProcessor:
         model_to_load = self.config.model_name
         if not model_to_load or model_to_load in ("omni-router", "default"):
             model_to_load = self.router.llm()
-            if not model_to_load:
-                logger.info("No LLM model resolved for virtual routing. Skipping prewarming.")
-                return
+        elif self.router.is_omni_model(model_to_load):
+            model_to_load = self.router.llm(model_to_load)
+
+        if not model_to_load:
+            logger.info("No LLM model resolved for virtual routing. Skipping prewarming.")
+            return
 
         base_url = os.environ.get("LEMONADE_API_URL", self.config.api_url)
         base_url_no_v1 = base_url.removesuffix("/v1")
