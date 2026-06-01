@@ -1,3 +1,21 @@
+# MAGE — Gaming HUD for real-time screen translation.
+# Copyright (C) 2026  Clementine Pendragon <clem@pendragon.systems>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
+
 """Tray-resident application controller for Xian-VL.
 
 Owns the system tray icon, hotkey listener, VLProcessor, and orchestrates
@@ -409,6 +427,11 @@ class XianApp(QWidget):
 
         menu.addSeparator()
 
+        about_action = menu.addAction("ℹ About MAGE")
+        about_action.triggered.connect(self.show_about_dialog)
+
+        menu.addSeparator()
+
         quit_action = menu.addAction("Quit")
         quit_action.triggered.connect(QApplication.quit)
 
@@ -426,6 +449,37 @@ class XianApp(QWidget):
                 QSystemTrayIcon.MessageIcon.Information,
                 5000
             )
+
+    def show_about_dialog(self):
+        from mage.resources import get_resource_path
+        
+        about_text = (
+            "<h3>MAGE — Gaming HUD for real-time screen translation</h3>"
+            "<p>Copyright &copy; 2026 Clementine Pendragon &lt;clem@pendragon.systems&gt;</p>"
+            "<p>Contact: <a href='mailto:clem@pendragon.systems'>clem@pendragon.systems</a><br>"
+            "Mailing Address: Clementine Pendragon, c/o Xian Project Development</p>"
+            "<p>This program is free software: you can redistribute it and/or modify "
+            "it under the terms of the GNU General Public License as published by "
+            "the Free Software Foundation, either version 3 of the License, or "
+            "(at your option) any later version.</p>"
+            "<p>This program is distributed in the hope that it will be useful, "
+            "but WITHOUT ANY WARRANTY; without even the implied warranty of "
+            "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the "
+            "GNU General Public License for more details.</p>"
+            "<p>You should have received a copy of the GNU General Public License "
+            "along with this program. If not, see <a href='https://www.gnu.org/licenses/'>https://www.gnu.org/licenses/</a>.</p>"
+        )
+        msg = QMessageBox(self)
+        msg.setWindowTitle("About MAGE")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(about_text)
+        
+        # Try to load and set the icon
+        icon_path = get_resource_path("xian.png")
+        if os.path.exists(icon_path):
+            msg.setWindowIcon(QIcon(icon_path))
+            
+        msg.exec()
 
     def hide_osd(self):
         self.osd.hide()

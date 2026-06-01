@@ -1,3 +1,21 @@
+# LORE — Interactive research Wiki builder CLI.
+# Copyright (C) 2026  Clementine Pendragon <clem@pendragon.systems>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
+
 import asyncio
 import json
 import logging
@@ -250,14 +268,22 @@ async def research_entity(entity_name: str):
         await searcher.close()
 
 
+def print_gpl_notice(program_name: str):
+    console.print(f"[bold]{program_name}[/bold]  Copyright (C) 2026  Clementine Pendragon <clem@pendragon.systems>")
+    console.print("This program comes with ABSOLUTELY NO WARRANTY; for details type `show-w` or run with `--help`.")
+    console.print("This is free software, and you are welcome to redistribute it under certain conditions; type `show-c` for details.")
+    console.print()
+
 @app.command()
 def research(entity: str = typer.Argument(..., help="The Chinese entity name to research")):
     """Research a Chinese entity and compile a localized English Wiki page."""
+    print_gpl_notice("LORE")
     asyncio.run(research_entity(entity))
 
 @app.command()
 def ingest(filepath: str = typer.Argument(..., help="Path to the JSON payload exported from MASHA")):
     """Ingest a site context exported from the MASHA extension into the LORE Wiki."""
+    print_gpl_notice("LORE")
     wiki_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "wiki")
     compiler = WikiCompiler(wiki_dir=wiki_dir)
     
@@ -422,7 +448,62 @@ def url(
     translate_images: bool = typer.Option(False, "--translate-images", help="Translate Chinese text within downloaded images using Lemonade API")
 ):
     """Fetch a URL, download its images, convert it to Markdown, and translate it to English."""
+    print_gpl_notice("LORE")
     asyncio.run(process_url(target_url, user_agent, translate_images))
+
+@app.command(name="show-w")
+def show_w():
+    """Show the warranty disclaimer of the GNU General Public License."""
+    warranty_text = (
+        "GNU GENERAL PUBLIC LICENSE\n"
+        "Version 3, 29 June 2007\n\n"
+        "15. Disclaimer of Warranty.\n\n"
+        "THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY\n"
+        "APPLICABLE LAW. EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT\n"
+        "HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM \"AS IS\" WITHOUT WARRANTY\n"
+        "OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO,\n"
+        "THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR\n"
+        "PURPOSE. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM\n"
+        "IS WITH YOU. SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF\n"
+        "ALL NECESSARY SERVICING, REPAIR OR CORRECTION.\n\n"
+        "16. Limitation of Liability.\n\n"
+        "IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING\n"
+        "WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS\n"
+        "THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY\n"
+        "GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE\n"
+        "USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED TO LOSS OF\n"
+        "DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD\n"
+        "PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER PROGRAMS),\n"
+        "EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF\n"
+        "SUCH DAMAGES.\n\n"
+        "17. Interpretation of Sections 15 and 16.\n\n"
+        "If the disclaimer of warranty and limitation of liability provided\n"
+        "above cannot be given local legal effect according to their terms,\n"
+        "reviewing courts shall apply local law that most closely approximates\n"
+        "an absolute waiver of all civil liability in connection with the\n"
+        "Program, unless a warranty or assumption of liability accompanies a\n"
+        "copy of the Program in return for a fee."
+    )
+    console.print(warranty_text)
+
+@app.command(name="show-c")
+def show_c():
+    """Show the distribution conditions of the GNU General Public License."""
+    conditions_text = (
+        "GNU GENERAL PUBLIC LICENSE\n"
+        "Version 3, 29 June 2007\n\n"
+        "This program is free software; you can redistribute it and/or modify\n"
+        "it under the terms of the GNU General Public License as published by\n"
+        "the Free Software Foundation, either version 3 of the License, or\n"
+        "(at your option) any later version.\n\n"
+        "This program is distributed in the hope that it will be useful,\n"
+        "but WITHOUT ANY WARRANTY; without even the implied warranty of\n"
+        "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the\n"
+        "GNU General Public License for more details.\n\n"
+        "You should have received a copy of the GNU General Public License\n"
+        "along with this program. If not, see <https://www.gnu.org/licenses/>."
+    )
+    console.print(conditions_text)
 
 if __name__ == "__main__":
     app()
