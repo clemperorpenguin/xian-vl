@@ -165,30 +165,3 @@ jobs:
         with:
           name: mage-client-AppImage
           path: mage-client-full-x86_64.AppImage
-
-  build-flatpak:
-    name: Build MAGE Flatpak (Linux)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install Flatpak dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder elfutils
-          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-
-      - name: Build Flatpak
-        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
-        with:
-          bundle: mage-client-full.flatpak
-          manifest-path: packages/org.xian.Mage.yml
-          cache-key: flatpak-builder-${{ github.sha }}
-
-      - name: Upload Flatpak
-        uses: actions/upload-artifact@v4
-        with:
-          name: mage-client-Flatpak
-          path: mage-client-full.flatpak
