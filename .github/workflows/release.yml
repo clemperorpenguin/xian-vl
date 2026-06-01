@@ -45,11 +45,17 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }} --target embeddable
         working-directory: lemonade
 
+      - name: Remove Archive Files
+        run: |
+          rm -f lemonade/build/*.zip
+          rm -f lemonade/build/*.tar.gz
+        shell: bash
+
       - name: Upload Lemonade Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: lemonade/build/lemonade-embeddable-*
+          path: lemonade/build/lemonade-embeddable-*/
 
   build-mage:
     name: Build MAGE Client (${{ matrix.os }})
@@ -84,17 +90,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ matrix.lemonade_artifact }}
-          path: lemonade_download
-
-      - name: Extract Lemonade Artifact
-        run: |
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            7z x lemonade_download/*.zip -olemonade_extracted
-          else
-            mkdir lemonade_extracted
-            tar -xzf lemonade_download/*.tar.gz -C lemonade_extracted
-          fi
-        shell: bash
+          path: lemonade_extracted
 
       - name: Build Lite Version
         run: python scripts/build_mage.py
@@ -136,12 +132,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: lemonade-embeddable-ubuntu-x64
-          path: lemonade_download
-
-      - name: Extract Lemonade Artifact
-        run: |
-          mkdir lemonade_extracted
-          tar -xzf lemonade_download/*.tar.gz -C lemonade_extracted
+          path: lemonade_extracted
 
       - name: Build Full Version
         run: python scripts/build_mage.py --include-lemonade --lemonade-dir lemonade_extracted

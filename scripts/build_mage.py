@@ -86,10 +86,15 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
         print(f"Generated {zip_path}")
         
     elif sys.platform == "darwin":
-        dmg_name = "mage-client-full" if include_lemonade else "mage-client-lite"
-        dmg_path = app_dir / f"{dmg_name}.dmg"
-        print(f"Creating {dmg_path}...")
+        archive_name = "mage-client-full" if include_lemonade else "mage-client-lite"
+        zip_path = app_dir / f"{archive_name}.zip"
+        print(f"Creating zip archive {zip_path}...")
+        shutil.make_archive(str(app_dir / archive_name), 'zip', dist_dir, "mage-client.app")
+        print(f"Generated {zip_path}")
+
+        dmg_path = app_dir / f"{archive_name}.dmg"
         if shutil.which("create-dmg"):
+            print(f"Creating {dmg_path}...")
             if dmg_path.exists():
                 dmg_path.unlink()
             try:
@@ -105,9 +110,9 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
                     str(dmg_path),
                     str(root_app)
                 ], cwd=app_dir, check=True)
+                print(f"Generated {dmg_path}")
             except subprocess.CalledProcessError as e:
-                print(f"DMG creation failed with exit code {e.returncode}", file=sys.stderr)
-                sys.exit(1)
+                print(f"DMG creation failed with exit code {e.returncode}. Proceeding with ZIP archive.", file=sys.stderr)
         else:
             print("create-dmg not found. Skipping DMG creation.")
 
