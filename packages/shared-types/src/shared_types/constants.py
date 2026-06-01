@@ -10,7 +10,7 @@ import os
 DEFAULT_API_URL = os.environ.get("XIAN_API_URL", "http://192.168.0.183:13305/v1")
 
 # ── Model Defaults ───────────────────────────────────────────────────
-DEFAULT_MODEL = "Qwen3.5-0.8B-GGUF"
+DEFAULT_MODEL = "LMX-Omni-5.5B-Lite"
 DEFAULT_MAX_TOKENS = 2048
 MODE_MAX_TOKENS: dict[str, int] = {
     "Game": 4096,

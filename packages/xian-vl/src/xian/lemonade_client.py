@@ -155,6 +155,8 @@ class LemonadeClient:
         if model:
             payload["model"] = model
         resp = await self._client.post("/v1/audio/speech", json=payload)
+        if not resp.is_success:
+            raise RuntimeError(f"Lemonade TTS failed (500). Server said: {resp.text}")
         resp.raise_for_status()
         return resp.content
 

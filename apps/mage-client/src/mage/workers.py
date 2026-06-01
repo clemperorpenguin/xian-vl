@@ -233,9 +233,10 @@ class CinematicWorker(QThread):
                 base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
                 base_url_no_v1 = base_url.removesuffix("/v1")
                 client = LemonadeClient(base_url=base_url_no_v1)
-                if not self.processor.router.asr():
+                active_model = self.processor.config.model_name
+                if not self.processor.router.asr(active_model):
                     await self.processor.router.discover_async()
-                asr_model = self.processor.router.asr()
+                asr_model = self.processor.router.asr(active_model)
                 transcript = await client.transcribe(audio_bytes, model=asr_model)
                 await client.close()
             except Exception as e:
@@ -378,9 +379,10 @@ class RaidWorker(QThread):
         client = LemonadeClient(base_url=base_url_no_v1)
         
         try:
-            if not self.processor.router.asr():
+            active_model = self.processor.config.model_name
+            if not self.processor.router.asr(active_model):
                 await self.processor.router.discover_async()
-            asr_model = self.processor.router.asr()
+            asr_model = self.processor.router.asr(active_model)
             if not asr_model:
                 raise ValueError("No transcription model available on the server.")
 
@@ -503,7 +505,12 @@ class StatusWorker(QThread):
                 resp.raise_for_status()
                 body = resp.json()
                 data = body.get("data", [])
-                models = [m.get("id", "unknown") for m in data if m.get("downloaded", True)]
+                models = [
+                    m.get("id", "unknown")
+                    for m in data
+                    if m.get("downloaded", True)
+                    and (m.get("recipe") == "collection.omni" or m.get("id", "").startswith("LMX-Omni-"))
+                ]
                 self.status_changed.emit(True, models if models else ["omni-router"], data)
         except Exception as e:
             logger.warning("Lemonade health check failed: %s", e)

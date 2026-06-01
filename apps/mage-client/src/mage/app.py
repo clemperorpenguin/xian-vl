@@ -706,25 +706,37 @@ class XianApp(QWidget):
             base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
             base_url_no_v1 = base_url.removesuffix("/v1")
             
-            # Zero-shot voice cloning
+            # Base voice defaults to English
             voice_param = "af_heart"
+            lang = self.settings.value(KEY_SOURCE_LANG if source else KEY_TARGET_LANG, constants.DEFAULT_SOURCE_LANG)
+            if lang == "Chinese":
+                voice_param = "zf_xiaoxiao"
+            elif lang == "Japanese":
+                voice_param = "jf_alpha"
+                
             temp_wav_path = None
             if voice_ref_bytes:
-                try:
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                        tmp.write(voice_ref_bytes)
-                        temp_wav_path = tmp.name
-                    voice_param = temp_wav_path
-                except Exception as e:
-                    logger.warning("Failed to write voice cloning reference audio: %s", e)
+                # Voice cloning by file path only works if the server is running locally
+                is_local = "localhost" in base_url or "127.0.0.1" in base_url
+                if is_local:
+                    try:
+                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                            tmp.write(voice_ref_bytes)
+                            temp_wav_path = tmp.name
+                        voice_param = temp_wav_path
+                    except Exception as e:
+                        logger.warning("Failed to write voice cloning reference audio: %s", e)
+                else:
+                    logger.warning("Voice cloning requires Lemonade to be on localhost. Falling back to default voice.")
             
             try:
                 client = LemonadeClient(base_url=base_url_no_v1)
                 
                 # Discover downloaded TTS model via router
-                if not self.processor.router.tts():
+                active_model = self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
+                if not self.processor.router.tts(active_model):
                     await self.processor.router.discover_async()
-                tts_model = self.processor.router.tts()
+                tts_model = self.processor.router.tts(active_model)
                 if not tts_model:
                     raise ValueError("No TTS model available on the server.")
                 
@@ -1119,7 +1131,8 @@ class XianApp(QWidget):
                     target_model = omni_id
 
             # Ensure the default model is pulled
-            if target_model not in models and not self._model_pull_attempted:
+            all_downloaded = [m.get("id") for m in (raw_models or []) if m.get("downloaded", True)]
+            if target_model not in all_downloaded and not self._model_pull_attempted:
                 logger.info("Model '%s' not found on server, pulling...", target_model)
                 self._model_pull_attempted = True
                 self._pull_model(target_model)

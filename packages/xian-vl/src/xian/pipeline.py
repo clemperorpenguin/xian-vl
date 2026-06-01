@@ -117,12 +117,16 @@ class VLProcessor:
         """Resolve the model name to use for standard completions/vision tasks."""
         if self.config.model_name in ("omni-router", "default"):
             return self.router.llm()
+        if self.router.is_omni_model(self.config.model_name):
+            return self.router.llm(self.config.model_name)
         return self.config.model_name
 
     def get_vision_model_name(self) -> str:
         """Resolve the model name to use for vision completions tasks."""
         if self.config.model_name in ("omni-router", "default"):
             return self.router.vision()
+        if self.router.is_omni_model(self.config.model_name):
+            return self.router.vision(self.config.model_name)
         return self.config.model_name
 
 
