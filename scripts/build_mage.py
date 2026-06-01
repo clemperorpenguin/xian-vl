@@ -58,6 +58,8 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
         src_lemond = lemonade_dir / lemond_name
         if src_lemond.exists():
             shutil.copy2(src_lemond, bundle_dir)
+            if sys.platform != "win32":
+                (bundle_dir / lemond_name).chmod(0o755)
         else:
             print(f"Warning: {src_lemond} not found")
             
@@ -66,6 +68,8 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
         src_cli = lemonade_dir / cli_name
         if src_cli.exists():
             shutil.copy2(src_cli, bundle_dir)
+            if sys.platform != "win32":
+                (bundle_dir / cli_name).chmod(0o755)
             
         # Copy resources
         src_res = lemonade_dir / "resources"
