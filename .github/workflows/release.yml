@@ -55,7 +55,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: lemonade/build/lemonade-embeddable-*/
+          path: lemonade/build/lemonade-embeddable-*/*
 
   build-mage:
     name: Build MAGE Client (${{ matrix.os }})
