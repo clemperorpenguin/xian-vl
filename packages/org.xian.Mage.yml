@@ -1,0 +1,47 @@
+app-id: org.xian.Mage
+runtime: org.kde.Platform
+runtime-version: '6.6'
+sdk: org.kde.Sdk
+command: mage
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --device=dri
+  - --device=all
+
+modules:
+  - name: lemonade
+    buildsystem: cmake
+    config-opts:
+      - "-DBUILD_WEB_APP=OFF"
+    sources:
+      - type: dir
+        path: ../lemonade
+    post-install:
+      # Ensure lemond and lemonade are available in PATH and also inside the mage app dir
+      - cp /app/bin/lemond /app/bin/lemond.exe || true
+      - cp -r ../lemonade/resources /app/bin/
+
+  - name: mage-client
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-index --find-links="file://${PWD}" --prefix=${FLATPAK_DEST} .
+    sources:
+      - type: dir
+        path: ../apps/mage-client
+      - type: dir
+        path: ../packages/xian-vl
+      - type: dir
+        path: ../packages/shared-types
+
+  - name: desktop-file
+    buildsystem: simple
+    build-commands:
+      - install -D scripts/mage.desktop /app/share/applications/org.xian.Mage.desktop
+      - install -D xian.png /app/share/icons/hicolor/512x512/apps/org.xian.Mage.png
+    sources:
+      - type: dir
+        path: ../

@@ -37,9 +37,19 @@ def main() -> None:
 
     # Defer heavy imports until the event loop is ready
     from mage.app import XianApp  # noqa: E402
+    from mage.lemond_manager import start_lemond_if_embedded, stop_lemond
+
+    # Start embeddable lemonade if it exists in the bundle
+    start_lemond_if_embedded()
 
     xian = XianApp()
-    sys.exit(app.exec())
+    
+    exit_code = app.exec()
+    
+    # Gracefully stop the server on exit
+    stop_lemond()
+    
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=MAGE
+Exec=mage-client
+Icon=xian
+Type=Application
+Categories=Utility;
+Comment=MAGE — Gaming HUD for real-time screen translation
+Terminal=false

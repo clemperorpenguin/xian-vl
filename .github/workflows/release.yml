@@ -1,0 +1,188 @@
+name: MAGE Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-lemonade:
+    name: Build Embeddable Lemonade (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            preset: default
+            artifact_name: lemonade-embeddable-ubuntu-x64
+          - os: windows-latest
+            preset: windows
+            artifact_name: lemonade-embeddable-windows-x64
+          - os: macos-latest
+            preset: default
+            artifact_name: lemonade-embeddable-macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++ pkg-config libssl-dev libdrm-dev
+
+      - name: Setup CMake and Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja
+
+      - name: Configure CMake
+        run: cmake --preset ${{ matrix.preset }} -DBUILD_WEB_APP=OFF
+        working-directory: lemonade
+
+      - name: Build Embeddable Target
+        run: cmake --build --preset ${{ matrix.preset }} --target embeddable
+        working-directory: lemonade
+
+      - name: Upload Lemonade Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: lemonade/build/lemonade-embeddable-*
+
+  build-mage:
+    name: Build MAGE Client (${{ matrix.os }})
+    needs: build-lemonade
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            lemonade_artifact: lemonade-embeddable-windows-x64
+          - os: macos-latest
+            lemonade_artifact: lemonade-embeddable-macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install hatchling pyinstaller
+          pip install -e packages/shared-types
+          pip install -e packages/xian-vl
+          pip install -e apps/mage-client
+
+      - name: Download Lemonade Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.lemonade_artifact }}
+          path: lemonade_download
+
+      - name: Extract Lemonade Artifact
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            7z x lemonade_download/*.zip -olemonade_extracted
+          else
+            mkdir lemonade_extracted
+            tar -xzf lemonade_download/*.tar.gz -C lemonade_extracted
+          fi
+        shell: bash
+
+      - name: Build Lite Version
+        run: python scripts/build_mage.py
+
+      - name: Build Full Version
+        run: python scripts/build_mage.py --include-lemonade --lemonade-dir lemonade_extracted
+
+      - name: Upload MAGE Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mage-client-${{ runner.os }}
+          path: |
+            apps/mage-client/*.zip
+            apps/mage-client/*.dmg
+
+  build-appimage:
+    name: Build MAGE AppImage (Linux)
+    needs: build-lemonade
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install hatchling pyinstaller
+          pip install -e packages/shared-types
+          pip install -e packages/xian-vl
+          pip install -e apps/mage-client
+
+      - name: Download Lemonade Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lemonade-embeddable-ubuntu-x64
+          path: lemonade_download
+
+      - name: Extract Lemonade Artifact
+        run: |
+          mkdir lemonade_extracted
+          tar -xzf lemonade_download/*.tar.gz -C lemonade_extracted
+
+      - name: Build Full Version
+        run: python scripts/build_mage.py --include-lemonade --lemonade-dir lemonade_extracted
+
+      - name: Package AppImage
+        run: |
+          wget -c "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x appimagetool-x86_64.AppImage
+          
+          mkdir -p AppDir/usr/bin
+          cp -r apps/mage-client/dist/mage-client AppDir/usr/bin/
+          cp scripts/AppRun AppDir/
+          chmod +x AppDir/AppRun
+          cp scripts/mage.desktop AppDir/
+          cp xian.png AppDir/
+          
+          ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir mage-client-full-x86_64.AppImage
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: mage-client-AppImage
+          path: mage-client-full-x86_64.AppImage
+
+  build-flatpak:
+    name: Build MAGE Flatpak (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build Flatpak
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: mage-client-full.flatpak
+          manifest-path: packages/org.xian.Mage.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+
+      - name: Upload Flatpak
+        uses: actions/upload-artifact@v4
+        with:
+          name: mage-client-Flatpak
+          path: mage-client-full.flatpak
