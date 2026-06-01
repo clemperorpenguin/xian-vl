@@ -45,17 +45,18 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }} --target embeddable
         working-directory: lemonade
 
-      - name: Remove Archive Files
+      - name: Stage Embeddable Directory
         run: |
           rm -f lemonade/build/*.zip
           rm -f lemonade/build/*.tar.gz
+          mv lemonade/build/lemonade-embeddable-* lemonade/build/lemonade_dist
         shell: bash
 
       - name: Upload Lemonade Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: lemonade/build/lemonade-embeddable-*/*
+          path: lemonade/build/lemonade_dist/
 
   build-mage:
     name: Build MAGE Client (${{ matrix.os }})
