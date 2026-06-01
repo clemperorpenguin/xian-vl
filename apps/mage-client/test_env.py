@@ -70,3 +70,23 @@ def test_clean_subprocess_env_frozen_without_orig():
         assert "DYLD_LIBRARY_PATH" not in cleaned
         assert "LD_LIBRARY_PATH_ORIG" not in cleaned
         assert "DYLD_LIBRARY_PATH_ORIG" not in cleaned
+
+def test_clean_subprocess_env_appimage_stripping():
+    from mage.utils.env import clean_subprocess_env
+    
+    mock_env = {
+        "PATH": "/usr/bin",
+        "APPDIR": "/tmp/.mount_mage123",
+        "LD_LIBRARY_PATH": "/tmp/.mount_mage123/usr/bin/mage-client:/tmp/.mount_mage123/usr/lib:/usr/lib64",
+        "LD_LIBRARY_PATH_ORIG": "/tmp/.mount_mage123/usr/lib:/usr/lib64",
+        "DYLD_LIBRARY_PATH": "/tmp/.mount_mage123/usr/bin/mage-client:/tmp/.mount_mage123/usr/lib:/usr/local/lib",
+        "DYLD_LIBRARY_PATH_ORIG": "/tmp/.mount_mage123/usr/lib:/usr/local/lib"
+    }
+    
+    with patch("sys.frozen", True, create=True), patch("os.environ", mock_env):
+        cleaned = clean_subprocess_env()
+        assert cleaned["PATH"] == "/usr/bin"
+        assert cleaned["LD_LIBRARY_PATH"] == "/usr/lib64"
+        assert cleaned["DYLD_LIBRARY_PATH"] == "/usr/local/lib"
+        assert "LD_LIBRARY_PATH_ORIG" not in cleaned
+        assert "DYLD_LIBRARY_PATH_ORIG" not in cleaned

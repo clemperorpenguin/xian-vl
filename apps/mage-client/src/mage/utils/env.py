@@ -22,28 +22,72 @@ import os
 import sys
 
 def clean_subprocess_env() -> dict[str, str]:
-    """Return a copy of os.environ with PyInstaller's library paths restored or removed.
+    """Return a copy of os.environ with PyInstaller's and AppImage's library paths removed.
     
-    This ensures spawned system subprocesses (like lemond, audio recorder, or screenshot tools)
-    don't try to load bundled PyInstaller dynamic libraries, avoiding crashes and driver conflicts.
+    This ensures spawned system subprocesses (like lemond, whisper-server, audio recorder,
+    or screenshot tools) don't try to load bundled dynamic libraries from the AppImage
+    or PyInstaller environment, avoiding Vulkan/GPU driver crashes and library conflicts.
     """
     env = os.environ.copy()
     
-    # Restore Linux original library path if set by PyInstaller
-    if "LD_LIBRARY_PATH_ORIG" in env:
-        env["LD_LIBRARY_PATH"] = env["LD_LIBRARY_PATH_ORIG"]
-        env.pop("LD_LIBRARY_PATH_ORIG", None)
-    elif "LD_LIBRARY_PATH" in env:
-        # If we are in a frozen bundle, but there was no _ORIG, it means LD_LIBRARY_PATH was NOT set in the parent system.
-        if getattr(sys, 'frozen', False):
+    # Identify mount and extraction folders to strip them
+    appdir = env.get("APPDIR", "")
+    meipass = getattr(sys, '_MEIPASS', "")
+    
+    # Process LD_LIBRARY_PATH (Linux)
+    ld_path = env.get("LD_LIBRARY_PATH_ORIG") or env.get("LD_LIBRARY_PATH")
+    if ld_path:
+        parts = ld_path.split(os.pathsep)
+        cleaned_parts = []
+        for part in parts:
+            if not part:
+                continue
+            is_bundled = False
+            if appdir and part.startswith(appdir):
+                is_bundled = True
+            if meipass and part.startswith(meipass):
+                is_bundled = True
+            if "/.mount_" in part or "/_MEI" in part:
+                is_bundled = True
+                
+            if not is_bundled:
+                cleaned_parts.append(part)
+                
+        if cleaned_parts:
+            env["LD_LIBRARY_PATH"] = os.pathsep.join(cleaned_parts)
+        else:
             env.pop("LD_LIBRARY_PATH", None)
+    else:
+        env.pop("LD_LIBRARY_PATH", None)
 
-    # Restore macOS original library path if set by PyInstaller
-    if "DYLD_LIBRARY_PATH_ORIG" in env:
-        env["DYLD_LIBRARY_PATH"] = env["DYLD_LIBRARY_PATH_ORIG"]
-        env.pop("DYLD_LIBRARY_PATH_ORIG", None)
-    elif "DYLD_LIBRARY_PATH" in env:
-        if getattr(sys, 'frozen', False):
+    env.pop("LD_LIBRARY_PATH_ORIG", None)
+
+    # Process DYLD_LIBRARY_PATH (macOS)
+    dyld_path = env.get("DYLD_LIBRARY_PATH_ORIG") or env.get("DYLD_LIBRARY_PATH")
+    if dyld_path:
+        parts = dyld_path.split(os.pathsep)
+        cleaned_parts = []
+        for part in parts:
+            if not part:
+                continue
+            is_bundled = False
+            if appdir and part.startswith(appdir):
+                is_bundled = True
+            if meipass and part.startswith(meipass):
+                is_bundled = True
+            if "/.mount_" in part or "/_MEI" in part:
+                is_bundled = True
+                
+            if not is_bundled:
+                cleaned_parts.append(part)
+                
+        if cleaned_parts:
+            env["DYLD_LIBRARY_PATH"] = os.pathsep.join(cleaned_parts)
+        else:
             env.pop("DYLD_LIBRARY_PATH", None)
+    else:
+        env.pop("DYLD_LIBRARY_PATH", None)
+
+    env.pop("DYLD_LIBRARY_PATH_ORIG", None)
 
     return env
