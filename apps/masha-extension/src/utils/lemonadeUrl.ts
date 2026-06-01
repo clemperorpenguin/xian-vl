@@ -21,17 +21,3 @@ export function shouldWarnHttpToNonLoopback(url: string): boolean {
   }
 }
 
-/** Image ``src`` values the background script may forward to Lemonade for vision/inpainting. */
-export function isAllowedImageTranslationUrl(raw: string): boolean {
-  try {
-    const u = new URL(raw);
-    return (
-      u.protocol === 'http:' ||
-      u.protocol === 'https:' ||
-      u.protocol === 'data:' ||
-      u.protocol === 'blob:'
-    );
-  } catch {
-    return false;
-  }
-}

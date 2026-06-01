@@ -8,7 +8,7 @@ export default defineConfig({
     name: "MASHA Translate",
     description: "Multilingual Access & Site Handling Assistant",
     version: "1.0.0",
-    permissions: ["storage", "activeTab", "scripting"],
+    permissions: ["storage"],
     host_permissions: ["<all_urls>"]
   }
 });

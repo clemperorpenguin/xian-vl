@@ -9,7 +9,7 @@
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "jsx": "react-jsx",
-    "types": ["wxt/vite-builder-env"]
+    "types": ["wxt/vite-builder-env", "chrome"]
   },
   "include": ["src/**/*", ".wxt/types/**/*"]
 }

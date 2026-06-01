@@ -1,14 +1,12 @@
 import { useState, useEffect } from 'react';
-
 import { normalizeLemonadeBaseUrl, shouldWarnHttpToNonLoopback } from '../../utils/lemonadeUrl';
 
 function App() {
   const [serverUrl, setServerUrl] = useState('http://localhost:13305/v1');
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
-  const [imageMode, setImageMode] = useState(false);
 
   useEffect(() => {
-    chrome.storage.local.get(['serverUrl']).then((result) => {
+    chrome.storage.local.get(['serverUrl']).then((result: { [key: string]: any }) => {
       if (result.serverUrl) {
         setServerUrl(normalizeLemonadeBaseUrl(result.serverUrl));
       }
@@ -18,15 +16,17 @@ function App() {
   const handleSave = () => {
     setStatus('saving');
     const normalized = normalizeLemonadeBaseUrl(serverUrl);
+    
     if (shouldWarnHttpToNonLoopback(normalized)) {
       const ok = window.confirm(
-        'You are saving an HTTP Lemonade URL that is not localhost. Traffic can be read or modified on the network path. Lemonade does not provide HTTPS itself; use a VPN, SSH tunnel, or a TLS reverse proxy if this server is reachable beyond one trusted machine.\n\nClick OK to save or Cancel to go back.',
+        'Warning: You are saving an HTTP Lemonade URL that is not localhost. Traffic on untrusted networks can be intercepted.\n\nClick OK to save or Cancel to edit.',
       );
       if (!ok) {
         setStatus('idle');
         return;
       }
     }
+    
     setServerUrl(normalized);
     chrome.storage.local.set({ serverUrl: normalized }).then(() => {
       setStatus('saved');
@@ -34,70 +34,48 @@ function App() {
     });
   };
 
-  const handleFullPageTranslate = async () => {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tabs[0]?.id) {
-      chrome.tabs.sendMessage(tabs[0].id, { type: 'START_PAGE_TRANSLATION' });
-    }
-  };
-
-  const handleToggleImageMode = async () => {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tabs[0]?.id) {
-      chrome.tabs.sendMessage(tabs[0].id, { type: 'TOGGLE_IMAGE_MODE' }, (response) => {
-        if (response && response.success) {
-          setImageMode(response.active);
-        }
-      });
-    }
-  };
-
-  const handleExportToLore = async () => {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tabs[0]?.id) {
-      chrome.tabs.sendMessage(tabs[0].id, { type: 'GATHER_LORE_DATA' }, (response) => {
-        if (response && response.success) {
-          const blob = new Blob([JSON.stringify(response.data, null, 2)], { type: 'application/json' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `lore_export_${response.data.title.replace(/[^\w\s]/gi, '').replace(/\s+/g, '_')}.json`;
-          a.click();
-          URL.revokeObjectURL(url);
-        }
-      });
-    }
-  };
-
   return (
-    <div style={{ width: '320px', padding: '20px', fontFamily: 'sans-serif', backgroundColor: '#f9fafb' }}>
-      <h1 style={{ fontSize: '20px', fontWeight: 'bold', marginBottom: '8px', color: '#1f2937' }}>MASHA Extension</h1>
-      <p style={{ fontSize: '14px', color: '#6b7280', marginBottom: '20px' }}>
-        Status: <span style={{ color: '#10b981', fontWeight: 'bold' }}>Active</span>
-      </p>
-
-      <div
-        role="note"
-        style={{
-          fontSize: '12px',
-          lineHeight: 1.45,
-          color: '#92400e',
-          backgroundColor: '#fef3c7',
-          border: '1px solid #fcd34d',
-          borderRadius: '8px',
-          padding: '10px 12px',
-          marginBottom: '16px',
-        }}
-      >
-        <strong style={{ display: 'block', marginBottom: '6px', color: '#b45309' }}>Server trust</strong>
-        Only set the Lemonade URL to a server <strong>you</strong> run or fully trust. This extension sends selected
-        text, full-page text, page metadata, and image URLs to that server for translation. If an attacker tricks you
-        into saving their URL (for example through a phishing link or a compromised helper app), they could receive
-        copies of what you translate—including sensitive page content. Double-check the hostname before clicking Save.
+    <div style={{
+      width: '320px',
+      padding: '24px',
+      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      backgroundColor: '#0f172a',
+      color: '#f8fafc',
+      boxSizing: 'border-box',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+        <div style={{
+          width: '36px',
+          height: '36px',
+          borderRadius: '10px',
+          background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '18px',
+          boxShadow: '0 0 15px rgba(99, 102, 241, 0.5)',
+        }}>
+          ✨
+        </div>
+        <div>
+          <h1 style={{ fontSize: '18px', fontWeight: '800', margin: 0, letterSpacing: '-0.025em', background: 'linear-gradient(to right, #818cf8, #c084fc)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+            MASHA
+          </h1>
+          <p style={{ fontSize: '11px', color: '#94a3b8', margin: 0 }}>Translate & Replace Assistant</p>
+        </div>
       </div>
 
+      {/* Description */}
+      <p style={{ fontSize: '13px', lineHeight: '1.5', color: '#cbd5e1', marginTop: 0, marginBottom: '20px' }}>
+        Select text on any page and click the floating button to instantly replace it with its translation.
+      </p>
+
+      {/* Settings section */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        <label style={{ fontSize: '13px', fontWeight: 'bold', color: '#374151' }}>Lemonade Server URL</label>
+        <label style={{ fontSize: '12px', fontWeight: '600', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Lemonade Node URL
+        </label>
         <input
           type="text"
           value={serverUrl}
@@ -105,95 +83,69 @@ function App() {
           placeholder="http://localhost:13305/v1"
           style={{
             width: '100%',
-            padding: '10px',
-            border: '1px solid #d1d5db',
-            borderRadius: '6px',
+            padding: '10px 12px',
+            backgroundColor: '#1e293b',
+            border: '1px solid #334155',
+            borderRadius: '8px',
+            color: '#f8fafc',
+            fontSize: '13px',
             boxSizing: 'border-box',
+            outline: 'none',
+            transition: 'border-color 0.2s',
           }}
+          onFocus={(e) => e.target.style.borderColor = '#6366f1'}
+          onBlur={(e) => e.target.style.borderColor = '#334155'}
         />
-        <p style={{ fontSize: '11px', color: '#6b7280', margin: 0 }}>
-          Must include the OpenAI-compatible path (typically ending in <code style={{ fontSize: '11px' }}>/v1</code>).
-          It is normalized on save if you omit it.
+        <p style={{ fontSize: '11px', color: '#64748b', margin: 0, lineHeight: '1.4' }}>
+          Must be an OpenAI-compatible endpoint (ends in <code style={{ color: '#94a3b8', fontSize: '11px' }}>/v1</code>).
         </p>
       </div>
 
+      {/* Action button */}
       <button
         onClick={handleSave}
+        disabled={status === 'saving'}
         style={{
-          marginTop: '20px',
+          marginTop: '24px',
           width: '100%',
-          padding: '10px',
-          backgroundColor: '#3b82f6',
-          color: 'white',
+          padding: '11px',
+          background: status === 'saved'
+            ? '#10b981'
+            : 'linear-gradient(135deg, #6366f1, #a855f7)',
+          color: '#ffffff',
           border: 'none',
-          borderRadius: '6px',
-          fontWeight: 'bold',
+          borderRadius: '8px',
+          fontWeight: '600',
+          fontSize: '13px',
           cursor: 'pointer',
-          transition: 'background-color 0.2s',
+          boxShadow: status === 'saved'
+            ? '0 4px 12px rgba(16, 185, 129, 0.2)'
+            : '0 4px 12px rgba(99, 102, 241, 0.3)',
+          transition: 'all 0.2s ease',
         }}
-        onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#2563eb')}
-        onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#3b82f6')}
+        onMouseOver={(e) => {
+          if (status !== 'saved') {
+            e.currentTarget.style.background = 'linear-gradient(135deg, #4f46e5, #9333ea)';
+            e.currentTarget.style.transform = 'translateY(-1px)';
+          }
+        }}
+        onMouseOut={(e) => {
+          if (status !== 'saved') {
+            e.currentTarget.style.background = 'linear-gradient(135deg, #6366f1, #a855f7)';
+            e.currentTarget.style.transform = 'translateY(0)';
+          }
+        }}
       >
-        {status === 'saving' ? 'Saving...' : status === 'saved' ? 'Saved!' : 'Save Settings'}
+        {status === 'saving' ? 'Saving...' : status === 'saved' ? 'Saved Successfully!' : 'Save Connection'}
       </button>
 
-      <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
-        <button
-          onClick={handleFullPageTranslate}
-          style={{
-            width: '100%',
-            padding: '10px',
-            backgroundColor: '#10b981',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            transition: 'background-color 0.2s',
-          }}
-          onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#059669')}
-          onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#10b981')}
-        >
-          ✨ Translate Full Page
-        </button>
-
-        <button
-          onClick={handleToggleImageMode}
-          style={{
-            width: '100%',
-            padding: '10px',
-            backgroundColor: imageMode ? '#f59e0b' : '#8b5cf6',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            transition: 'background-color 0.2s',
-          }}
-          onMouseOver={(e) => (e.currentTarget.style.backgroundColor = imageMode ? '#d97706' : '#7c3aed')}
-          onMouseOut={(e) => (e.currentTarget.style.backgroundColor = imageMode ? '#f59e0b' : '#8b5cf6')}
-        >
-          {imageMode ? '🛑 Stop Image Selection' : '🖼️ Select Images to Translate'}
-        </button>
-
-        <button
-          onClick={handleExportToLore}
-          style={{
-            width: '100%',
-            padding: '10px',
-            backgroundColor: '#6366f1',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            transition: 'background-color 0.2s',
-          }}
-          onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#4f46e5')}
-          onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#6366f1')}
-        >
-          📚 Export to LORE
-        </button>
+      {/* Footer Info */}
+      <div style={{ marginTop: '20px', paddingTop: '12px', borderTop: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: '11px', color: '#475569' }}>v1.0.0</span>
+        <span style={{ fontSize: '11px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10b981', display: 'inline-block' }}></span>
+          Active
+        </span>
       </div>
     </div>
   );

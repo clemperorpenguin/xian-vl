@@ -11,6 +11,7 @@ import logging
 from openai import AsyncOpenAI
 
 from shared_types.constants import DEFAULT_API_URL, DEFAULT_MODEL
+from xian.omni_router import OmniModelRouter
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,8 @@ class DocumentTranslator:
         Source language for the system prompt.
     target_lang:
         Target language for the system prompt.
+    router:
+        Active model router.
     """
 
     def __init__(
@@ -36,9 +39,13 @@ class DocumentTranslator:
         model: str = DEFAULT_MODEL,
         source_lang: str = "Chinese",
         target_lang: str = "English",
+        router: OmniModelRouter | None = None,
     ) -> None:
         import os
         api_url = os.environ.get("LEMONADE_API_URL", base_url)
+        if router:
+            api_url = router.api_url
+            model = router.llm()
         self._client = AsyncOpenAI(base_url=api_url, api_key="not-needed")
         self._model = model
         self._source = source_lang

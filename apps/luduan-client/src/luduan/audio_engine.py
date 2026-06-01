@@ -10,12 +10,35 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import struct
 import wave
 from pathlib import Path
 
 from xian.lemonade_client import LemonadeClient
+from xian.omni_router import OmniModelRouter
 
 logger = logging.getLogger(__name__)
+
+
+def get_wav_duration_ms(wav_bytes: bytes) -> float:
+    """Parse format parameters from WAV header and calculate duration in ms."""
+    if len(wav_bytes) > 44:
+        try:
+            # WAV header fields:
+            # Channels is at bytes 22-23 (16-bit integer)
+            # Sample rate is at bytes 24-27 (32-bit integer)
+            # Bits per sample is at bytes 34-35 (16-bit integer)
+            channels = struct.unpack("<H", wav_bytes[22:24])[0]
+            sample_rate = struct.unpack("<I", wav_bytes[24:28])[0]
+            bits_per_sample = struct.unpack("<H", wav_bytes[34:36])[0]
+            
+            bytes_per_second = sample_rate * channels * (bits_per_sample // 8)
+            data_size = len(wav_bytes) - 44
+            if bytes_per_second > 0:
+                return (data_size / bytes_per_second) * 1000.0
+        except Exception as e:
+            logger.error("Failed to parse WAV header: %s", e)
+    return 0.0
 
 
 def concatenate_wavs(wav_datas: list[bytes]) -> bytes:
@@ -78,13 +101,18 @@ class AudioEngine:
     ----------
     voice:
         TTS voice identifier (e.g. ``"af_heart"``).
+    router:
+        Active model router for TTS endpoint mapping.
     """
 
-    def __init__(self, voice: str = "af_heart") -> None:
+    def __init__(self, voice: str = "af_heart", router: OmniModelRouter | None = None) -> None:
         self._voice = voice
+        self._router = router
         import os
         from shared_types.constants import DEFAULT_API_URL
         base_url = os.environ.get("LEMONADE_API_URL", DEFAULT_API_URL)
+        if router:
+            base_url = router.api_url
         base_url_no_v1 = base_url.removesuffix("/v1")
         self._client = LemonadeClient(base_url=base_url_no_v1)
 
@@ -94,7 +122,8 @@ class AudioEngine:
     async def synthesize(self, text: str) -> bytes:
         """Convert text to WAV audio bytes via Lemonade TTS."""
         logger.info("Synthesizing %d chars → TTS …", len(text))
-        return await self._client.tts(text, voice=self._voice)
+        model_id = self._router.tts() if self._router else ""
+        return await self._client.tts(text, voice=self._voice, model=model_id)
 
     async def synthesize_to_file(self, text: str, output_path: Path) -> int:
         """Synthesize and write to disk.  Returns file size in bytes."""

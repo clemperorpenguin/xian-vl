@@ -62,10 +62,10 @@ def _coerce_infobox_for_wiki(raw: object) -> dict[str, str]:
     return out
 
 
-async def translate_content(text: str, entity_name: str) -> str:
+async def translate_content(text: str, entity_name: str, router: OmniModelRouter) -> str:
     """Passes content to xian-vl via Lemonade for translation.
     """
-    client = AsyncOpenAI(base_url=DEFAULT_API_URL, api_key="not-needed")
+    client = AsyncOpenAI(base_url=router.api_url, api_key="not-needed")
     
     system_prompt = (
         "You are an expert Chinese-to-English translator specializing in game lore, "
@@ -77,7 +77,7 @@ async def translate_content(text: str, entity_name: str) -> str:
     
     try:
         response = await client.chat.completions.create(
-            model=DEFAULT_MODEL,
+            model=router.llm(),
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Entity: {entity_name}\n\nContent:\n{text}"},
@@ -91,7 +91,7 @@ async def translate_content(text: str, entity_name: str) -> str:
         return text
 
 
-async def extract_and_translate_infobox(raw_html: str, entity_name: str) -> dict:
+async def extract_and_translate_infobox(raw_html: str, entity_name: str, router: OmniModelRouter) -> dict:
     """Uses LLM or heuristics to extract and translate infobox data.
     """
     scraper = PlaywrightScraper()
@@ -101,7 +101,7 @@ async def extract_and_translate_infobox(raw_html: str, entity_name: str) -> dict
         return {}
         
     # Translate the infobox keys and values
-    client = AsyncOpenAI(base_url=DEFAULT_API_URL, api_key="not-needed")
+    client = AsyncOpenAI(base_url=router.api_url, api_key="not-needed")
     
     infobox_str = "\n".join([f"{k}: {v}" for k, v in heuristic_infobox.items()])
     
@@ -114,7 +114,7 @@ async def extract_and_translate_infobox(raw_html: str, entity_name: str) -> dict
     
     try:
         response = await client.chat.completions.create(
-            model=DEFAULT_MODEL,
+            model=router.llm(),
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": infobox_str},
@@ -133,10 +133,14 @@ async def research_entity(entity_name: str):
     """Main research loop: Search -> Select -> Ingest.
     """
     searcher = WebSearcher()
+    router = OmniModelRouter(DEFAULT_API_URL)
     try:
         scraper = PlaywrightScraper()
         wiki_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "wiki")
         compiler = WikiCompiler(wiki_dir=wiki_dir)
+
+        with console.status("[bold blue]Discovering Lemonade Models...[/bold blue]"):
+            await router.discover_async()
 
         console.print(f"[bold green]Starting research for entity:[/bold green] {entity_name}")
 
@@ -209,12 +213,12 @@ async def research_entity(entity_name: str):
             if not translated_infobox and scraped_data.get("raw_html"):
                 with console.status("[bold blue]Extracting and translating infobox...[/bold blue]"):
                     translated_infobox = await extract_and_translate_infobox(
-                        scraped_data["raw_html"], entity_name
+                        scraped_data["raw_html"], entity_name, router
                     )
 
             # Translate main content
             with console.status(f"[bold blue]Translating content from {url}...[/bold blue]"):
-                translated_text = await translate_content(scraped_data["content"], entity_name)
+                translated_text = await translate_content(scraped_data["content"], entity_name, router)
 
             all_content.append(translated_text)
             sources.append({"title": title, "url": url})
@@ -287,7 +291,7 @@ async def download_images_and_replace(html: str, base_url: str, wiki_dir: str, r
     images_dir = os.path.join(wiki_dir, "images")
     os.makedirs(images_dir, exist_ok=True)
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient() as client, LemonadeClient() as l_client:
         for img in soup.find_all("img"):
             src = img.get("src")
             if not src:
@@ -310,16 +314,15 @@ async def download_images_and_replace(html: str, base_url: str, wiki_dir: str, r
                     
                     if translate_images:
                         try:
-                            async with LemonadeClient() as l_client:
-                                edit_resp = await l_client.edit_image(
-                                    image_bytes=image_bytes,
-                                    prompt="Translate all Chinese text in this image to English, keeping the original background and style.",
-                                    model=router.edit(),
-                                    response_format="b64_json"
-                                )
-                                data = edit_resp.get("data", [])
-                                if data and "b64_json" in data[0]:
-                                    image_bytes = base64.b64decode(data[0]["b64_json"])
+                            edit_resp = await l_client.edit_image(
+                                image_bytes=image_bytes,
+                                prompt="Translate all Chinese text in this image to English, keeping the original background and style.",
+                                model=router.edit(),
+                                response_format="b64_json"
+                            )
+                            data = edit_resp.get("data", [])
+                            if data and "b64_json" in data[0]:
+                                image_bytes = base64.b64decode(data[0]["b64_json"])
                         except Exception as e:
                             logger.warning(f"Failed to translate image {img_url}: {e}")
                     
@@ -333,7 +336,7 @@ async def download_images_and_replace(html: str, base_url: str, wiki_dir: str, r
     return str(soup)
 
 async def translate_html_to_markdown(html_content: str, title: str, router: OmniModelRouter) -> str:
-    client = AsyncOpenAI(base_url=DEFAULT_API_URL, api_key="not-needed")
+    client = AsyncOpenAI(base_url=router.api_url, api_key="not-needed")
     
     system_prompt = (
         "You are an expert Chinese-to-English translator specializing in game lore, "
