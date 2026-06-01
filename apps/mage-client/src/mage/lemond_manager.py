@@ -25,6 +25,8 @@ import logging
 import atexit
 from pathlib import Path
 
+from mage.utils.env import clean_subprocess_env
+
 logger = logging.getLogger("xian.mage.lemond_manager")
 
 _lemond_process = None
@@ -74,6 +76,7 @@ def start_lemond_if_embedded():
             cwd=str(Path.home()),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=clean_subprocess_env(),
         )
         logger.info("Embedded lemond started with PID %d", _lemond_process.pid)
         

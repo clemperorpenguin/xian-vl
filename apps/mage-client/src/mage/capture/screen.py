@@ -24,6 +24,8 @@ import subprocess
 import sys
 import tempfile
 
+from mage.utils.env import clean_subprocess_env
+
 from PyQt6.QtGui import QImage, QGuiApplication, QPixmap, QPainter, QColor
 from PyQt6.QtCore import QBuffer, QIODevice, QRect
 
@@ -146,7 +148,7 @@ class ScreenCapture:
                 # -b: background, -n: no notification, -f: fullscreen, -o: output
                 result = subprocess.run(
                     ["spectacle", "-b", "-n", "-f", "-o", tmp_path],
-                    capture_output=True, timeout=5
+                    capture_output=True, env=clean_subprocess_env(), timeout=5
                 )
 
                 if result.returncode == 0 and os.path.exists(tmp_path):
@@ -169,7 +171,7 @@ class ScreenCapture:
                 tmp_path = os.path.join(tmpdir, "capture.png")
                 result = subprocess.run(
                     ["gnome-screenshot", "--file", tmp_path],
-                    capture_output=True, timeout=5
+                    capture_output=True, env=clean_subprocess_env(), timeout=5
                 )
 
                 if result.returncode == 0 and os.path.exists(tmp_path):
@@ -191,7 +193,7 @@ class ScreenCapture:
                     "/org/gnome/Shell/Screenshot",
                     "org.gnome.Shell.Screenshot.Screenshot",
                     "boolean:false", "boolean:false", f"string:{tmp_path}"
-                ], capture_output=True, timeout=5)
+                ], capture_output=True, env=clean_subprocess_env(), timeout=5)
 
                 if os.path.exists(tmp_path):
                     with open(tmp_path, "rb") as f:
@@ -206,7 +208,7 @@ class ScreenCapture:
     def _capture_grim() -> bytes | None:
         """Capture screen using grim (Generic Wayland)"""
         try:
-            result = subprocess.run(["grim", "-"], capture_output=True, timeout=5)
+            result = subprocess.run(["grim", "-"], capture_output=True, env=clean_subprocess_env(), timeout=5)
             if result.returncode == 0:
                 logger.debug("Captured screen via grim")
                 return result.stdout

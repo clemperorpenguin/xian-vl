@@ -149,6 +149,7 @@ jobs:
           chmod +x AppDir/AppRun
           cp scripts/mage.desktop AppDir/
           cp xian.png AppDir/
+          ln -s xian.png AppDir/.DirIcon
           mkdir -p AppDir/usr/share/icons/hicolor/512x512/apps
           cp xian.png AppDir/usr/share/icons/hicolor/512x512/apps/xian.png
           cp xian.png AppDir/usr/share/icons/hicolor/512x512/apps/mage.png

@@ -37,6 +37,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from mage.utils.env import clean_subprocess_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,6 +96,7 @@ async def capture_system_audio(
             *cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=clean_subprocess_env(),
         )
 
         # Let it record for the requested duration, then terminate
@@ -153,6 +156,7 @@ class ContinuousAudioStreamer:
             *cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
+            env=clean_subprocess_env(),
         )
         self._running = True
 
@@ -273,7 +277,7 @@ def play_audio(audio_bytes: bytes):
         tmp_path = tmp.name
         
     try:
-        subprocess.run([player, tmp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([player, tmp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=clean_subprocess_env())
     except Exception as e:
         logger.error("Failed to play audio with %s: %s", player, e)
     finally:
