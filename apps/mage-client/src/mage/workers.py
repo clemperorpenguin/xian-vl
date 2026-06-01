@@ -569,6 +569,8 @@ class ModelPullWorker(QThread):
 
 class PrewarmWorker(QThread):
     """Pre-load the model into Lemonade Server VRAM off the main thread."""
+    
+    status_changed = pyqtSignal(str)
 
     def __init__(self, processor):
         super().__init__()
@@ -576,8 +578,13 @@ class PrewarmWorker(QThread):
 
     def run(self):
         if hasattr(self.processor, "prewarm_model"):
+            target_model = getattr(self.processor.config, "model_name", "default")
+            self.status_changed.emit(f"Pre-warming/downloading model '{target_model}' on Lemonade server...")
+            
             future = self.processor.engine.submit(self.processor.prewarm_model())
             try:
-                future.result(timeout=60)
+                future.result(timeout=600)
+                self.status_changed.emit(f"Model '{target_model}' is active and ready.")
             except Exception as e:
                 logger.warning("PrewarmWorker error: %s", e)
+                self.status_changed.emit(f"Failed to pre-warm model: {e}")

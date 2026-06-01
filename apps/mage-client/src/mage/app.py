@@ -289,6 +289,7 @@ class XianApp(QWidget):
 
         # Pre-warm target model in VRAM
         self._prewarm_worker = PrewarmWorker(self.processor)
+        self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
         self._prewarm_worker.start()
 
         # --- Hotkeys ---
@@ -416,6 +417,16 @@ class XianApp(QWidget):
 
         logger.info("System tray icon initialised")
 
+    def _on_prewarm_status(self, msg: str):
+        logger.info("[Prewarm Status] %s", msg)
+        if hasattr(self, "tray") and self.tray:
+            self.tray.showMessage(
+                "MAGE Setup",
+                msg,
+                QSystemTrayIcon.MessageIcon.Information,
+                5000
+            )
+
     def hide_osd(self):
         self.osd.hide()
         self.osd_timer.stop()
@@ -450,6 +461,7 @@ class XianApp(QWidget):
             )
             self._run_health_check()
             self._prewarm_worker = PrewarmWorker(self.processor)
+            self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
             self._prewarm_worker.start()
 
     def _on_osd_command(self, key: str):
@@ -1301,6 +1313,7 @@ class XianApp(QWidget):
             
             # Pre-warm target model in VRAM
             self._prewarm_worker = PrewarmWorker(self.processor)
+            self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
             self._prewarm_worker.start()
             
             # Apply new leader key

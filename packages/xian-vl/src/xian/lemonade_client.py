@@ -64,7 +64,7 @@ class LemonadeClient:
         """Download a model.  ``POST /v1/pull``."""
         resp = await self._client.post(
             "/v1/pull",
-            json={"model": name, "stream": stream},
+            json={"model": name, "model_name": name, "stream": stream},
         )
         resp.raise_for_status()
         return resp.json()
@@ -75,7 +75,7 @@ class LemonadeClient:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Load a model into memory.  ``POST /v1/load``."""
-        payload: dict[str, Any] = {"model": name}
+        payload: dict[str, Any] = {"model": name, "model_name": name}
         if options:
             payload.update(options)
         resp = await self._client.post("/v1/load", json=payload)
@@ -84,7 +84,7 @@ class LemonadeClient:
 
     async def unload_model(self, name: str) -> dict[str, Any]:
         """Unload a model from memory.  ``POST /v1/unload``."""
-        resp = await self._client.post("/v1/unload", json={"model": name})
+        resp = await self._client.post("/v1/unload", json={"model": name, "model_name": name})
         resp.raise_for_status()
         return resp.json()
 
