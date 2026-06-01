@@ -168,10 +168,34 @@ class SettingsDialog(QDialog):
         layout.addRow(self.live_raid_lore_save_cb)
 
         # Target Window Title
-        self.target_window_title_edit = QLineEdit()
-        self.target_window_title_edit.setPlaceholderText("e.g. Genshin Impact (Leave empty for normal mode)")
-        self.target_window_title_edit.setText(settings.value(KEY_TARGET_WINDOW_TITLE, ""))
-        layout.addRow("Target Window Title:", self.target_window_title_edit)
+        self.target_window_combo = QComboBox()
+        self.target_window_combo.setEditable(True)
+        self.target_window_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.target_window_combo.addItem("None (Standard Overlay Mode)", "")
+        try:
+            titles = WindowBinder.get_active_window_titles()
+            for title in titles:
+                self.target_window_combo.addItem(title, title)
+        except Exception as e:
+            logger.error("Could not fetch active window titles: %s", e)
+            
+        current_title = settings.value(KEY_TARGET_WINDOW_TITLE, "")
+        if current_title:
+            idx = self.target_window_combo.findData(current_title)
+            if idx >= 0:
+                self.target_window_combo.setCurrentIndex(idx)
+            else:
+                self.target_window_combo.addItem(current_title, current_title)
+                self.target_window_combo.setCurrentText(current_title)
+        else:
+            self.target_window_combo.setCurrentIndex(0)
+        layout.addRow("Target Window Title:", self.target_window_combo)
+
+        # Developer Options Checkbox
+        self.dev_options_cb = QCheckBox("Enable Developer Options (Cinematic / Raid modes)")
+        dev_options_val = settings.value("developer_options", "false")
+        self.dev_options_cb.setChecked(dev_options_val == "true" or dev_options_val is True)
+        layout.addRow(self.dev_options_cb)
 
         # Buttons
         btn_row = QHBoxLayout()
@@ -230,7 +254,11 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
         self.settings.setValue("live_voice_raid", "true" if self.live_voice_raid_cb.isChecked() else "false")
         self.settings.setValue("live_raid_lore_save", "true" if self.live_raid_lore_save_cb.isChecked() else "false")
-        self.settings.setValue(KEY_TARGET_WINDOW_TITLE, self.target_window_title_edit.text().strip())
+        target_val = self.target_window_combo.currentText().strip()
+        if target_val == "None (Standard Overlay Mode)":
+            target_val = ""
+        self.settings.setValue(KEY_TARGET_WINDOW_TITLE, target_val)
+        self.settings.setValue("developer_options", "true" if self.dev_options_cb.isChecked() else "false")
         self.accept()
 
 
@@ -307,6 +335,8 @@ class XianApp(QWidget):
             target=self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG),
             model=self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
         )
+        dev_val = self.settings.value("developer_options", "false")
+        self.osd.set_developer_options_visible(dev_val == "true" or dev_val is True)
         self.osd.setting_changed.connect(self._on_osd_setting_changed)
         self.osd.command_triggered.connect(self._on_osd_command)
         self.osd.osd_hidden.connect(self._on_osd_hidden)
@@ -401,6 +431,8 @@ class XianApp(QWidget):
             self.hotkey_listener.cancel_command_mode()
 
     def _on_command_mode_started(self):
+        dev_val = self.settings.value("developer_options", "false")
+        self.osd.set_developer_options_visible(dev_val == "true" or dev_val is True)
         self.osd.show_centered()
         if self.target_binder:
             self._apply_transient_parent(self.osd)
@@ -1005,7 +1037,11 @@ class XianApp(QWidget):
     # ------------------------------------------------------------------
     def toggle_cinematic_mode(self):
         self.hide_osd()
-        
+        dev_val = self.settings.value("developer_options", "false")
+        if not (dev_val == "true" or dev_val is True):
+            logger.info("Cinematic mode bypassed: developer options disabled")
+            return
+            
         if self.cinematic_mode_active:
             self.cinematic_mode_active = False
             self.hotkey_listener.cinematic_mode_active = False
@@ -1113,6 +1149,11 @@ class XianApp(QWidget):
     # ------------------------------------------------------------------
     def start_raid_mode(self):
         self.hide_osd()
+        dev_val = self.settings.value("developer_options", "false")
+        if not (dev_val == "true" or dev_val is True):
+            logger.info("Raid mode bypassed: developer options disabled")
+            return
+            
         logger.info("Triggered Raid Mode")
         self.raid_bubble = self._replace_persistent_bubble("raid_bubble", "Recording raid leader...")
 
@@ -1274,6 +1315,8 @@ class XianApp(QWidget):
                 self.hotkey_listener.set_leader_key(new_leader)
                 
             self._setup_window_binder()
+            dev_val = self.settings.value("developer_options", "false")
+            self.osd.set_developer_options_visible(dev_val == "true" or dev_val is True)
             logger.info("Settings updated and applied")
 
     def _is_valid_widget(self, w):

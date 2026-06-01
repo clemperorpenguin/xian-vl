@@ -246,6 +246,61 @@ def is_window_active_x11(display, win) -> bool:
     return False
 
 
+def get_active_window_titles_x11(display) -> list[str]:
+    if not X11 or not display:
+        return []
+    root = X11.XDefaultRootWindow(display)
+    
+    root_return = c_ulong()
+    parent_return = c_ulong()
+    children_return = POINTER(c_ulong)()
+    nchildren_return = c_int()
+    
+    status = X11.XQueryTree(display, root, byref(root_return), byref(parent_return), byref(children_return), byref(nchildren_return))
+    if status == 0 or not children_return:
+        return []
+        
+    titles = []
+    try:
+        for i in range(nchildren_return.value):
+            child = children_return[i]
+            
+            # BFS traverse to find the title
+            sub_queue = [child]
+            visited = set()
+            found_title = None
+            while sub_queue and len(visited) < 10:
+                win = sub_queue.pop(0)
+                if win in visited:
+                    continue
+                visited.add(win)
+                
+                attrs = XWindowAttributes()
+                if X11.XGetWindowAttributes(display, win, byref(attrs)) != 0:
+                    if attrs.map_state == 2:  # IsViewable
+                        name = get_window_title_x11(display, win)
+                        if name and name.strip():
+                            found_title = name.strip()
+                            break
+                        
+                        # Query children
+                        sub_root = c_ulong()
+                        sub_parent = c_ulong()
+                        sub_children = POINTER(c_ulong)()
+                        sub_nchildren = c_int()
+                        if X11.XQueryTree(display, win, byref(sub_root), byref(sub_parent), byref(sub_children), byref(sub_nchildren)) != 0 and sub_children:
+                            try:
+                                for j in range(sub_nchildren.value):
+                                    sub_queue.append(sub_children[j])
+                            finally:
+                                X11.XFree(sub_children)
+            if found_title and found_title not in titles:
+                titles.append(found_title)
+    finally:
+        X11.XFree(children_return)
+    return sorted(titles)
+
+
 # --- Helper functions for Windows ---
 def find_window_windows(title_substring) -> int | None:
     found_hwnd = [None]
@@ -279,6 +334,26 @@ def is_window_active_windows(hwnd) -> bool:
 
 def is_window_minimized_windows(hwnd) -> bool:
     return bool(ctypes.windll.user32.IsIconic(hwnd))
+
+
+def get_active_window_titles_windows() -> list[str]:
+    titles = []
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    
+    def enum_cb(hwnd, lparam):
+        if ctypes.windll.user32.IsWindowVisible(hwnd):
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buffer = ctypes.create_unicode_buffer(length + 1)
+                ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
+                title = buffer.value.strip()
+                if title and title not in titles:
+                    titles.append(title)
+        return True
+        
+    callback = WNDENUMPROC(enum_cb)
+    ctypes.windll.user32.EnumWindows(callback, 0)
+    return sorted(titles)
 
 
 # --- Main Wrapper Class ---
@@ -394,6 +469,35 @@ class WindowBinder:
     def get_native_id(self) -> int | None:
         """Returns the native window handle/ID."""
         return self._win_id
+
+    @classmethod
+    def get_active_window_titles(cls) -> list[str]:
+        import sys
+        platform = None
+        if sys.platform == "win32":
+            platform = "windows"
+        elif sys.platform == "darwin":
+            platform = "macos"
+        else:
+            from PyQt6.QtGui import QGuiApplication
+            qt_platform = QGuiApplication.platformName() if QGuiApplication.instance() else None
+            
+            if qt_platform == "xcb" or (not qt_platform and "DISPLAY" in os_environ_check()):
+                platform = "x11"
+                
+        if platform == "windows":
+            return get_active_window_titles_windows()
+        elif platform == "x11" and X11:
+            try:
+                display = X11.XOpenDisplay(None)
+                if display:
+                    try:
+                        return get_active_window_titles_x11(display)
+                    finally:
+                        X11.XCloseDisplay(display)
+            except Exception as e:
+                logger.error("Error listing X11 window titles: %s", e)
+        return []
 
 
 def os_environ_check():

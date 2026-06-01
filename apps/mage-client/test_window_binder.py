@@ -40,3 +40,12 @@ def test_window_binder_platform_mocking():
     with patch("sys.platform", "darwin"):
         binder = WindowBinder("MacTest")
         assert binder.platform == "macos"
+
+
+def test_window_binder_get_active_titles():
+    from mage.utils.window_binder import WindowBinder
+
+    titles = WindowBinder.get_active_window_titles()
+    assert isinstance(titles, list)
+    for t in titles:
+        assert isinstance(t, str)

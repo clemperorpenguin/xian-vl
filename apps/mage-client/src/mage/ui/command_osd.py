@@ -103,9 +103,11 @@ class CommandOSD(QWidget):
         options_layout.addWidget(self._create_option("C", "Capture"))
         options_layout.addWidget(self._create_option("A", "Chat"))
         options_layout.addWidget(self._create_option("O", "Dialogue"))
-        options_layout.addWidget(self._create_option("M", "Cinematic"))
+        self.cinematic_option = self._create_option("M", "Cinematic")
+        options_layout.addWidget(self.cinematic_option)
         options_layout.addWidget(self._create_option("T", "Translate"))
-        options_layout.addWidget(self._create_option("R", "Raid"))
+        self.raid_option = self._create_option("R", "Raid")
+        options_layout.addWidget(self.raid_option)
         options_layout.addWidget(self._create_option("S", "Settings"))
 
         inner_layout.addLayout(options_layout)
@@ -243,3 +245,9 @@ class CommandOSD(QWidget):
             event.accept()
         else:
             super().mouseMoveEvent(event)
+
+    def set_developer_options_visible(self, visible: bool):
+        self.cinematic_option.setVisible(visible)
+        self.raid_option.setVisible(visible)
+        self.adjustSize()
+        self.setFixedSize(self.size())
