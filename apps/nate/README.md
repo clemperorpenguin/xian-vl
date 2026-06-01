@@ -1,5 +1,8 @@
 # NATE (Neural Analysis & Translation Engine)
 
+> [!CAUTION]
+> **Experimental / Untested**: NATE is currently an experimental prototype companion and is **not fully tested or verified**. It is provided as-is as a work-in-progress scaffold.
+
 NATE is a standalone mobile companion to the `xian-vl` ecosystem. It functions as an offline-first Chinese OCR reader, dictionary, and translation tool for camera feeds and documents, with optional remote LLM acceleration via the Lemonade Server.
 
 ## Features

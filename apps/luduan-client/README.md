@@ -2,6 +2,9 @@
 
 <img width="1024" height="1024" alt="luduan" src="https://github.com/user-attachments/assets/2785f66a-ce56-48c7-a37b-240fcc11ed42" />
 
+> [!CAUTION]
+> **Experimental / Untested**: The Luduan CLI client is currently an experimental tool and is **not fully tested or verified**. It is provided as-is as a work-in-progress scaffold.
+
 Luduan is a CLI tool for EPUB-to-Robobook translation and narration. It allows you to translate EPUB files and generate audiobooks using the Lemonade Server.
 
 ## Features
@@ -26,4 +29,4 @@ uv run luduan --help
 
 ## Status
 
-Note: The pipeline is currently a scaffold and some features are not yet fully wired up.
+Note: The pipeline is currently a scaffold and some features are not yet fully wired up. In particular, any audiobook narration features relying on Lemonade audio/ASR capabilities are impacted by the backend server limitations.

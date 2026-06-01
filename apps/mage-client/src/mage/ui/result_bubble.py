@@ -39,6 +39,7 @@ class ResultBubble(QWidget):
         self._original = original_text
         self._anchor_rect = anchor_rect
         self._orig_label = None
+        self._drag_position = QPoint()
 
         border = border_color if border_color else accent_hex()
 

@@ -98,6 +98,14 @@ class ContextManager:
         with self._lock:
             return list(self.chat_history)
 
+    def get_recent_extracted_text(self) -> str | None:
+        """Return the most recent non-empty extracted_text from frames."""
+        with self._lock:
+            for frame in reversed(self.frames):
+                if frame.extracted_text:
+                    return frame.extracted_text
+        return None
+
     def clear_history(self):
         """Clear only the chat history."""
         with self._lock:
@@ -108,3 +116,4 @@ class ContextManager:
         with self._lock:
             self.frames.clear()
             self.chat_history.clear()
+

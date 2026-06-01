@@ -148,6 +148,7 @@ class ContinueWorker(QThread):
             return
 
         q: asyncio.Queue = asyncio.Queue()
+        _SENTINEL = object()
 
         async def _stream():
             final_data = None
@@ -158,7 +159,7 @@ class ContinueWorker(QThread):
                     final_data = continuation_data
                 else:
                     await q.put((text, finish))
-            await q.put((None, None, final_data))
+            await q.put((_SENTINEL, final_data))
 
         future = self.processor.engine.submit(_stream())
 
@@ -170,8 +171,8 @@ class ContinueWorker(QThread):
                 item = asyncio.run_coroutine_threadsafe(
                     q.get(), engine_loop
                 ).result(timeout=vision_timeout_for_mode(self.mode))
-                if isinstance(item, tuple) and item[0] is None and item[1] is None:
-                    final_data = item[2]
+                if isinstance(item, tuple) and item[0] is _SENTINEL:
+                    final_data = item[1]
                     break
                 last_text, last_finish = item
                 self.continuation_partial.emit(last_text)
@@ -232,13 +233,12 @@ class CinematicWorker(QThread):
             try:
                 base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
                 base_url_no_v1 = base_url.removesuffix("/v1")
-                client = LemonadeClient(base_url=base_url_no_v1)
                 active_model = self.processor.config.model_name
                 if not self.processor.router.asr(active_model):
                     await self.processor.router.discover_async()
                 asr_model = self.processor.router.asr(active_model)
-                transcript = await client.transcribe(audio_bytes, model=asr_model)
-                await client.close()
+                async with LemonadeClient(base_url=base_url_no_v1) as client:
+                    transcript = await client.transcribe(audio_bytes, model=asr_model)
             except Exception as e:
                 logger.warning("Audio transcription failed: %s", e)
 

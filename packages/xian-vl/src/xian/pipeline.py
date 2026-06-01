@@ -32,6 +32,15 @@ from xian.lemonade_client import LemonadeClient
 from xian.omni_router import OmniModelRouter
 from xian.tools import OMNI_TOOLS
 
+_LANG_CODE_TO_NAME = {
+    "zh-CN": "Chinese",
+    "zh-TW": "Chinese",
+    "en-US": "English",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "ru": "Russian",
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,6 +117,19 @@ class VLProcessor:
         self.context_manager = ContextManager(max_frames=1)
         self.wiki_dir = self.find_wiki_dir()
         logger.info("Using wiki directory: %s", self.wiki_dir)
+
+    def _validate_file_path(self, path: str, allow_dirs: list[str] | None = None) -> str:
+        """Validate that a file path is within allowed directories."""
+        if not os.path.isabs(path):
+            path = os.path.join(self.wiki_dir, "media", path)
+        real = os.path.realpath(path)
+        allowed = allow_dirs or [os.path.join(self.wiki_dir, "media")]
+        for d in allowed:
+            real_d = os.path.realpath(d)
+            if real.startswith(real_d + os.sep) or real == real_d:
+                return real
+        raise PermissionError(f"Access denied: path '{path}' is outside allowed directories")
+
 
     @property
     def client(self) -> AsyncOpenAI:
@@ -191,13 +213,13 @@ class VLProcessor:
     def get_recent_text_for_search(self) -> str:
         if not hasattr(self, "context_manager") or not self.context_manager:
             return ""
-        with self.context_manager._lock:
-            for frame in reversed(self.context_manager.frames):
-                if frame.extracted_text:
-                    orig_text, _, _ = self.parse_response(frame.extracted_text)
-                    if orig_text:
-                        return orig_text
+        text = self.context_manager.get_recent_extracted_text()
+        if text:
+            orig_text, _, _ = self.parse_response(text)
+            if orig_text:
+                return orig_text
         return ""
+
 
 
     def _get_or_encode_image(self, image: Image.Image) -> tuple[str, bool]:
@@ -343,12 +365,14 @@ class VLProcessor:
         tail = cleaned[-4000:] if len(cleaned) > 4000 else cleaned
         max_size = len(tail) // 3
         if max_size >= 15:
-            for size in range(15, max_size + 1):
+            size = 15
+            while size <= max_size:
                 chunk1 = tail[-size:]
                 chunk2 = tail[-size*2:-size]
                 chunk3 = tail[-size*3:-size*2]
                 if chunk1 == chunk2 and chunk2 == chunk3:
                     return True
+                size = max(size + 1, int(size * 1.5))
                     
         return False
 
@@ -902,8 +926,12 @@ class VLProcessor:
         if not self.client:
             raise RuntimeError("Engine not initialized. Call init_engine() first.")
 
-        # Strip tool-call XML from user input to prevent injection
-        sanitized = re.sub(r'</?(?:tool_call|function|parameter)[^>]*>', '', message)
+        # Strip all XML-like tool-call patterns from user input
+        sanitized = re.sub(r'</?(?:tool_call|function|parameter)\b[^>]*>', '', message)
+        # Also strip the <function=name> variant used in text-based tool calls
+        sanitized = re.sub(r'<function=[^>]*>', '', sanitized)
+        # Strip any remaining angle-bracket patterns that look like tool syntax
+        sanitized = re.sub(r'<parameter=[^>]*>', '', sanitized)
         logger.info("Processing chat message (%d chars)", len(sanitized))
 
         # Add user message to context manager
@@ -1034,6 +1062,7 @@ class VLProcessor:
                                         clean_path = screenshot_path
                                         logger.info("Intercepted symbolic image path. Saved latest frame to %s", clean_path)
 
+                                clean_path = self._validate_file_path(clean_path)
                                 with open(clean_path, "rb") as f:
                                     img_bytes = f.read()
                                     
@@ -1078,6 +1107,7 @@ class VLProcessor:
                             elif func_name == "transcribe_audio":
                                 audio_path = args.get("audio_path", "").replace("file://", "").strip()
                                 
+                                audio_path = self._validate_file_path(audio_path)
                                 with open(audio_path, "rb") as f:
                                     audio_bytes = f.read()
                                     
@@ -1103,6 +1133,7 @@ class VLProcessor:
                                         clean_path = screenshot_path
                                         logger.info("Intercepted symbolic image path. Saved latest frame to %s", clean_path)
 
+                                clean_path = self._validate_file_path(clean_path)
                                 with open(clean_path, "rb") as f:
                                     img_bytes = f.read()
                                 b64_img = base64.b64encode(img_bytes).decode("utf-8")
@@ -1134,7 +1165,8 @@ class VLProcessor:
                                 searcher = None
                                 try:
                                     searcher = WebSearcher()
-                                    translated_query = await self.translate_query(query, source_lang)
+                                    lang_name = _LANG_CODE_TO_NAME.get(source_lang, source_lang)
+                                    translated_query = await self.translate_query(query, lang_name)
                                     web_results = await searcher.dual_search(
                                         query=query,
                                         target_lang=language,
@@ -1180,10 +1212,13 @@ class VLProcessor:
                                 tool_result = {"error": f"Unknown function: {func_name}"}
                         except FileNotFoundError as ex:
                             logger.warning("Error executing tool %s (file not found): %s", func_name, ex)
-                            tool_result = {"error": f"File not found: {ex.filename or str(ex)}"}
+                            tool_result = {"error": f"File not found: {os.path.basename(ex.filename) if ex.filename else 'specified file'}"}
+                        except PermissionError as ex:
+                            logger.warning("Error executing tool %s (permission error): %s", func_name, ex)
+                            tool_result = {"error": "Access denied: path is outside allowed directories"}
                         except Exception as ex:
                             logger.error("Error executing tool %s: %s", func_name, ex, exc_info=True)
-                            tool_result = {"error": str(ex)}
+                            tool_result = {"error": f"Tool '{func_name}' failed. Please try a different approach."}
 
                         openai_messages.append({
                             "role": "tool",
@@ -1220,7 +1255,8 @@ class VLProcessor:
                         searcher = None
                         try:
                             searcher = WebSearcher()
-                            translated_query = await self.translate_query(query, source_lang)
+                            lang_name = _LANG_CODE_TO_NAME.get(source_lang, source_lang)
+                            translated_query = await self.translate_query(query, lang_name)
                             web_results = await searcher.dual_search(
                                 query=query,
                                 target_lang=language,

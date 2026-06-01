@@ -1,6 +1,6 @@
 import logging
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QFrame, QComboBox
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint
 from PyQt6.QtGui import QGuiApplication, QFont, QCursor
 
 from mage.ui.theme import accent_hex
@@ -58,6 +58,7 @@ class CommandOSD(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._drag_position = QPoint()
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |

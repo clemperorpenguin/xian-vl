@@ -19,7 +19,7 @@ class LocalDictionary:
         
         # Maps simplified -> list of (traditional, pinyin, english)
         self.entries: dict[str, list[tuple[str, str, str]]] = {}
-        self.ready = False
+        self._ready_event = threading.Event()
         
         # Ensure data directory exists
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -119,10 +119,10 @@ class LocalDictionary:
         if count < 1000:  # Sanity check: CC-CEDICT should have >100,000 entries
             raise ValueError(f"Dictionary parsing failed: only {count} entries found. File may be truncated or invalid.")
 
-        self.ready = True
+        self._ready_event.set()
         logger.info("CC-CEDICT parsed successfully. Loaded %d entries.", count)
         
     def lookup(self, word: str) -> list[tuple[str, str, str]]:
-        if not self.ready:
+        if not self._ready_event.is_set():
             return []
         return self.entries.get(word, [])

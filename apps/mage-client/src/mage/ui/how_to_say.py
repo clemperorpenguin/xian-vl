@@ -1,7 +1,7 @@
 import logging
 import os
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QFrame, QTextEdit, QHBoxLayout, QPushButton, QApplication
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint
 from PyQt6.QtGui import QGuiApplication, QFont, QKeyEvent, QCursor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
@@ -16,6 +16,7 @@ class HowToSayDialog(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._drag_position = QPoint()
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
@@ -165,11 +166,13 @@ class HowToSayDialog(QWidget):
         translated = self.output_field.toPlainText().strip()
         if original and translated:
             try:
-                save_dir = "data"
-                os.makedirs(save_dir, exist_ok=True)
-                with open(os.path.join(save_dir, "saved_translations.txt"), "a", encoding="utf-8") as f:
+                import pathlib
+                save_dir = pathlib.Path.home() / ".local" / "share" / "xian-vl"
+                save_dir.mkdir(parents=True, exist_ok=True)
+                save_path = save_dir / "saved_translations.txt"
+                with open(save_path, "a", encoding="utf-8") as f:
                     f.write(f"Original ({self.target_lang}): {original}\nTranslation ({self.source_lang}): {translated}\n---\n")
-                self.status_label.setText("Saved to data/saved_translations.txt")
+                self.status_label.setText(f"Saved to {save_path}")
                 self.status_label.setStyleSheet("color: #4ecdc4;")
             except Exception as e:
                 self.status_label.setText(f"Failed to save: {e}")

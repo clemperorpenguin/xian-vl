@@ -59,8 +59,17 @@ class AsyncEngine(threading.Thread):
             self._api_key = api_key
 
     def shutdown(self) -> None:
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._loop and self._loop.is_running():
+            async def _graceful_stop():
+                current = asyncio.current_task(self._loop)
+                tasks = [t for t in asyncio.all_tasks(self._loop) if t is not current and not t.done()]
+                for t in tasks:
+                    t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                self._loop.stop()
+            self._loop.call_soon_threadsafe(
+                lambda: self._loop.create_task(_graceful_stop())
+            )
 
     # ── Thread internals ──────────────────────────────────────────────
 

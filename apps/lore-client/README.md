@@ -1,5 +1,8 @@
 # LORE: Localized Organizer for Research & Entities 📜
 
+> [!CAUTION]
+> **Experimental / Untested**: LORE is currently an experimental CLI client and is **not fully tested or verified**. It is provided as-is as a work-in-progress scaffold.
+
 Interactive CLI tool for researching Chinese entities and compiling localized English Markdown wiki. Collects translated information into a unified knowledge base.
 
 ## Features

@@ -27,14 +27,25 @@ def sync_data():
             print("Aborting sync. Old data preserved.")
             return
             
+        backup_dir = target_dir.parent / f"{target_dir.name}.old"
         if target_dir.exists():
-            print("Removing old data...")
-            shutil.rmtree(target_dir)
+            try:
+                target_dir.rename(backup_dir)
+            except Exception:
+                backup_dir = None
+                shutil.rmtree(target_dir, ignore_errors=True)
             
-        # Move the cloned repo to the final destination
-        # Ensure parent directory exists
-        target_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(tmp_target), str(target_dir))
+        try:
+            target_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(tmp_target), str(target_dir))
+            if backup_dir and backup_dir.exists():
+                shutil.rmtree(backup_dir, ignore_errors=True)
+        except Exception as e:
+            if backup_dir and backup_dir.exists():
+                if target_dir.exists():
+                    shutil.rmtree(target_dir, ignore_errors=True)
+                backup_dir.rename(target_dir)
+            raise e
         
     print("Sync complete.")
 

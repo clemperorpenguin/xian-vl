@@ -32,9 +32,25 @@ def is_loopback_http_api_host(host: str | None) -> bool:
     return bool(ip.is_loopback)
 
 
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+
 def should_warn_http_to_non_loopback(url: str) -> bool:
     """Suggest TLS in front of Lemonade when using HTTP to a non-loopback host."""
+    if os.environ.get("XIAN_ALLOW_INSECURE_HTTP") == "1":
+        return False
     parsed = urlparse(url.strip())
     if parsed.scheme.lower() != "http":
         return False
-    return not is_loopback_http_api_host(parsed.hostname)
+    warn = not is_loopback_http_api_host(parsed.hostname)
+    if warn:
+        logger.warning(
+            "SECURITY WARNING: Communicating with remote Lemonade host '%s' over cleartext HTTP. "
+            "API keys and data can be intercepted or modified on the network path. "
+            "Consider using HTTPS or setting XIAN_ALLOW_INSECURE_HTTP=1 to suppress this warning.",
+            parsed.hostname
+        )
+    return warn

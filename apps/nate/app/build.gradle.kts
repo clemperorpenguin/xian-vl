@@ -97,6 +97,10 @@ chaquopy {
         pip {
             install("requests")
             install("numpy")
+            // WARNING: PaddlePaddle and OpenCV are large packages. Verify Chaquopy compatibility.
+            install("paddlepaddle")
+            install("paddleocr")
+            install("opencv-python")
         }
     }
 }

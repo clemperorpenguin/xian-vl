@@ -1,5 +1,11 @@
 # Xian-MAGE — Multilingual Assistant for Gaming Environments 🧙‍♂️
 
+> [!IMPORTANT]
+> **Project Status**: MAGE is the only fully tested, verified, and officially supported client application in the Xian-monorepo. 
+
+> [!WARNING]
+> **ASR / Raid Mode Limitation**: Live audio stream transcription (Raid Mode) is currently broken and non-functional because the backend Lemonade Server does not support receiving/processing audio uploads at this time. Standard vision OCR, dialogue, and chat modes are fully functional.
+
 Xian-MAGE is a persistent, stateful Wayland desktop assistant for Linux. It provides real-time OCR, translation, visual grounding, and interactive chat directly on top of your desktop.
 
 Xian-MAGE acts as a lightweight client powered by the **[Lemonade-SDK OmniRouter](https://lemonade-server.ai/)**, bringing powerful Vision-Language models to your screen. Because Lemonade handles the inference, **all major GPUs with sufficient VRAM should work with Vulkan.**

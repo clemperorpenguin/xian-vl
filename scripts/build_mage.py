@@ -30,7 +30,11 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
     ]
     
     # Run PyInstaller from app_dir
-    subprocess.run(cmd, cwd=app_dir, check=True)
+    try:
+        subprocess.run(cmd, cwd=app_dir, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Build failed with PyInstaller exit code {e.returncode}", file=sys.stderr)
+        sys.exit(1)
     
     dist_dir = app_dir / "dist"
     
@@ -88,18 +92,22 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
         if shutil.which("create-dmg"):
             if dmg_path.exists():
                 dmg_path.unlink()
-            subprocess.run([
-                "create-dmg",
-                "--volname", "MAGE",
-                "--window-pos", "200", "120",
-                "--window-size", "800", "400",
-                "--icon-size", "100",
-                "--icon", "mage-client.app", "200", "190",
-                "--hide-extension", "mage-client.app",
-                "--app-drop-link", "600", "185",
-                str(dmg_path),
-                str(root_app)
-            ], cwd=app_dir, check=True)
+            try:
+                subprocess.run([
+                    "create-dmg",
+                    "--volname", "MAGE",
+                    "--window-pos", "200", "120",
+                    "--window-size", "800", "400",
+                    "--icon-size", "100",
+                    "--icon", "mage-client.app", "200", "190",
+                    "--hide-extension", "mage-client.app",
+                    "--app-drop-link", "600", "185",
+                    str(dmg_path),
+                    str(root_app)
+                ], cwd=app_dir, check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"DMG creation failed with exit code {e.returncode}", file=sys.stderr)
+                sys.exit(1)
         else:
             print("create-dmg not found. Skipping DMG creation.")
 

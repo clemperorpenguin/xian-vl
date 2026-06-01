@@ -8,7 +8,7 @@ from html import escape as html_escape
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushButton, QHBoxLayout, QTextBrowser
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QRect, QSettings, QBuffer, QIODevice
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QRect, QSettings, QBuffer, QIODevice, QPoint
 from PyQt6.QtGui import QGuiApplication
 from mage.ui.grounding import GroundingHighlight
 from mage.ui.theme import accent_hex, accent_hover_hex
@@ -25,20 +25,19 @@ class ChatWorker(QThread):
         self.source_lang = source_lang
         
     def run(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
+        async def _init_and_process():
             if not self.processor.client:
-                loop.run_until_complete(self.processor.init_engine())
-            response = loop.run_until_complete(
-                self.processor.process_chat(self.message, source_lang=self.source_lang)
-            )
+                await self.processor.init_engine()
+            return await self.processor.process_chat(self.message, source_lang=self.source_lang)
+
+        future = self.processor.engine.submit(_init_and_process())
+        try:
+            from xian.timeout import CHAT_TIMEOUT_SECONDS
+            response = future.result(timeout=CHAT_TIMEOUT_SECONDS)
             self.result_ready.emit(response)
         except Exception as e:
             logger.error("Chat worker error: %s", e)
             self.result_ready.emit(f"Error: {e}")
-        finally:
-            loop.close()
 
 class SearchWorker(QThread):
     result_ready = pyqtSignal(str)
@@ -50,13 +49,18 @@ class SearchWorker(QThread):
         self.language = language
         
     def run(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
+        async def _do_search():
             from xian.searcher import WebSearcher
             searcher = WebSearcher()
-            results = loop.run_until_complete(searcher.search(self.query, language=self.language))
-            
+            try:
+                results = await searcher.search(self.query, language=self.language)
+            finally:
+                await searcher.close()
+            return results
+
+        future = self.processor.engine.submit(_do_search())
+        try:
+            results = future.result(timeout=60)
             if not results:
                 response = "No search results found."
             else:
@@ -65,7 +69,7 @@ class SearchWorker(QThread):
                     title = r.get("title", "")
                     content = r.get("content", "")
                     url = r.get("url", "")
-                    lines.append(f"<b>{title}</b><br>{content}<br><a href='{url}'>{url}</a><br>")
+                    lines.append(f"<b>{html_escape(title)}</b><br>{html_escape(content)}<br><a href='{html_escape(url)}'>{html_escape(url)}</a><br>")
                 response = "<br>".join(lines)
                 
             # Add this search information to the AI context so the assistant knows about it
@@ -79,8 +83,6 @@ class SearchWorker(QThread):
         except Exception as e:
             logger.error("Search worker error: %s", e)
             self.result_ready.emit(f"Search Error: {e}")
-        finally:
-            loop.close()
 
 
 class ChatSidebar(QWidget):
@@ -89,6 +91,7 @@ class ChatSidebar(QWidget):
         self.processor = processor
         self._highlight = None  # reference to active GroundingHighlight
         self.worker = None  # reference to active ChatWorker
+        self._drag_position = QPoint()
         
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
@@ -235,7 +238,8 @@ class ChatSidebar(QWidget):
         self.worker.start()
         
     def _handle_response(self, response: str):
-        self._append_message("Assistant", response, "#2196F3")
+        is_search = isinstance(self.sender(), SearchWorker)
+        self._append_message("Assistant", response, "#2196F3", raw_html=is_search)
         
         # Parse for grounding coordinates: [ymin, xmin, ymax, xmax]
         match = re.search(r'\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]', response)
@@ -263,10 +267,12 @@ class ChatSidebar(QWidget):
         self.send_btn.setEnabled(True)
         self.input_field.setFocus()
         
-    def _append_message(self, sender: str, text: str, color: str):
+    def _append_message(self, sender: str, text: str, color: str, raw_html: bool = False):
         safe_sender = html_escape(sender)
         
         if sender == "System" and "📷 Screenshot attached" in text:
+            safe_text = text
+        elif raw_html:
             safe_text = text
         else:
             safe_text = html_escape(text).replace(chr(10), "<br>")
@@ -299,6 +305,12 @@ class ChatSidebar(QWidget):
         url_str = url.toString()
         if url_str.startswith("play_audio://"):
             audio_path = url_str.replace("play_audio://", "")
+            # Validate path is within allowed media directory
+            media_dir = os.path.join(self.processor.wiki_dir, "media")
+            real_path = os.path.realpath(audio_path)
+            if not real_path.startswith(os.path.realpath(media_dir)):
+                logger.warning("Blocked audio playback from outside media dir: %s", audio_path)
+                return
             try:
                 with open(audio_path, "rb") as f:
                     audio_bytes = f.read()

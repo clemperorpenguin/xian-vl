@@ -1,35 +1,34 @@
-# Xian-VL Monorepo 🇨🇳🇯🇵🇰🇷🎮📚🕸️🍋🪄
+# Xian-MAGE — Real-Time Vision-Language Assistant for Gaming Environments 🧙‍♂️🎮🤖
 
-Xian-VL is a hub-and-spoke monorepo containing applications and packages for vision-language tasks, real-time translation, and gaming assistance, all powered by the **[Lemonade Server](https://lemonade-server.ai/)**.
+Xian-MAGE is a real-time, persistent desktop gaming HUD and assistant for Linux (Wayland). Powered by the **[Lemonade Server](https://lemonade-server.ai/)** backend, it overlays real-time OCR, translation, visual grounding clicking visualizers, and interactive conversational chat directly on top of active gaming environments.
 
-## Project Structure
+Because inference is orchestrated via Lemonade, **MAGE supports Vulkan-accelerated execution, running smoothly on AMD Radeon™ GPUs and other accelerators.**
 
-This repository uses a `uv` workspace to manage multiple packages and applications:
+---
 
-### Applications
+## 🌟 Core Features (Fully Operational)
 
-- **[MAGE](apps/mage-client/README.md)**: A PyQt6 gaming HUD for real-time OCR, translation, and visual grounding on Wayland (Works!).
-- **[MASHA](apps/masha-extension/README.md)**: A browser extension for translating selected text on web pages (WIP).
-- **[NATE](apps/nate/README.md)**: An offline-first Chinese OCR reader, dictionary, and translation tool with optional remote LLM acceleration via Lemonade (Android).
-- **[LORE](apps/lore-client/README.md)**: Compiles collected information into a unified knowledge base. (WIP)
-- **[Luduan](apps/luduan-client/README.md)**: A CLI tool for EPUB-to-Robobook translation and narration (WIP).
+- **Vulkan / AMD GPU Accelerated**: Low-latency Vision-Language Model execution powered by backend GPU hardware acceleration.
+- **Click-Through Desktop Overlay**: Transparent PyQt6 overlay windows that display translated text directly over game HUDs and dialogue while remaining completely invisible to mouse inputs.
+- **Wayland Global Hotkey & Command OSD**: Trigger translation, OSD configurations, and sidebars seamlessly using customizable system-wide leader hotkeys.
+- **Dialogue Mode (Autoplay VNs / Story RPGs)**: Lock onto a screen region, translate automatically, and advance/refresh translations inline with a simple mouse click.
+- **Visual Grounding Target Highlighting**: Ask the assistant *"where do I click?"* or *"where is the exit?"* and watch it highlight the exact physical coordinates on your screen.
+- **Cinematic Mode (Contextual Voice Translation)**: Seamlessly couples screen capture vision analysis with audio playback translation.
+- **Local CC-CEDICT Dictionary**: Instantly hover over any translation bubble and press `Alt` for a local thread-safe parsing breakdown of Chinese characters, pinyin, and definitions.
 
-### Packages
+---
 
-- **`packages/shared-types`**: Canonical Pydantic models, enums, and constants used across the monorepo.
-- **`packages/xian-vl`**: Core engine handling prompt engineering, context management, and Lemonade API interactions.
-
-## Getting Started
+## 🛠️ Getting Started (MAGE Client)
 
 ### Requirements
 
-- **Python 3.10+**
-- **[uv](https://docs.astral.sh/uv/)** package manager
-- **[Lemonade Server](https://lemonade-server.ai/)** running locally or accessible remotely.
+- **Linux with Wayland** (X11 also supported; global key-bindings require `evdev` inputs)
+- **User Permissions**: Your user must be in the `input` group for global hotkey capturing (`sudo usermod -aG input $USER` and log out/in)
+- **Lemonade Server**: A running Lemonade Server instance (accessible at `http://localhost:13305` by default)
 
-### Installation
+### Quick Setup
 
-Clone the repository and sync the workspace:
+Clone the monorepo and sync the workspace:
 
 ```bash
 git clone https://github.com/clemperorpenguin/xian-vl.git
@@ -37,19 +36,43 @@ cd xian-vl
 uv sync --all-packages
 ```
 
-## Roadmap
+### Launching the Application
 
-- [x] Monorepo migration and workspace setup
-- [x] Cinematic mode — translate audio with on-screen context
-- [x] Dialogue mode — keep an area selected, advance with a click (VNs / story RPGs)
-- [x] Game oracle / chatbot integration / complete LORE
-- [x] Complete MASHA extension
-- [x] OCR/dictionary Android app
-- [ ] UI and documentation localized
-- [ ] Make everything pretty
-- [ ] Server benchmark to select best settings
-- [ ] Flatpak / SteamOS support for MAGE client
+Ensure the Lemonade backend server is running, then launch MAGE from the root directory:
 
-## License
+```bash
+uv run --package mage-client mage
+```
 
-GNU General Public License v3.0 — see [LICENSE](LICENSE) for details.
+- **Open Action Menu / OSD** — Double-Tap `Shift` (Default Leader Key)
+- **Trigger Screen Capture** — Action Menu `C` (select screen region, then Translate / Explain / Chat)
+- **Toggle Chat Sidebar** — Action Menu `A`
+- **Translate for Chat (Input)** — Action Menu `T`
+- **Settings Panel** — Action Menu `S`
+
+---
+
+## 📁 Architecture & Spoke Projects
+
+The monorepo contains the core production-ready MAGE client as well as experimental companion scaffolds:
+
+```
+├── apps/
+│   ├── mage-client/      # 🧙‍♂️ The main verified, PyQt6-based gaming HUD application
+│   ├── nate/             # 📱 Android companion OCR reader & dictionary (Experimental)
+│   ├── masha-extension/  # 🌐 Browser extension selection translator (Experimental)
+│   ├── lore-client/      # 📜 RAG knowledge wiki builder CLI (Experimental)
+│   └── luduan-client/    # 🦤 EPUB translation & audiobook CLI (Experimental)
+└── packages/
+    ├── xian-vl/          # ⚙️ Core LLM/ASR orchestration engine & context managers
+    └── shared-types/     # 📦 Canonical models, constants, and shared types
+```
+
+> [!WARNING]
+> **ASR / Audio Limitation**: Sending live audio stream uploads to Lemonade is currently broken due to server-side backend limitations. Consequently, live speech translation features (such as **Raid Mode**) are disabled. All visual OCR, text translation, dictionary, and chat grounding features are fully functional.
+
+---
+
+## 📜 License
+
+This project is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for details.

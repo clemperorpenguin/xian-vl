@@ -230,7 +230,8 @@ class SearXNGSearcher:
                 attempts += 1
                 await asyncio.sleep(0.5)  # Short pause before retry
 
-        raise RuntimeError("All attempted SearXNG instances failed.")
+        logger.warning("All attempted SearXNG instances failed.")
+        return []
 
     async def close(self):
         await self.client.aclose()
