@@ -13,4 +13,5 @@ members = [
     "apps/lore-client",
     "packages/xian-vl",
     "packages/shared-types",
+    "packages/localize",
 ]

@@ -1,0 +1,20 @@
+[project]
+name = "xuan"
+version = "1.0.0"
+description = "XUAN - Xian's Universal Automated Native-linguist"
+requires-python = ">=3.10"
+dependencies = [
+    "pyqt6>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/localize"]
+
+[project.scripts]
+xuan = "localize.cli:main"
+run = "localize.cli:main"
+

@@ -14,6 +14,7 @@ members = [
     "shared-types",
     "xian-ecosystem",
     "xian-vl",
+    "xuan",
 ]
 
 [[package]]
@@ -2041,3 +2042,14 @@ requires-dist = [
     { name = "shared-types", editable = "packages/shared-types" },
 ]
 provides-extras = ["mcp", "dev"]
+
+[[package]]
+name = "xuan"
+version = "1.0.0"
+source = { editable = "packages/localize" }
+dependencies = [
+    { name = "pyqt6" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pyqt6", specifier = ">=6.0" }]

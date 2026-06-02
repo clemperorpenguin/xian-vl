@@ -23,7 +23,7 @@ class RuntimeState:
         # Locate the locales directory assuming it's in packages/shared-types/locales
         # __file__ is .../packages/shared-types/src/shared_types/state.py
         current_dir = Path(__file__).resolve().parent
-        self.locales_dir = current_dir.parent.parent.parent / "locales"
+        self.locales_dir = current_dir.parent.parent / "locales"
         self.load_locale(self.ui_language)
 
     def load_locale(self, lang: str):
