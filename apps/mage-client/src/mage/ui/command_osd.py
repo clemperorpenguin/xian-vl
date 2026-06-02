@@ -80,7 +80,7 @@ class CommandOSD(QWidget):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool |
+            Qt.WindowType.BypassWindowManagerHint |
             Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)

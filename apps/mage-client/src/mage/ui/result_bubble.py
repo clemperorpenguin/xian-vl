@@ -51,7 +51,7 @@ class ResultBubble(QWidget):
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.WindowDoesNotAcceptFocus |
-            Qt.WindowType.Tool
+            Qt.WindowType.BypassWindowManagerHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
