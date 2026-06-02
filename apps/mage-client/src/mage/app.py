@@ -566,7 +566,7 @@ class XianApp(QWidget):
                 logger.debug("Error closing previous lens overlay", exc_info=True)
 
         self._lens = LensOverlayWindow(
-            previous_rect=LensOverlayWindow._last_rect,
+            previous_rect=None if dialogue_mode else LensOverlayWindow._last_rect,
             dialogue_mode=dialogue_mode,
         )
         self._lens.action_requested.connect(self._on_lens_action)
@@ -673,7 +673,7 @@ class XianApp(QWidget):
         self._bubbles.append(bubble)
         self._setup_bubble_connections(bubble)
 
-    def _replace_persistent_bubble(self, attr_name: str, text: str, original_text: str = "", anchor: QRect = QRect(), border_color: str | None = None, truncated: bool = False, auto_close_ms: int = 0) -> ResultBubble:
+    def _replace_persistent_bubble(self, attr_name: str, text: str, original_text: str = "", anchor: QRect = QRect(), border_color: str | None = None, truncated: bool = False, auto_close_ms: int = 0, show_stop: bool = False) -> ResultBubble:
         """Helper to close and recreate a persistent dialogue or cinematic bubble."""
         old_bubble = getattr(self, attr_name, None)
         if old_bubble is not None:
@@ -689,6 +689,7 @@ class XianApp(QWidget):
             auto_close_ms=auto_close_ms,
             border_color=border_color,
             truncated=truncated,
+            show_stop=show_stop,
         )
         setattr(self, attr_name, bubble)
         if truncated:
@@ -778,6 +779,7 @@ class XianApp(QWidget):
                 border_color=border_color,
                 truncated=any_truncated,
                 auto_close_ms=30000,
+                show_stop=True,
             )
         else:
             bubble = ResultBubble(
@@ -847,6 +849,11 @@ class XianApp(QWidget):
         bubble.speak_target_requested.connect(
             lambda b=bubble: self._on_speak_requested(b, source=False)
         )
+        bubble.stop_requested.connect(self.disable_dialogue_mode)
+
+    def disable_dialogue_mode(self):
+        if self.dialogue_mode_active:
+            self.toggle_dialogue_mode()
 
     def _on_speak_requested(self, bubble, source: bool):
         text = bubble._original if source else bubble._text
@@ -1060,20 +1067,8 @@ class XianApp(QWidget):
             self._add_bubble(bubble)
             logger.info("Dialogue Mode Deactivated")
         else:
-            if LensOverlayWindow._last_rect is None or LensOverlayWindow._last_rect.isEmpty():
-                logger.info("No dialogue area selected. Opening Lens in dialogue mode.")
-                self.show_lens(dialogue_mode=True)
-                return
-
-            self.dialogue_mode_active = True
-            self.mouse_listener.start()
-            
-            # Immediately trigger the first translation
-            self.capture_dialogue()
-            
-            bubble = ResultBubble("Dialogue Mode ON", anchor_rect=LensOverlayWindow._last_rect, auto_close_ms=3000)
-            self._add_bubble(bubble)
-            logger.info("Dialogue Mode Activated")
+            logger.info("Opening Lens in dialogue mode.")
+            self.show_lens(dialogue_mode=True)
 
     def on_dialogue_click(self):
         if self.dialogue_mode_active:

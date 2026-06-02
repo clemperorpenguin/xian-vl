@@ -38,17 +38,20 @@ class ResultBubble(QWidget):
     continue_requested = pyqtSignal()
     speak_source_requested = pyqtSignal()
     speak_target_requested = pyqtSignal()
+    stop_requested = pyqtSignal()
 
     def __init__(self, text: str, original_text: str = "",
                  anchor_rect: QRect = None, auto_close_ms: int = 30000,
                  border_color: str | None = None,
                  truncated: bool = False,
+                 show_stop: bool = False,
                  parent=None):
         super().__init__(parent)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.WindowDoesNotAcceptFocus
+            Qt.WindowType.WindowDoesNotAcceptFocus |
+            Qt.WindowType.ToolTip
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -138,6 +141,15 @@ class ResultBubble(QWidget):
         self._continue_btn.clicked.connect(self._on_continue_clicked)
         self._continue_btn.setVisible(truncated)
         footer.addWidget(self._continue_btn)
+
+        if show_stop:
+            self._stop_btn = QPushButton("🛑 Stop")
+            self._stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._stop_btn.setStyleSheet(
+                "color: #ff5555; font-weight: bold; font-size: 11px;"
+            )
+            self._stop_btn.clicked.connect(self.stop_requested.emit)
+            footer.addWidget(self._stop_btn)
 
         self._speak_src_btn = QPushButton("🔊 Speak (Src)")
         self._speak_src_btn.setCursor(Qt.CursorShape.PointingHandCursor)
