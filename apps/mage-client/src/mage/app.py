@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QWidget, QCheckBox, QMessageBox
 )
 from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, QBuffer, QIODevice
-from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap
+from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap, QCursor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
 
@@ -1072,8 +1072,63 @@ class XianApp(QWidget):
 
     def on_dialogue_click(self):
         if self.dialogue_mode_active:
+            if self._is_click_inside_mage(QCursor.pos()):
+                logger.debug("Dialogue click ignored: clicked inside MAGE UI element.")
+                return
             delay = int(self.settings.value(KEY_DIALOGUE_DELAY, 1000))
             self.dialogue_timer.start(delay)
+
+    def _is_click_inside_mage(self, pos) -> bool:
+        if hasattr(self, "_bubbles") and self._bubbles:
+            for bubble in self._bubbles:
+                try:
+                    if bubble.isVisible() and bubble.geometry().contains(pos):
+                        return True
+                except Exception:
+                    pass
+        if hasattr(self, "dialogue_bubble") and self.dialogue_bubble:
+            try:
+                if self.dialogue_bubble.isVisible() and self.dialogue_bubble.geometry().contains(pos):
+                    return True
+            except Exception:
+                pass
+        if hasattr(self, "cinematic_bubble") and self.cinematic_bubble:
+            try:
+                if self.cinematic_bubble.isVisible() and self.cinematic_bubble.geometry().contains(pos):
+                    return True
+            except Exception:
+                pass
+        if hasattr(self, "raid_bubble") and self.raid_bubble:
+            try:
+                if self.raid_bubble.isVisible() and self.raid_bubble.geometry().contains(pos):
+                    return True
+            except Exception:
+                pass
+        if hasattr(self, "chat_sidebar") and self.chat_sidebar:
+            try:
+                if self.chat_sidebar.isVisible() and self.chat_sidebar.geometry().contains(pos):
+                    return True
+            except Exception:
+                pass
+        if hasattr(self, "osd") and self.osd:
+            try:
+                if self.osd.isVisible() and self.osd.geometry().contains(pos):
+                    return True
+            except Exception:
+                pass
+        if hasattr(self, "how_to_say_dialog") and self.how_to_say_dialog:
+            try:
+                if self.how_to_say_dialog.isVisible() and self.how_to_say_dialog.geometry().contains(pos):
+                    return True
+            except Exception:
+                pass
+        if hasattr(self, "_lens") and self._lens:
+            try:
+                if self._lens.isVisible() and self._lens.geometry().contains(pos):
+                    return True
+            except Exception:
+                pass
+        return False
 
     def capture_dialogue(self):
         if not self.dialogue_mode_active or LensOverlayWindow._last_rect is None or LensOverlayWindow._last_rect.isEmpty():
