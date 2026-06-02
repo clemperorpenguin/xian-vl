@@ -55,9 +55,10 @@ from mage.settings_keys import (
     KEY_API_URL, KEY_API_MODEL, KEY_SOURCE_LANG, KEY_TARGET_LANG,
     KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY,
     KEY_GPU_UTIL, KEY_DIALOGUE_DELAY, KEY_CINEMATIC_TRIGGER,
-    KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE,
+    KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG
 )
 from mage.utils.window_binder import WindowBinder
+from shared_types.state import state, t
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ class SettingsDialog(QDialog):
 
     def __init__(self, settings: QSettings, models: list, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Xian — Settings")
+        self.setWindowTitle(t("settings.dialog.title"))
         self.setMinimumWidth(400)
         self.settings = settings
 
@@ -92,7 +93,7 @@ class SettingsDialog(QDialog):
         # Server URL
         self.url_edit = QLineEdit()
         self.url_edit.setText(_normalized_api_url_from_settings(settings))
-        layout.addRow("Server URL:", self.url_edit)
+        layout.addRow(t("settings.label.server_url"), self.url_edit)
 
         # Model
         self.model_combo = QComboBox()
@@ -100,25 +101,25 @@ class SettingsDialog(QDialog):
         if models:
             self.model_combo.addItems(models)
         self.model_combo.setCurrentText(settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL))
-        layout.addRow("Model:", self.model_combo)
+        layout.addRow(t("settings.label.model"), self.model_combo)
 
         # Source language
         self.source_lang_combo = QComboBox()
         self.source_lang_combo.addItems([e.value for e in SourceLanguage])
         self.source_lang_combo.setCurrentText(settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG))
-        layout.addRow("Source Language:", self.source_lang_combo)
+        layout.addRow(t("settings.label.source_language"), self.source_lang_combo)
 
         # Target language
         self.lang_combo = QComboBox()
         self.lang_combo.addItems([e.value for e in TargetLanguage])
         self.lang_combo.setCurrentText(settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG))
-        layout.addRow("Target Language:", self.lang_combo)
+        layout.addRow(t("settings.label.target_language"), self.lang_combo)
 
         # Mode
         self.mode_combo = QComboBox()
         self.mode_combo.addItems([e.value for e in TranslationMode])
         self.mode_combo.setCurrentText(settings.value(KEY_MODE, constants.DEFAULT_MODE))
-        layout.addRow("Mode:", self.mode_combo)
+        layout.addRow(t("settings.label.mode"), self.mode_combo)
 
         # Leader Key
         self.leader_combo = QComboBox()
@@ -128,7 +129,13 @@ class SettingsDialog(QDialog):
         idx = self.leader_combo.findText(leader_val)
         if idx >= 0:
             self.leader_combo.setCurrentIndex(idx)
-        layout.addRow("Leader Key:", self.leader_combo)
+        layout.addRow(t("settings.label.leader_key"), self.leader_combo)
+
+        # UI Language
+        self.ui_lang_combo = QComboBox()
+        self.ui_lang_combo.addItems(["en", "zh", "ja", "ko", "ru", "es", "ar", "hi", "vi"])
+        self.ui_lang_combo.setCurrentText(settings.value(KEY_UI_LANG, "en"))
+        layout.addRow(t("settings.label.ui_language"), self.ui_lang_combo)
 
         # Styles
         style_layout = QVBoxLayout()
@@ -140,47 +147,47 @@ class SettingsDialog(QDialog):
                 cb.setChecked(True)
             self.style_checkboxes[style.value] = cb
             style_layout.addWidget(cb)
-        layout.addRow("Styles:", style_layout)
+        layout.addRow(t("settings.label.styles"), style_layout)
 
         # Max tokens
         self.tokens_spin = QSpinBox()
         self.tokens_spin.setRange(256, 32768)
         self.tokens_spin.setValue(int(settings.value("max_tokens", constants.DEFAULT_MAX_TOKENS)))
-        layout.addRow("Max Tokens:", self.tokens_spin)
+        layout.addRow(t("settings.label.max_tokens"), self.tokens_spin)
 
         # GPU Memory Utilization
         self.gpu_combo = QComboBox()
         self.gpu_combo.addItems(["Default", "0.5", "0.75"])
         self.gpu_combo.setCurrentText(settings.value("gpu_memory_utilization", constants.DEFAULT_GPU_MEMORY_UTILIZATION))
-        layout.addRow("GPU Memory Utilization:", self.gpu_combo)
+        layout.addRow(t("settings.label.gpu_memory_utilization"), self.gpu_combo)
 
         # Dialogue Delay
         self.delay_spin = QSpinBox()
         self.delay_spin.setRange(100, 10000)
         self.delay_spin.setSingleStep(100)
         self.delay_spin.setValue(int(settings.value(KEY_DIALOGUE_DELAY, 1000)))
-        layout.addRow("Dialogue Delay (ms):", self.delay_spin)
+        layout.addRow(t("settings.label.dialogue_delay"), self.delay_spin)
 
         # Auto-continue truncated translations
-        self.auto_continue_cb = QCheckBox("Automatically continue truncated translations")
+        self.auto_continue_cb = QCheckBox(t("settings.checkbox.auto_continue"))
         auto_val = settings.value(KEY_AUTO_CONTINUE, "false")
         self.auto_continue_cb.setChecked(auto_val == "true" or auto_val is True)
         layout.addRow(self.auto_continue_cb)
 
         # Auto-speak translations
-        self.auto_speak_cb = QCheckBox("Auto-speak translations (Text-to-Speech)")
+        self.auto_speak_cb = QCheckBox(t("settings.checkbox.auto_speak"))
         speak_val = settings.value(KEY_AUTO_SPEAK, "false")
         self.auto_speak_cb.setChecked(speak_val == "true" or speak_val is True)
         layout.addRow(self.auto_speak_cb)
 
         # Live Voice Translation (Raid Mode)
-        self.live_voice_raid_cb = QCheckBox("Live Voice Translation (Raid Mode)")
+        self.live_voice_raid_cb = QCheckBox(t("settings.checkbox.live_voice_raid"))
         lv_raid_val = settings.value("live_voice_raid", "false")
         self.live_voice_raid_cb.setChecked(lv_raid_val == "true" or lv_raid_val is True)
         layout.addRow(self.live_voice_raid_cb)
         
         # Save Raid Notes to LORE
-        self.live_raid_lore_save_cb = QCheckBox("Save Raid Notes to LORE")
+        self.live_raid_lore_save_cb = QCheckBox(t("settings.checkbox.live_raid_lore_save"))
         lr_lore_val = settings.value("live_raid_lore_save", "false")
         self.live_raid_lore_save_cb.setChecked(lr_lore_val == "true" or lr_lore_val is True)
         layout.addRow(self.live_raid_lore_save_cb)
@@ -207,19 +214,19 @@ class SettingsDialog(QDialog):
                 self.target_window_combo.setCurrentText(current_title)
         else:
             self.target_window_combo.setCurrentIndex(0)
-        layout.addRow("Target Window Title:", self.target_window_combo)
+        layout.addRow(t("settings.label.target_window_title"), self.target_window_combo)
 
         # Developer Options Checkbox
-        self.dev_options_cb = QCheckBox("Enable Developer Options (Cinematic / Raid modes)")
+        self.dev_options_cb = QCheckBox(t("settings.checkbox.dev_options"))
         dev_options_val = settings.value("developer_options", "false")
         self.dev_options_cb.setChecked(dev_options_val == "true" or dev_options_val is True)
         layout.addRow(self.dev_options_cb)
 
         # Buttons
         btn_row = QHBoxLayout()
-        save_btn = QPushButton("Save")
+        save_btn = QPushButton(t("settings.button.save"))
         save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton(t("settings.button.cancel"))
         cancel_btn.clicked.connect(self.reject)
         btn_row.addStretch()
         btn_row.addWidget(save_btn)
@@ -262,6 +269,9 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_SOURCE_LANG, self.source_lang_combo.currentText())
         self.settings.setValue(KEY_TARGET_LANG, self.lang_combo.currentText())
         self.settings.setValue(KEY_MODE, self.mode_combo.currentText())
+        ui_lang = self.ui_lang_combo.currentText()
+        self.settings.setValue(KEY_UI_LANG, ui_lang)
+        state.load_locale(ui_lang)
         selected_styles = [s for s, cb in self.style_checkboxes.items() if cb.isChecked()]
         self.settings.setValue(KEY_STYLES, selected_styles)
         self.settings.setValue(KEY_MAX_TOKENS, self.tokens_spin.value())
@@ -292,6 +302,9 @@ class XianApp(QWidget):
         self.hide()  # never shown
 
         self.settings = QSettings(ORGANIZATION, APP_NAME)
+        # Initialize translation state
+        state.load_locale(self.settings.value(KEY_UI_LANG, "en"))
+
         # Migrate deprecated MAGE model setting
         if self.settings.value(KEY_API_MODEL) == "MAGE":
             self.settings.setValue(KEY_API_MODEL, constants.DEFAULT_MODEL)
@@ -414,25 +427,25 @@ class XianApp(QWidget):
         self.tray.setToolTip("Xian-VL — Lens & Chat Assistant")
 
         menu = QMenu()
-        capture_action = menu.addAction("📸 Capture (Leader+C)")
+        capture_action = menu.addAction(t("tray.menu.capture"))
         capture_action.triggered.connect(self.show_lens)
 
-        chat_action = menu.addAction("💬 Chat (Leader+A)")
+        chat_action = menu.addAction(t("tray.menu.chat"))
         chat_action.triggered.connect(self.toggle_chat)
 
         menu.addSeparator()
 
-        settings_action = menu.addAction("⚙ Settings… (Leader+S)")
+        settings_action = menu.addAction(t("tray.menu.settings"))
         settings_action.triggered.connect(self._open_settings)
 
         menu.addSeparator()
 
-        about_action = menu.addAction("ℹ About MAGE")
+        about_action = menu.addAction(t("tray.menu.about"))
         about_action.triggered.connect(self.show_about_dialog)
 
         menu.addSeparator()
 
-        quit_action = menu.addAction("Quit")
+        quit_action = menu.addAction(t("tray.menu.quit"))
         quit_action.triggered.connect(QApplication.quit)
 
         self.tray.setContextMenu(menu)

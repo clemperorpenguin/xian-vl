@@ -1,0 +1,102 @@
+{
+  "settings.dialog.title": {
+    "value": "Xian — Settings",
+    "context": "Window title for the settings dialog"
+  },
+  "settings.label.server_url": {
+    "value": "Server URL:",
+    "context": "Label for the API Server URL field in settings"
+  },
+  "settings.label.model": {
+    "value": "Model:",
+    "context": "Label for the inference Model selection field in settings"
+  },
+  "settings.label.source_language": {
+    "value": "Source Language:",
+    "context": "Label for the Source Language selection field in settings"
+  },
+  "settings.label.target_language": {
+    "value": "Target Language:",
+    "context": "Label for the Target Language selection field in settings"
+  },
+  "settings.label.mode": {
+    "value": "Mode:",
+    "context": "Label for the Translation Mode selection field in settings"
+  },
+  "settings.label.leader_key": {
+    "value": "Leader Key:",
+    "context": "Label for the Hotkey leader selection field in settings"
+  },
+  "settings.label.ui_language": {
+    "value": "UI Language:",
+    "context": "Label for the UI Language selection field in settings"
+  },
+  "settings.label.styles": {
+    "value": "Styles:",
+    "context": "Label for the Translation Styles checkboxes in settings"
+  },
+  "settings.label.max_tokens": {
+    "value": "Max Tokens:",
+    "context": "Label for the Max Tokens spinbox in settings"
+  },
+  "settings.label.gpu_memory_utilization": {
+    "value": "GPU Memory Utilization:",
+    "context": "Label for the GPU Memory Utilization combo box in settings"
+  },
+  "settings.label.dialogue_delay": {
+    "value": "Dialogue Delay (ms):",
+    "context": "Label for the Dialogue Delay spinbox in settings"
+  },
+  "settings.checkbox.auto_continue": {
+    "value": "Automatically continue truncated translations",
+    "context": "Checkbox label to auto-continue translations"
+  },
+  "settings.checkbox.auto_speak": {
+    "value": "Auto-speak translations (Text-to-Speech)",
+    "context": "Checkbox label to auto-speak translations"
+  },
+  "settings.checkbox.live_voice_raid": {
+    "value": "Live Voice Translation (Raid Mode)",
+    "context": "Checkbox label for Raid Mode feature"
+  },
+  "settings.checkbox.live_raid_lore_save": {
+    "value": "Save Raid Notes to LORE",
+    "context": "Checkbox label for saving Raid Mode notes to LORE"
+  },
+  "settings.label.target_window_title": {
+    "value": "Target Window Title:",
+    "context": "Label for selecting a target window title"
+  },
+  "settings.checkbox.dev_options": {
+    "value": "Enable Developer Options (Cinematic / Raid modes)",
+    "context": "Checkbox label to enable developer options"
+  },
+  "settings.button.save": {
+    "value": "Save",
+    "context": "Save button text"
+  },
+  "settings.button.cancel": {
+    "value": "Cancel",
+    "context": "Cancel button text"
+  },
+  "tray.menu.capture": {
+    "value": "📸 Capture (Leader+C)",
+    "context": "Tray menu item to capture screen"
+  },
+  "tray.menu.chat": {
+    "value": "💬 Chat (Leader+A)",
+    "context": "Tray menu item to open chat"
+  },
+  "tray.menu.settings": {
+    "value": "⚙ Settings… (Leader+S)",
+    "context": "Tray menu item to open settings"
+  },
+  "tray.menu.about": {
+    "value": "ℹ About MAGE",
+    "context": "Tray menu item to show about dialog"
+  },
+  "tray.menu.quit": {
+    "value": "Quit",
+    "context": "Tray menu item to quit application"
+  }
+}
