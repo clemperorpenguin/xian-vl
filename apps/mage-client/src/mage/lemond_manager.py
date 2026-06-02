@@ -30,6 +30,7 @@ from mage.utils.env import clean_subprocess_env
 logger = logging.getLogger("xian.mage.lemond_manager")
 
 _lemond_process = None
+_lemond_log_file = None
 
 def get_base_dir() -> Path:
     """Return the application base directory."""
@@ -54,7 +55,7 @@ def get_lemond_executable() -> Path | None:
 
 def start_lemond_if_embedded():
     """Start the embedded lemond server if it exists."""
-    global _lemond_process
+    global _lemond_process, _lemond_log_file
     
     exe_path = get_lemond_executable()
     if not exe_path:
@@ -68,14 +69,20 @@ def start_lemond_if_embedded():
     logger.info("Found embedded lemond at %s. Starting it...", exe_path)
     
     try:
+        # Start lemond and redirect stdout/stderr to a log file in the cache directory
+        log_dir = Path.home() / ".cache" / "lemonade"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file_path = log_dir / "mage_lemond.log"
+        _lemond_log_file = open(log_file_path, "w", encoding="utf-8")
+
         # Start lemond without passing the read-only get_base_dir() as cache_dir.
         # Let lemond choose its default user-writable cache directory (~/.cache/lemonade).
         # We run it with cwd set to a writable home directory.
         _lemond_process = subprocess.Popen(
             [str(exe_path), "--port", "13305"],
             cwd=str(Path.home()),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=_lemond_log_file,
+            stderr=subprocess.STDOUT,
             env=clean_subprocess_env(),
         )
         logger.info("Embedded lemond started with PID %d", _lemond_process.pid)
@@ -104,7 +111,7 @@ def start_lemond_if_embedded():
 
 def stop_lemond():
     """Stop the embedded lemond server."""
-    global _lemond_process
+    global _lemond_process, _lemond_log_file
     if _lemond_process is not None:
         logger.info("Stopping embedded lemond (PID %d)...", _lemond_process.pid)
         try:
@@ -117,3 +124,10 @@ def stop_lemond():
             logger.error("Error stopping lemond: %s", e)
         finally:
             _lemond_process = None
+            
+    if _lemond_log_file is not None:
+        try:
+            _lemond_log_file.close()
+        except Exception:
+            pass
+        _lemond_log_file = None
