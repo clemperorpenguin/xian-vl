@@ -75,12 +75,17 @@ def test_clean_subprocess_env_appimage_stripping():
     from mage.utils.env import clean_subprocess_env
     
     mock_env = {
-        "PATH": "/usr/bin",
+        "PATH": "/tmp/.mount_mage123/usr/bin/mage-client:/usr/bin",
         "APPDIR": "/tmp/.mount_mage123",
+        "APPIMAGE": "/home/clem/mage.AppImage",
         "LD_LIBRARY_PATH": "/tmp/.mount_mage123/usr/bin/mage-client:/tmp/.mount_mage123/usr/lib:/usr/lib64",
         "LD_LIBRARY_PATH_ORIG": "/tmp/.mount_mage123/usr/lib:/usr/lib64",
         "DYLD_LIBRARY_PATH": "/tmp/.mount_mage123/usr/bin/mage-client:/tmp/.mount_mage123/usr/lib:/usr/local/lib",
-        "DYLD_LIBRARY_PATH_ORIG": "/tmp/.mount_mage123/usr/lib:/usr/local/lib"
+        "DYLD_LIBRARY_PATH_ORIG": "/tmp/.mount_mage123/usr/lib:/usr/local/lib",
+        "QT_PLUGIN_PATH": "/tmp/.mount_mage123/usr/bin/mage-client/plugins:/usr/lib/qt/plugins",
+        "XDG_DATA_DIRS": "/tmp/.mount_mage123/usr/share:/usr/local/share:/usr/share",
+        "PYTHONHOME": "/tmp/.mount_mage123/python_env",
+        "PYTHONPATH": "/usr/lib/python3.11"
     }
     
     with patch("sys.frozen", True, create=True), patch("os.environ", mock_env):
@@ -88,5 +93,11 @@ def test_clean_subprocess_env_appimage_stripping():
         assert cleaned["PATH"] == "/usr/bin"
         assert cleaned["LD_LIBRARY_PATH"] == "/usr/lib64"
         assert cleaned["DYLD_LIBRARY_PATH"] == "/usr/local/lib"
+        assert cleaned["QT_PLUGIN_PATH"] == "/usr/lib/qt/plugins"
+        assert cleaned["XDG_DATA_DIRS"] == "/usr/local/share:/usr/share"
+        assert cleaned["PYTHONPATH"] == "/usr/lib/python3.11"
+        assert "PYTHONHOME" not in cleaned
+        assert "APPDIR" not in cleaned
+        assert "APPIMAGE" not in cleaned
         assert "LD_LIBRARY_PATH_ORIG" not in cleaned
         assert "DYLD_LIBRARY_PATH_ORIG" not in cleaned
