@@ -112,12 +112,12 @@ class ResultBubble(QWidget):
         layout.addLayout(header)
 
         # Original text (collapsed by default)
-        if original_text:
-            self._orig_label = QLabel(original_text)
-            self._orig_label.setWordWrap(True)
-            self._orig_label.setStyleSheet("color: #999; font-size: 11px; font-style: italic;")
-            self._orig_label.setMaximumHeight(60)
-            layout.addWidget(self._orig_label)
+        self._orig_label = QLabel(original_text)
+        self._orig_label.setWordWrap(True)
+        self._orig_label.setStyleSheet("color: #999; font-size: 11px; font-style: italic;")
+        self._orig_label.setMaximumHeight(60)
+        self._orig_label.setVisible(bool(original_text))
+        layout.addWidget(self._orig_label)
 
         # Translation
         self._trans_label = QLabel(text)
@@ -142,14 +142,14 @@ class ResultBubble(QWidget):
         self._continue_btn.setVisible(truncated)
         footer.addWidget(self._continue_btn)
 
-        if show_stop:
-            self._stop_btn = QPushButton("🛑 Stop")
-            self._stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._stop_btn.setStyleSheet(
-                "color: #ff5555; font-weight: bold; font-size: 11px;"
-            )
-            self._stop_btn.clicked.connect(self.stop_requested.emit)
-            footer.addWidget(self._stop_btn)
+        self._stop_btn = QPushButton("🛑 Stop")
+        self._stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stop_btn.setStyleSheet(
+            "color: #ff5555; font-weight: bold; font-size: 11px;"
+        )
+        self._stop_btn.clicked.connect(self.stop_requested.emit)
+        self._stop_btn.setVisible(show_stop)
+        footer.addWidget(self._stop_btn)
 
         self._speak_src_btn = QPushButton("🔊 Speak (Src)")
         self._speak_src_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -181,6 +181,7 @@ class ResultBubble(QWidget):
             QTimer.singleShot(auto_close_ms, self.close)
 
         self.show()
+        self.raise_()
 
     # ------------------------------------------------------------------
     def _position_near(self, rect: QRect):
@@ -214,17 +215,76 @@ class ResultBubble(QWidget):
             cb.setText(self._text)
             logger.info("Translation copied to clipboard")
 
-    def update_text(self, text: str, original_text: str = "") -> None:
+    def update_text(self, text: str, original_text: str = "", border_color: str | None = None, truncated: bool = False, show_stop: bool = False) -> None:
         """Update displayed translation text in-place."""
         self._text = text
         self._trans_label.setText(text)
-        if original_text:
-            self._original = original_text
-            if self._orig_label:
-                self._orig_label.setText(original_text)
-                self._orig_label.show()
-            if hasattr(self, "_speak_src_btn"):
-                self._speak_src_btn.setEnabled(bool(original_text))
+        
+        self._original = original_text
+        if self._orig_label:
+            self._orig_label.setText(original_text)
+            self._orig_label.setVisible(bool(original_text))
+            
+        if hasattr(self, "_speak_src_btn"):
+            self._speak_src_btn.setEnabled(bool(original_text))
+            
+        if border_color:
+            border = border_color
+            root = self.findChild(QWidget, "BubbleRoot")
+            if root:
+                root.setStyleSheet(f"""
+                    #BubbleRoot {{
+                        background-color: rgba(20, 20, 20, 230);
+                        border: 1px solid {border};
+                        border-radius: 8px;
+                    }}
+                    QLabel {{
+                        color: #eee;
+                        font-size: 13px;
+                        padding: 2px;
+                    }}
+                    QPushButton {{
+                        background: transparent;
+                        color: #888;
+                        border: none;
+                        font-size: 11px;
+                        padding: 2px 6px;
+                    }}
+                    QPushButton:hover {{ color: #fff; }}
+                """)
+        else:
+            border = accent_hex()
+            root = self.findChild(QWidget, "BubbleRoot")
+            if root:
+                root.setStyleSheet(f"""
+                    #BubbleRoot {{
+                        background-color: rgba(20, 20, 20, 230);
+                        border: 1px solid {border};
+                        border-radius: 8px;
+                    }}
+                    QLabel {{
+                        color: #eee;
+                        font-size: 13px;
+                        padding: 2px;
+                    }}
+                    QPushButton {{
+                        background: transparent;
+                        color: #888;
+                        border: none;
+                        font-size: 11px;
+                        padding: 2px 6px;
+                    }}
+                    QPushButton:hover {{ color: #fff; }}
+                """)
+                
+        if hasattr(self, "_continue_btn"):
+            self._continue_btn.setVisible(truncated)
+            if truncated:
+                self._continue_btn.setText("▶ Continue")
+                self._continue_btn.setEnabled(True)
+                
+        if hasattr(self, "_stop_btn"):
+            self._stop_btn.setVisible(show_stop)
         
         self.adjustSize()
         # Clamp width
@@ -234,6 +294,8 @@ class ResultBubble(QWidget):
             self.adjustSize()
         if self._anchor_rect and not self._anchor_rect.isEmpty():
             self._position_near(self._anchor_rect)
+            
+        self.raise_()
 
     def _on_continue_clicked(self):
         self._continue_btn.setText("⏳ Continuing...")

@@ -701,13 +701,39 @@ class XianApp(QWidget):
 
     def _on_inference_thinking(self, worker):
         anchor = worker.anchor_rect
-        bubble = ResultBubble(
-            "Translating...",
-            anchor_rect=anchor,
-            auto_close_ms=0,
-        )
+        
+        # If in dialogue mode and we already have a dialogue bubble, reuse it
+        if self.dialogue_mode_active and self.dialogue_bubble and self.dialogue_bubble.isVisible():
+            bubble = self.dialogue_bubble
+            bubble.update_text("Translating...", original_text="", show_stop=True)
+            # Re-position if anchor shifted
+            if anchor and not anchor.isEmpty():
+                bubble._anchor_rect = anchor
+                bubble._position_near(anchor)
+        # If in cinematic mode and we already have a cinematic bubble, reuse it
+        elif self.cinematic_mode_active and self.cinematic_bubble and self.cinematic_bubble.isVisible():
+            bubble = self.cinematic_bubble
+            bubble.update_text("Translating...", original_text="")
+            if anchor and not anchor.isEmpty():
+                bubble._anchor_rect = anchor
+                bubble._position_near(anchor)
+        else:
+            # Create a new bubble
+            show_stop = self.dialogue_mode_active
+            bubble = ResultBubble(
+                "Translating...",
+                anchor_rect=anchor,
+                auto_close_ms=30000 if self.dialogue_mode_active else 0,
+                show_stop=show_stop,
+            )
+            if self.dialogue_mode_active:
+                self.dialogue_bubble = bubble
+            elif worker.action == "cinematic":
+                self.cinematic_bubble = bubble
+            else:
+                self._add_bubble(bubble)
+                
         self._active_bubbles[worker] = bubble
-        self._add_bubble(bubble)
 
     def _on_inference_partial(self, text, action, worker):
         bubble = self._active_bubbles.get(worker)
@@ -718,18 +744,6 @@ class XianApp(QWidget):
         """Handle completed inference."""
         anchor = worker.anchor_rect
         bubble = self._active_bubbles.pop(worker, None)
-        if bubble:
-            bubble.close()
-
-        if not results:
-            logger.info("Inference returned no results")
-            bubble = ResultBubble(
-                "No text detected in the selected region.",
-                anchor_rect=anchor,
-                auto_close_ms=5000,
-            )
-            self._add_bubble(bubble)
-            return
 
         # Combine all results into a single display
         originals = []
@@ -761,40 +775,62 @@ class XianApp(QWidget):
         # Detect truncation
         any_truncated = any(getattr(r, 'truncated', False) for r in results)
 
-        if action == "cinematic":
-            target_bubble = self._replace_persistent_bubble(
-                "cinematic_bubble",
-                translation_combined,
+        # If a thinking bubble is active, reuse it and update in-place
+        if bubble and bubble.isVisible():
+            show_stop = (bubble == self.dialogue_bubble)
+            bubble.update_text(
+                translation_combined if results else "No text detected in the selected region.",
                 original_text=original_combined,
-                anchor=anchor,
                 border_color=border_color,
                 truncated=any_truncated,
-            )
-        elif self.dialogue_mode_active:
-            target_bubble = self._replace_persistent_bubble(
-                "dialogue_bubble",
-                translation_combined,
-                original_text=original_combined,
-                anchor=anchor,
-                border_color=border_color,
-                truncated=any_truncated,
-                auto_close_ms=30000,
-                show_stop=True,
-            )
-        else:
-            bubble = ResultBubble(
-                translation_combined,
-                original_text=original_combined,
-                anchor_rect=anchor,
-                border_color=border_color,
-                truncated=any_truncated,
+                show_stop=show_stop
             )
             target_bubble = bubble
+            
             if any_truncated:
+                try:
+                    bubble.continue_requested.disconnect()
+                except Exception:
+                    pass
                 bubble.continue_requested.connect(
                     lambda b=bubble: self._on_continue_requested(b)
                 )
-            self._add_bubble(bubble)
+        else:
+            # Fallback if bubble was closed or not found
+            if action == "cinematic":
+                target_bubble = self._replace_persistent_bubble(
+                    "cinematic_bubble",
+                    translation_combined if results else "No text detected.",
+                    original_text=original_combined,
+                    anchor=anchor,
+                    border_color=border_color,
+                    truncated=any_truncated,
+                )
+            elif self.dialogue_mode_active:
+                target_bubble = self._replace_persistent_bubble(
+                    "dialogue_bubble",
+                    translation_combined if results else "No text detected.",
+                    original_text=original_combined,
+                    anchor=anchor,
+                    border_color=border_color,
+                    truncated=any_truncated,
+                    auto_close_ms=30000,
+                    show_stop=True,
+                )
+            else:
+                bubble = ResultBubble(
+                    translation_combined if results else "No text detected in the selected region.",
+                    original_text=original_combined,
+                    anchor_rect=anchor,
+                    border_color=border_color,
+                    truncated=any_truncated,
+                )
+                target_bubble = bubble
+                if any_truncated:
+                    bubble.continue_requested.connect(
+                        lambda b=bubble: self._on_continue_requested(b)
+                    )
+                self._add_bubble(bubble)
 
         # Store continuation context on target_bubble
         if any_truncated and target_bubble:
