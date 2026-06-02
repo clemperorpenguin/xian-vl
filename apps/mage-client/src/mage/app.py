@@ -1106,11 +1106,54 @@ class XianApp(QWidget):
             logger.info("Opening Lens in dialogue mode.")
             self.show_lens(dialogue_mode=True)
 
+    def clear_active_bubbles(self):
+        """Close and clear all translation bubbles to avoid capture and layering issues."""
+        if hasattr(self, "_bubbles") and self._bubbles:
+            for bubble in self._bubbles:
+                try:
+                    bubble.close()
+                except Exception:
+                    pass
+            self._bubbles.clear()
+
+        if hasattr(self, "_active_bubbles") and self._active_bubbles:
+            for worker, bubble in list(self._active_bubbles.items()):
+                try:
+                    bubble.close()
+                except Exception:
+                    pass
+            self._active_bubbles.clear()
+
+        if hasattr(self, "dialogue_bubble") and self.dialogue_bubble:
+            try:
+                self.dialogue_bubble.close()
+            except Exception:
+                pass
+            self.dialogue_bubble = None
+
+        if hasattr(self, "cinematic_bubble") and self.cinematic_bubble:
+            try:
+                self.cinematic_bubble.close()
+            except Exception:
+                pass
+            self.cinematic_bubble = None
+
+        if hasattr(self, "raid_bubble") and self.raid_bubble:
+            try:
+                self.raid_bubble.close()
+            except Exception:
+                pass
+            self.raid_bubble = None
+
     def on_dialogue_click(self):
         if self.dialogue_mode_active:
             if self._is_click_inside_mage(QCursor.pos()):
                 logger.debug("Dialogue click ignored: clicked inside MAGE UI element.")
                 return
+            
+            # Immediately close existing bubbles so they are not captured and don't cause layering conflicts on Wayland
+            self.clear_active_bubbles()
+            
             delay = int(self.settings.value(KEY_DIALOGUE_DELAY, 1000))
             self.dialogue_timer.start(delay)
 
