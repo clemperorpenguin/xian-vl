@@ -23,6 +23,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QPoint
 from PyQt6.QtGui import QGuiApplication, QFont, QKeyEvent, QCursor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
+from mage.utils.window_binder import set_bypass_compositor_hint_x11
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,10 @@ class HowToSayDialog(QWidget):
     def hideEvent(self, event):
         super().hideEvent(event)
         self.dialog_hidden.emit()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_bypass_compositor_hint_x11(self.winId())
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

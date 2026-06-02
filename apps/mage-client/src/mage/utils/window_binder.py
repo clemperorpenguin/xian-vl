@@ -521,3 +521,48 @@ class WindowBinder:
 def os_environ_check():
     import os
     return os.environ
+
+
+def set_bypass_compositor_hint_x11(win_id: int):
+    """Set _NET_WM_BYPASS_COMPOSITOR to 2 (don't bypass) to keep compositor active on Linux."""
+    if not sys.platform.startswith("linux"):
+        return
+    if not X11:
+        return
+    try:
+        display = X11.XOpenDisplay(None)
+        if not display:
+            return
+        
+        atom = X11.XInternAtom(display, b"_NET_WM_BYPASS_COMPOSITOR", False)
+        cardinal_atom = X11.XInternAtom(display, b"CARDINAL", False)
+        
+        # 2 = Don't bypass compositor (forces composition to stay enabled)
+        data = (c_ulong * 1)(2)
+        
+        # Define argtypes dynamically
+        X11.XChangeProperty.argtypes = [
+            c_void_p, c_ulong, c_ulong, c_ulong, c_int, c_int, POINTER(c_ulong), c_int
+        ]
+        X11.XChangeProperty.restype = c_int
+        
+        if hasattr(X11, "XFlush"):
+            X11.XFlush.argtypes = [c_void_p]
+            X11.XFlush.restype = c_int
+            
+        X11.XChangeProperty(
+            display,
+            win_id,
+            atom,
+            cardinal_atom,
+            32,
+            0, # PropModeReplace
+            data,
+            1
+        )
+        if hasattr(X11, "XFlush"):
+            X11.XFlush(display)
+        X11.XCloseDisplay(display)
+        logger.info("Set _NET_WM_BYPASS_COMPOSITOR to 2 on window XID: %s", win_id)
+    except Exception as e:
+        logger.debug("Failed to set _NET_WM_BYPASS_COMPOSITOR: %s", e)

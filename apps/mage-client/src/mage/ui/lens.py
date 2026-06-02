@@ -24,6 +24,7 @@ from PyQt6.QtCore import Qt, QRect, QPoint, QBuffer, QIODevice, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent, QPixmap, QImage, QGuiApplication
 from mage.capture.screen import ScreenCapture
 from mage.ui.theme import accent_hex, accent_hover_hex, accent_qcolor
+from mage.utils.window_binder import set_bypass_compositor_hint_x11
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +240,10 @@ class LensOverlayWindow(QWidget):
         self.closed.emit()
         super().closeEvent(event)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_bypass_compositor_hint_x11(self.winId())
+
 class CinematicLensOverlay(QWidget):
     """Overlay for selecting multiple regions for Cinematic Mode."""
     closed = pyqtSignal()
@@ -368,3 +373,7 @@ class CinematicLensOverlay(QWidget):
     def closeEvent(self, event):
         self.closed.emit()
         super().closeEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_bypass_compositor_hint_x11(self.winId())

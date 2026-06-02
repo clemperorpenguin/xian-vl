@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QPushButton, QHBoxLayo
 from PyQt6.QtCore import Qt, QTimer, QRect, QPoint, pyqtSignal
 from PyQt6.QtGui import QFont, QGuiApplication, QCursor
 from mage.ui.theme import accent_hex
+from mage.utils.window_binder import set_bypass_compositor_hint_x11
 
 logger = logging.getLogger(__name__)
 
@@ -328,3 +329,7 @@ class ResultBubble(QWidget):
             event.accept()
         else:
             super().mouseMoveEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_bypass_compositor_hint_x11(self.winId())

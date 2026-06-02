@@ -30,6 +30,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QThread, QRect, QSettings, QBuffer, QIO
 from PyQt6.QtGui import QGuiApplication
 from mage.ui.grounding import GroundingHighlight
 from mage.ui.theme import accent_hex, accent_hover_hex
+from mage.utils.window_binder import set_bypass_compositor_hint_x11
 
 logger = logging.getLogger(__name__)
 
@@ -343,6 +344,7 @@ class ChatSidebar(QWidget):
         self.activateWindow()
         self.raise_()
         self.input_field.setFocus()
+        set_bypass_compositor_hint_x11(self.winId())
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

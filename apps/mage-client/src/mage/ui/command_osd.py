@@ -23,6 +23,7 @@ from PyQt6.QtGui import QGuiApplication, QFont, QCursor
 
 from mage.ui.theme import accent_hex
 from shared_types.enums import SourceLanguage, TargetLanguage
+from mage.utils.window_binder import set_bypass_compositor_hint_x11
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,10 @@ class CommandOSD(QWidget):
     def hideEvent(self, event):
         super().hideEvent(event)
         self.osd_hidden.emit()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_bypass_compositor_hint_x11(self.winId())
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
