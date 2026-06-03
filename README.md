@@ -63,18 +63,23 @@ To remove the desktop entry and icon:
 If you are running Windows or macOS, or prefer not to build from source, download pre-built packages from the [GitHub Releases](https://github.com/clemperorpenguin/xian-vl/releases) page.
 
 Releases come in two variants:
-- **Lite** (`mage-client-lite.zip`): Standalone lightweight version. Requires connecting to an external running Lemonade Server.
-- **Full** (`mage-client-full.zip` / `mage-client-full.dmg`): Bundled with the embedded `lemond` server, which starts and stops automatically when the application runs.
+- **Lite**: Standalone lightweight version. Requires connecting to an external running Lemonade Server.
+- **Full**: Bundled with the embedded `lemond` server, which starts and stops automatically when the application runs.
 
 #### Windows
-1. Download `mage-client-lite.zip` or `mage-client-full.zip`.
+1. Download `mage-client-Windows-x86-64-lite.zip` or `mage-client-Windows-x86-64-full.zip`.
 2. Extract the archive.
 3. Double-click `mage-client.exe` to run.
 
 #### macOS
-1. Download `mage-client-lite.dmg` or `mage-client-full.dmg`.
+1. Download `mage-client-MacOS-ARM64-lite.dmg` or `mage-client-MacOS-ARM64-full.dmg` (or ZIP equivalents).
 2. Double-click the DMG and drag `mage-client.app` to your **Applications** directory.
 3. Open and run the application.
+   > [!NOTE]
+   > Because the application is not notarized/signed by Apple, Gatekeeper will block it with a warning saying the application is "damaged and can't be opened". You can easily fix this by running the following command in your terminal:
+   > ```bash
+   > xattr -cr /Applications/mage-client.app
+   > ```
 
 ### Manual Setup (All Platforms)
 
