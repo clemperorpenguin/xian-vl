@@ -94,7 +94,7 @@ uv run --package mage-client mage
 
 ### Controls
 - **Open Action Menu / OSD** — Double-Tap `Shift` (Default Leader Key)
-- **Trigger Screen Capture** — Action Menu `C` (select screen region, then Translate / Explain / Chat)
+- **Trigger Screen Capture** — Action Menu `C` (select screen region, then Translate / Dialogue / Chat)
 - **Toggle Chat Sidebar** — Action Menu `A`
 - **Translate for Chat (Input)** — Action Menu `T`
 - **Settings Panel** — Action Menu `S`

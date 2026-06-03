@@ -34,6 +34,6 @@ uv run --package mage-client mage
 ```
 
 ### Hotkeys
-- **Capture & Translate** — Action Key (`Double-Tap Shift`), then `C` to freeze the screen. Drag to select, then Translate / Explain / Chat.
+- **Capture & Translate** — Action Key (`Double-Tap Shift`), then `C` to freeze the screen. Drag to select, then Translate / Dialogue / Chat.
 - **Chat Sidebar** — Action Key, then `A`.
 - **Settings** — Action Key, then `S`.
