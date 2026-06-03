@@ -126,7 +126,7 @@ class AsyncEngine(threading.Thread):
         self._loop.set_exception_handler(self._handle_exception)
         asyncio.set_event_loop(self._loop)
         self._client = AsyncOpenAI(base_url=self._base_url, api_key=self._api_key)
-        self._ready.set()
+        self._loop.call_soon(self._ready.set)
         logger.info("AsyncEngine started (base_url=%s)", sanitize_url(self._base_url))
         try:
             self._loop.run_forever()
