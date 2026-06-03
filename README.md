@@ -1,5 +1,7 @@
 # Xian-MAGE — Real-Time Vision-Language Assistant for Gaming Environments 🧙‍♂️🎮🤖
 
+[العربية](docs/README.ar.md) | [Español](docs/README.es.md) | [हिन्दी](docs/README.hi.md) | [Русский](docs/README.ru.md) | [Tiếng Việt](docs/README.vi.md) | [简体中文](docs/README.zh.md)
+
 Xian-MAGE is a real-time, persistent desktop gaming HUD and assistant for Linux (Wayland). Powered by the **[Lemonade Server](https://lemonade-server.ai/)** backend, it overlays real-time OCR, translation, visual grounding clicking visualizers, and interactive conversational chat directly on top of active gaming environments.
 
 Because inference is orchestrated via Lemonade, **MAGE supports Vulkan-accelerated execution, running smoothly on AMD Radeon™ GPUs and other accelerators.**
