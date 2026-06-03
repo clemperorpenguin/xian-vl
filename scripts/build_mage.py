@@ -198,9 +198,24 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
         
     elif sys.platform == "darwin":
         zip_path = app_dir / f"{archive_name}.zip"
-        print(f"Creating zip archive {zip_path}...")
-        shutil.make_archive(str(app_dir / archive_name), 'zip', dist_dir, "mage-client.app")
-        print(f"Generated {zip_path}")
+        if shutil.which("zip"):
+            print(f"Creating zip archive {zip_path} using native zip to preserve symlinks...")
+            if zip_path.exists():
+                zip_path.unlink()
+            try:
+                subprocess.run([
+                    "zip", "-r", "-y",
+                    str(zip_path),
+                    "mage-client.app"
+                ], cwd=dist_dir, check=True)
+                print(f"Generated {zip_path}")
+            except Exception as e:
+                print(f"Warning: Native zip failed ({e}). Falling back to shutil...")
+                shutil.make_archive(str(app_dir / archive_name), 'zip', dist_dir, "mage-client.app")
+        else:
+            print(f"zip utility not found. Creating zip archive {zip_path} via shutil...")
+            shutil.make_archive(str(app_dir / archive_name), 'zip', dist_dir, "mage-client.app")
+            print(f"Generated {zip_path}")
 
         dmg_path = app_dir / f"{archive_name}.dmg"
         if shutil.which("create-dmg"):
