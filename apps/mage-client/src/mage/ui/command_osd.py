@@ -24,6 +24,7 @@ from PyQt6.QtGui import QGuiApplication, QFont, QCursor
 from mage.ui.theme import accent_hex
 from shared_types.enums import SourceLanguage, TargetLanguage
 from mage.utils.window_binder import set_bypass_compositor_hint_x11
+from shared_types.state import t
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ class CommandOSD(QWidget):
         inner_layout.setSpacing(20)
 
         # Title
-        title = QLabel("COMMAND MODE")
+        title = QLabel(t("osd.title.command_mode"))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_font = QFont("sans-serif", 13, QFont.Weight.Bold)
         title_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2.0)
@@ -120,15 +121,15 @@ class CommandOSD(QWidget):
         options_layout.setSpacing(32)
 
         # We create a helper to build the options
-        options_layout.addWidget(self._create_option("C", "Capture"))
-        options_layout.addWidget(self._create_option("A", "Chat"))
-        options_layout.addWidget(self._create_option("O", "Dialogue"))
-        self.cinematic_option = self._create_option("M", "Cinematic")
+        options_layout.addWidget(self._create_option("C", t("osd.option.capture")))
+        options_layout.addWidget(self._create_option("A", t("osd.option.chat")))
+        options_layout.addWidget(self._create_option("O", t("osd.option.dialogue")))
+        self.cinematic_option = self._create_option("M", t("osd.option.cinematic"))
         options_layout.addWidget(self.cinematic_option)
-        options_layout.addWidget(self._create_option("T", "Translate"))
-        self.raid_option = self._create_option("R", "Raid")
+        options_layout.addWidget(self._create_option("T", t("osd.option.translate")))
+        self.raid_option = self._create_option("R", t("osd.option.raid"))
         options_layout.addWidget(self.raid_option)
-        options_layout.addWidget(self._create_option("S", "Settings"))
+        options_layout.addWidget(self._create_option("S", t("osd.option.settings")))
 
         inner_layout.addLayout(options_layout)
 
@@ -171,11 +172,11 @@ class CommandOSD(QWidget):
             """)
 
         lbl_style = "color: #999; font-size: 12px; font-weight: bold;"
-        sl = QLabel("Src:")
+        sl = QLabel(t("osd.label.src"))
         sl.setStyleSheet(lbl_style)
-        tl = QLabel("Tgt:")
+        tl = QLabel(t("osd.label.tgt"))
         tl.setStyleSheet(lbl_style)
-        ml = QLabel("Model:")
+        ml = QLabel(t("osd.label.model"))
         ml.setStyleSheet(lbl_style)
 
         settings_layout.addWidget(sl)

@@ -41,6 +41,8 @@ from mage.utils.env import clean_subprocess_env
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["capture_system_audio", "ContinuousAudioStreamer", "play_audio", "play_audio_async"]
+
 
 def _find_recorder() -> str | None:
     """Return the path to a working system-audio recorder, or *None*."""
@@ -204,7 +206,8 @@ class ContinuousAudioStreamer:
             except asyncio.TimeoutError:
                 # No audio produced. Treat as pure silence.
                 data = b'\x00' * read_size
-                chunk_bytes.extend(data)
+                if len(chunk_bytes) > 0:
+                    chunk_bytes.extend(data)
                 rms = 0
             except asyncio.IncompleteReadError as e:
                 data = e.partial
@@ -257,11 +260,6 @@ class ContinuousAudioStreamer:
 
 def play_audio(audio_bytes: bytes):
     """Play WAV audio bytes using pw-play, paplay, or aplay."""
-    import shutil
-    import subprocess
-    import tempfile
-    from pathlib import Path
-    
     player = None
     for cmd in ("pw-play", "paplay", "aplay"):
         if shutil.which(cmd):
@@ -277,7 +275,9 @@ def play_audio(audio_bytes: bytes):
         tmp_path = tmp.name
         
     try:
-        subprocess.run([player, tmp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=clean_subprocess_env())
+        subprocess.run([player, tmp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=clean_subprocess_env(), timeout=30.0)
+    except subprocess.TimeoutExpired:
+        logger.error("Audio playback timed out after 30 seconds")
     except Exception as e:
         logger.error("Failed to play audio with %s: %s", player, e)
     finally:

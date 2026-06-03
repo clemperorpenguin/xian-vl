@@ -413,12 +413,39 @@ class WindowBinder:
                 logger.error("Error closing X11 display: %s", e)
             self._x11_display = None
 
+    def _is_cached_window_valid(self) -> bool:
+        if not self._win_id:
+            return False
+        try:
+            if self.platform == "windows":
+                user32 = ctypes.windll.user32
+                if not user32.IsWindow(self._win_id):
+                    return False
+                length = user32.GetWindowTextLengthW(self._win_id)
+                if length == 0:
+                    return False
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(self._win_id, buf, length + 1)
+                return self.target_title.lower() in buf.value.lower()
+            elif self.platform == "x11" and self._x11_display and X11:
+                attrs = XWindowAttributes()
+                if X11.XGetWindowAttributes(self._x11_display, self._win_id, byref(attrs)) == 0:
+                    return False
+                name = get_window_title_x11(self._x11_display, self._win_id)
+                return name is not None and self.target_title.lower() in name.lower()
+        except Exception as e:
+            logger.debug("Error verifying cached window validity: %s", e)
+        return False
+
     def update_target(self):
         """Locates the window ID/handle matching the target title."""
         if not self.target_title:
             self._win_id = None
             return
             
+        if self._win_id is not None and self._is_cached_window_valid():
+            return
+
         try:
             if self.platform == "windows":
                 self._win_id = find_window_windows(self.target_title)
@@ -523,14 +550,20 @@ def os_environ_check():
     return os.environ
 
 
+_bypass_hint_display = None
+
+
 def set_bypass_compositor_hint_x11(win_id: int):
     """Set _NET_WM_BYPASS_COMPOSITOR to 2 (don't bypass) to keep compositor active on Linux."""
+    global _bypass_hint_display
     if not sys.platform.startswith("linux"):
         return
     if not X11:
         return
     try:
-        display = X11.XOpenDisplay(None)
+        if _bypass_hint_display is None:
+            _bypass_hint_display = X11.XOpenDisplay(None)
+        display = _bypass_hint_display
         if not display:
             return
         
@@ -562,7 +595,6 @@ def set_bypass_compositor_hint_x11(win_id: int):
         )
         if hasattr(X11, "XFlush"):
             X11.XFlush(display)
-        X11.XCloseDisplay(display)
         logger.info("Set _NET_WM_BYPASS_COMPOSITOR to 2 on window XID: %s", win_id)
     except Exception as e:
         logger.debug("Failed to set _NET_WM_BYPASS_COMPOSITOR: %s", e)

@@ -98,5 +98,254 @@
   "tray.menu.quit": {
     "value": "Quit",
     "context": "Tray menu item to quit application"
+  },
+  "lens.button.translate": {
+    "value": "Translate",
+    "context": "Lens action button to translate selected text"
+  },
+  "lens.button.dialogue": {
+    "value": "Dialogue",
+    "context": "Lens action button for dialogue translation"
+  },
+  "lens.button.explain": {
+    "value": "Explain",
+    "context": "Lens action button to explain selected text"
+  },
+  "lens.button.dictionary": {
+    "value": "Dictionary",
+    "context": "Lens action button to look up word in dictionary"
+  },
+  "lens.button.chat_context": {
+    "value": "Chat Context",
+    "context": "Lens action button to send text to chat context"
+  },
+  "lens.button.confirm": {
+    "value": "Confirm",
+    "context": "Cinematic lens button to confirm regions"
+  },
+  "lens.button.clear_all": {
+    "value": "Clear All",
+    "context": "Cinematic lens button to clear regions"
+  },
+  "bubble.title.translation": {
+    "value": "Xian — Translation",
+    "context": "Standard title for a translation result bubble"
+  },
+  "bubble.title.speculative": {
+    "value": "⚠️ Xian — Speculative",
+    "context": "Title for a speculative translation result bubble"
+  },
+  "bubble.button.copy": {
+    "value": "📋 Copy",
+    "context": "Button text to copy translation content"
+  },
+  "bubble.button.continue": {
+    "value": "▶ Continue",
+    "context": "Button text to continue truncated translation"
+  },
+  "bubble.button.stop": {
+    "value": "🛑 Stop",
+    "context": "Button text to stop translation"
+  },
+  "bubble.button.speak_src": {
+    "value": "🔊 Speak (Src)",
+    "context": "Button text to read source language text"
+  },
+  "bubble.button.speak_tgt": {
+    "value": "🔊 Speak (Tgt)",
+    "context": "Button text to read target language translation"
+  },
+  "bubble.status.translating": {
+    "value": "Translating...",
+    "context": "Temporary status text for translation bubbles"
+  },
+  "bubble.status.continuing": {
+    "value": "⏳ Continuing...",
+    "context": "Temporary status text for continuing translation"
+  },
+  "chat.title.translate": {
+    "value": "Translate for Chat",
+    "context": "Title of the chat translation helper dialog"
+  },
+  "chat.label.original": {
+    "value": "Original",
+    "context": "Label of input text for chat translation helper"
+  },
+  "chat.placeholder.type_message": {
+    "value": "Type what you want to say in game chat...",
+    "context": "Placeholder text for chat translation input"
+  },
+  "chat.label.translation": {
+    "value": "Translation",
+    "context": "Label of output text for chat translation helper"
+  },
+  "chat.button.translate": {
+    "value": "Translate",
+    "context": "Button to trigger chat translation helper"
+  },
+  "chat.button.regenerate": {
+    "value": "Regenerate",
+    "context": "Button to regenerate chat translation"
+  },
+  "chat.button.copy": {
+    "value": "Copy",
+    "context": "Button to copy translated chat string"
+  },
+  "chat.button.save": {
+    "value": "Save",
+    "context": "Button to save chat translation history"
+  },
+  "chat.status.translating": {
+    "value": "Translating...",
+    "context": "Status message while chat helper is translating"
+  },
+  "chat.status.copied": {
+    "value": "Copied to clipboard!",
+    "context": "Status message after copying translated chat"
+  },
+  "chat.status.saved": {
+    "value": "Saved to {path}",
+    "context": "Status message after saving chat translation history"
+  },
+  "chat.status.complete": {
+    "value": "Translation complete.",
+    "context": "Status message when chat translation is done"
+  },
+  "chat.status.error": {
+    "value": "Error: {error}",
+    "context": "Error message when chat translation fails"
+  },
+  "osd.title.command_mode": {
+    "value": "COMMAND MODE",
+    "context": "Title header of OSD command mode overlay"
+  },
+  "osd.option.capture": {
+    "value": "Capture",
+    "context": "OSD option label for screen capture action"
+  },
+  "osd.option.chat": {
+    "value": "Chat",
+    "context": "OSD option label for chat sidebar"
+  },
+  "osd.option.dialogue": {
+    "value": "Dialogue",
+    "context": "OSD option label for dialogue mode"
+  },
+  "osd.option.cinematic": {
+    "value": "Cinematic",
+    "context": "OSD option label for cinematic translation mode"
+  },
+  "osd.option.translate": {
+    "value": "Translate",
+    "context": "OSD option label for inline translation"
+  },
+  "osd.option.raid": {
+    "value": "Raid",
+    "context": "OSD option label for raid voice translation mode"
+  },
+  "osd.option.settings": {
+    "value": "Settings",
+    "context": "OSD option label for settings menu"
+  },
+  "osd.label.src": {
+    "value": "Src:",
+    "context": "Abbreviated label for source language selection in OSD"
+  },
+  "osd.label.tgt": {
+    "value": "Tgt:",
+    "context": "Abbreviated label for target language selection in OSD"
+  },
+  "osd.label.model": {
+    "value": "Model:",
+    "context": "Label for inference model selection in OSD"
+  },
+  "chat.sidebar.placeholder": {
+    "value": "Ask the assistant...",
+    "context": "Placeholder for input field in chat sidebar"
+  },
+  "chat.sidebar.button.attach": {
+    "value": "Attach",
+    "context": "Button label to attach a screenshot to chat sidebar"
+  },
+  "chat.sidebar.button.send": {
+    "value": "Send",
+    "context": "Button label to send chat query"
+  },
+  "chat.sidebar.button.close": {
+    "value": "Close",
+    "context": "Button label to close chat sidebar"
+  },
+  "leader.double_shift": {
+    "value": "Double-Tap Shift",
+    "context": "OSD Leader Key double-tap shift trigger setting display name"
+  },
+  "leader.double_ctrl": {
+    "value": "Double-Tap Ctrl",
+    "context": "OSD Leader Key double-tap ctrl trigger setting display name"
+  },
+  "leader.double_alt": {
+    "value": "Double-Tap Alt",
+    "context": "OSD Leader Key double-tap alt trigger setting display name"
+  },
+  "leader.double_super": {
+    "value": "Double-Tap Super",
+    "context": "OSD Leader Key double-tap super trigger setting display name"
+  },
+  "settings.option.none_overlay": {
+    "value": "None (Standard Overlay Mode)",
+    "context": "Option inside target window selection combo meaning standard overlay mode is active"
+  },
+  "settings.warn.http_remote.title": {
+    "value": "HTTP to remote server",
+    "context": "Warning dialog title for non-loopback HTTP API configurations"
+  },
+  "settings.warn.http_remote.body": {
+    "value": "You configured Lemonade over HTTP to a host that is not loopback. Traffic can be read or modified on the network path. Lemonade does not provide HTTPS itself; use a VPN, SSH tunnel, or a TLS reverse proxy if this endpoint is reachable beyond a single trusted machine.\n\nChoose Save to continue or Cancel to go back.",
+    "context": "Warning dialog body for non-loopback HTTP API configurations"
+  },
+  "tray.tooltip": {
+    "value": "Xian-VL — Lens & Chat Assistant",
+    "context": "System tray icon tooltip"
+  },
+  "tray.message.setup_title": {
+    "value": "MAGE Setup",
+    "context": "Title of system tray notifications for MAGE pre-warming and model status"
+  },
+  "about.dialog.title": {
+    "value": "About MAGE",
+    "context": "Window title for the about dialog"
+  },
+  "about.dialog.text": {
+    "value": "<h3>MAGE — Gaming HUD for real-time screen translation</h3><p>Copyright &copy; 2026 Clementine Pendragon &lt;clem@pendragon.systems&gt;</p><p>Contact: <a href='mailto:clem@pendragon.systems'>clem@pendragon.systems</a><br>Mailing Address: Clementine Pendragon, c/o Xian Project Development</p><p>This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.</p><p>This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.</p><p>You should have received a copy of the GNU General Public License along with this program. If not, see <a href='https://www.gnu.org/licenses/'>https://www.gnu.org/licenses/</a>.</p>",
+    "context": "Rich text for the About dialog content"
+  },
+  "dialogue.status.activated": {
+    "value": "Dialogue Mode ON",
+    "context": "System feedback bubble text shown when dialogue mode is activated"
+  },
+  "dialogue.status.deactivated": {
+    "value": "Dialogue Mode Disabled",
+    "context": "System feedback bubble text shown when dialogue mode is deactivated"
+  },
+  "cinematic.status.activated": {
+    "value": "Cinematic Mode ON (Press ` to capture)",
+    "context": "System feedback bubble text shown when cinematic mode is activated"
+  },
+  "cinematic.status.deactivated": {
+    "value": "Cinematic Mode Disabled",
+    "context": "System feedback bubble text shown when cinematic mode is deactivated"
+  },
+  "cinematic.status.recording": {
+    "value": "Recording audio and capturing screen...",
+    "context": "System feedback bubble text shown while cinematic mode captures audio/video"
+  },
+  "raid.status.recording": {
+    "value": "Recording raid leader...",
+    "context": "System feedback bubble text shown while raid translation mode is active"
+  },
+  "cinematic.status.requires_region": {
+    "value": "Cinematic Mode requires at least one region.",
+    "context": "System feedback bubble text shown when user attempts cinematic mode without defining region"
   }
 }
+

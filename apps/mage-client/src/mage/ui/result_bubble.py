@@ -24,6 +24,7 @@ from PyQt6.QtCore import Qt, QTimer, QRect, QPoint, pyqtSignal
 from PyQt6.QtGui import QFont, QGuiApplication, QCursor
 from mage.ui.theme import accent_hex
 from mage.utils.window_binder import set_bypass_compositor_hint_x11
+from shared_types.state import t
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,8 @@ class ResultBubble(QWidget):
         self._anchor_rect = anchor_rect
         self._orig_label = None
         self._drag_position = QPoint()
+        self._continue_count = 0
+        self.continuation_messages = None
 
         border = border_color if border_color else accent_hex()
 
@@ -99,7 +102,7 @@ class ResultBubble(QWidget):
 
         # Header row with close button
         header = QHBoxLayout()
-        display_title = "⚠️ Xian — Speculative" if border_color else "Xian — Translation"
+        display_title = t("bubble.title.speculative") if border_color else t("bubble.title.translation")
         title = QLabel(display_title)
         title_color = border_color if border_color else accent_hex()
         title.setStyleSheet(f"color: {title_color}; font-weight: bold; font-size: 11px;")
@@ -129,12 +132,12 @@ class ResultBubble(QWidget):
 
         # Footer
         footer = QHBoxLayout()
-        copy_btn = QPushButton("📋 Copy")
+        copy_btn = QPushButton(t("bubble.button.copy"))
         copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         copy_btn.clicked.connect(self._copy_to_clipboard)
         footer.addWidget(copy_btn)
 
-        self._continue_btn = QPushButton("▶ Continue")
+        self._continue_btn = QPushButton(t("bubble.button.continue"))
         self._continue_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._continue_btn.setStyleSheet(
             "color: #4ecdc4; font-weight: bold; font-size: 11px;"
@@ -143,7 +146,7 @@ class ResultBubble(QWidget):
         self._continue_btn.setVisible(truncated)
         footer.addWidget(self._continue_btn)
 
-        self._stop_btn = QPushButton("🛑 Stop")
+        self._stop_btn = QPushButton(t("bubble.button.stop"))
         self._stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._stop_btn.setStyleSheet(
             "color: #ff5555; font-weight: bold; font-size: 11px;"
@@ -152,13 +155,13 @@ class ResultBubble(QWidget):
         self._stop_btn.setVisible(show_stop)
         footer.addWidget(self._stop_btn)
 
-        self._speak_src_btn = QPushButton("🔊 Speak (Src)")
+        self._speak_src_btn = QPushButton(t("bubble.button.speak_src"))
         self._speak_src_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._speak_src_btn.clicked.connect(self._on_speak_src_clicked)
         self._speak_src_btn.setEnabled(bool(original_text))
         footer.addWidget(self._speak_src_btn)
 
-        self._speak_tgt_btn = QPushButton("🔊 Speak (Tgt)")
+        self._speak_tgt_btn = QPushButton(t("bubble.button.speak_tgt"))
         self._speak_tgt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._speak_tgt_btn.clicked.connect(self._on_speak_tgt_clicked)
         footer.addWidget(self._speak_tgt_btn)
@@ -281,7 +284,7 @@ class ResultBubble(QWidget):
         if hasattr(self, "_continue_btn"):
             self._continue_btn.setVisible(truncated)
             if truncated:
-                self._continue_btn.setText("▶ Continue")
+                self._continue_btn.setText(t("bubble.button.continue"))
                 self._continue_btn.setEnabled(True)
                 
         if hasattr(self, "_stop_btn"):
@@ -299,7 +302,7 @@ class ResultBubble(QWidget):
         self.raise_()
 
     def _on_continue_clicked(self):
-        self._continue_btn.setText("⏳ Continuing...")
+        self._continue_btn.setText(t("bubble.status.continuing"))
         self._continue_btn.setEnabled(False)
         self.continue_requested.emit()
 
@@ -307,7 +310,7 @@ class ResultBubble(QWidget):
         """Show or hide the continue button (e.g. after continuation completes)."""
         self._continue_btn.setVisible(visible)
         if visible:
-            self._continue_btn.setText("▶ Continue")
+            self._continue_btn.setText(t("bubble.button.continue"))
             self._continue_btn.setEnabled(True)
 
     def _on_speak_src_clicked(self):

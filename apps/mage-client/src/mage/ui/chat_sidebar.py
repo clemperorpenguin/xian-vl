@@ -23,6 +23,7 @@ import io
 import os
 from PIL import Image
 from html import escape as html_escape
+from html.parser import HTMLParser
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushButton, QHBoxLayout, QTextBrowser
 )
@@ -31,8 +32,81 @@ from PyQt6.QtGui import QGuiApplication
 from mage.ui.grounding import GroundingHighlight
 from mage.ui.theme import accent_hex, accent_hover_hex
 from mage.utils.window_binder import set_bypass_compositor_hint_x11
+from shared_types import constants
+from shared_types.state import t
 
 logger = logging.getLogger(__name__)
+
+
+class SafeHTMLParser(HTMLParser):
+    def __init__(self, allowed_tags, allowed_attrs, media_dir):
+        super().__init__()
+        self.allowed_tags = allowed_tags
+        self.allowed_attrs = allowed_attrs
+        self.media_dir = media_dir
+        self.result = []
+        self.tag_stack = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.allowed_tags:
+            self.tag_stack.append(tag)
+            filtered_attrs = []
+            for attr, val in attrs:
+                if attr in self.allowed_attrs.get(tag, []):
+                    if tag == 'a' and attr == 'href':
+                        if val.startswith('play_audio://'):
+                            audio_path = val.replace('play_audio://', '')
+                            if not self._is_safe_path(audio_path):
+                                continue
+                        elif val.startswith('file://'):
+                            file_path = val.replace('file://', '')
+                            if not self._is_safe_path(file_path):
+                                continue
+                        elif not (val.startswith('http://') or val.startswith('https://')):
+                            continue
+                    elif tag == 'img' and attr == 'src':
+                        if val.startswith('file://'):
+                            img_path = val.replace('file://', '')
+                            if not self._is_safe_path(img_path):
+                                continue
+                        else:
+                            continue
+                    filtered_attrs.append(f'{attr}="{html_escape(val)}"')
+            attr_str = f" {' '.join(filtered_attrs)}" if filtered_attrs else ""
+            self.result.append(f"<{tag}{attr_str}>")
+
+    def handle_endtag(self, tag):
+        if tag in self.allowed_tags and self.tag_stack and self.tag_stack[-1] == tag:
+            self.tag_stack.pop()
+            self.result.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        self.result.append(html_escape(data))
+
+    def _is_safe_path(self, path: str) -> bool:
+        real_path = os.path.realpath(path)
+        real_media_dir = os.path.realpath(self.media_dir)
+        try:
+            return os.path.commonpath([real_path, real_media_dir]) == real_media_dir
+        except ValueError:
+            return False
+
+    def get_safe_html(self):
+        return "".join(self.result)
+
+
+def sanitize_html(html_str: str, media_dir: str) -> str:
+    allowed_tags = {'p', 'br', 'code', 'pre', 'em', 'strong', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a', 'b', 'i', 'img'}
+    allowed_attrs = {
+        'a': {'href'},
+        'pre': {'class'},
+        'code': {'class'},
+        'img': {'src', 'width', 'height'},
+    }
+    parser = SafeHTMLParser(allowed_tags, allowed_attrs, media_dir)
+    parser.feed(html_str)
+    return parser.get_safe_html()
+
 
 class ChatWorker(QThread):
     result_ready = pyqtSignal(str)
@@ -174,17 +248,17 @@ class ChatSidebar(QWidget):
         # Input area
         input_layout = QHBoxLayout()
         self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("Ask the assistant...")
+        self.input_field.setPlaceholderText(t("chat.sidebar.placeholder"))
         self.input_field.returnPressed.connect(self._send_message)
         
-        self.attach_btn = QPushButton("Attach")
+        self.attach_btn = QPushButton(t("chat.sidebar.button.attach"))
         self.attach_btn.setStyleSheet("background-color: #f57c00;")
         self.attach_btn.clicked.connect(self._attach_screenshot)
         
-        self.send_btn = QPushButton("Send")
+        self.send_btn = QPushButton(t("chat.sidebar.button.send"))
         self.send_btn.clicked.connect(self._send_message)
         
-        self.close_btn = QPushButton("Close")
+        self.close_btn = QPushButton(t("chat.sidebar.button.close"))
         self.close_btn.setStyleSheet("background-color: #d32f2f;")
         self.close_btn.clicked.connect(self.hide)
         
@@ -250,7 +324,7 @@ class ChatSidebar(QWidget):
             prompt += "\n(Please output the bounding box coordinates of the element I should click in the format [ymin, xmin, ymax, xmax] relative to the image size from 0 to 1000.)"
         
         # Read source language from settings
-        settings = QSettings("XianVL", "Mage")
+        settings = QSettings(constants.ORGANIZATION_NAME, constants.APPLICATION_NAME)
         source_lang = settings.value("source_lang", "zh-CN")
         
         self.worker = ChatWorker(self.processor, prompt, source_lang=source_lang)
@@ -289,6 +363,7 @@ class ChatSidebar(QWidget):
         
     def _append_message(self, sender: str, text: str, color: str, raw_html: bool = False):
         safe_sender = html_escape(sender)
+        media_dir = os.path.join(self.processor.wiki_dir, "media")
         
         if sender == "System" and "📷 Screenshot attached" in text:
             safe_text = text
@@ -299,18 +374,39 @@ class ChatSidebar(QWidget):
             
             def repl_img(match):
                 filepath = match.group(1)
-                return f'<br><img src="file://{filepath}" width="280"><br><a href="file://{filepath}">View Image</a>'
+                real_path = os.path.realpath(filepath)
+                real_media_dir = os.path.realpath(media_dir)
+                try:
+                    is_safe = os.path.commonpath([real_path, real_media_dir]) == real_media_dir
+                except ValueError:
+                    is_safe = False
+                if is_safe:
+                    return f'<br><img src="file://{filepath}" width="280"><br><a href="file://{filepath}">View Image</a>'
+                else:
+                    logger.warning("Blocked image rendering from outside media dir: %s", filepath)
+                    return "[Blocked image]"
             
             safe_text = re.sub(r'file://([^\s\'"&<>]+?\.(?:png|jpg|jpeg))', repl_img, safe_text, flags=re.IGNORECASE)
             
             def repl_audio(match):
                 filepath = match.group(1)
-                return f'<br>🎵 <a href="play_audio://{filepath}">Play Synthesized Audio</a>'
+                real_path = os.path.realpath(filepath)
+                real_media_dir = os.path.realpath(media_dir)
+                try:
+                    is_safe = os.path.commonpath([real_path, real_media_dir]) == real_media_dir
+                except ValueError:
+                    is_safe = False
+                if is_safe:
+                    return f'<br>🎵 <a href="play_audio://{filepath}">Play Synthesized Audio</a>'
+                else:
+                    logger.warning("Blocked audio link from outside media dir: %s", filepath)
+                    return "[Blocked audio]"
                 
             safe_text = re.sub(r'file://([^\s\'"&<>]+?\.(?:wav|mp3))', repl_audio, safe_text, flags=re.IGNORECASE)
 
         html = f'<p><b style="color:{color}">{safe_sender}:</b><br>{safe_text}</p>'
-        self.history_display.append(html)
+        sanitized_html = sanitize_html(html, media_dir)
+        self.history_display.append(sanitized_html)
 
     def _attach_screenshot(self):
         screen = QGuiApplication.primaryScreen()
@@ -328,7 +424,12 @@ class ChatSidebar(QWidget):
             # Validate path is within allowed media directory
             media_dir = os.path.join(self.processor.wiki_dir, "media")
             real_path = os.path.realpath(audio_path)
-            if not real_path.startswith(os.path.realpath(media_dir)):
+            real_media_dir = os.path.realpath(media_dir)
+            try:
+                is_safe = os.path.commonpath([real_path, real_media_dir]) == real_media_dir
+            except ValueError:
+                is_safe = False
+            if not is_safe:
                 logger.warning("Blocked audio playback from outside media dir: %s", audio_path)
                 return
             try:

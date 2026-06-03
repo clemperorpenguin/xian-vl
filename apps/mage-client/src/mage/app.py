@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QComboBox, QSpinBox, QPushButton, QLabel, QVBoxLayout,
     QHBoxLayout, QWidget, QCheckBox, QMessageBox
 )
-from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, QBuffer, QIODevice
+from PyQt6.QtCore import Qt, QSettings, QRect, QTimer
 from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap, QCursor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
@@ -54,7 +54,7 @@ from shared_types.enums import SourceLanguage, TargetLanguage, TranslationMode, 
 from mage.settings_keys import (
     KEY_API_URL, KEY_API_MODEL, KEY_SOURCE_LANG, KEY_TARGET_LANG,
     KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY,
-    KEY_GPU_UTIL, KEY_DIALOGUE_DELAY, KEY_CINEMATIC_TRIGGER,
+    KEY_GPU_UTIL, KEY_DIALOGUE_DELAY,
     KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG
 )
 from mage.utils.window_binder import WindowBinder
@@ -123,10 +123,13 @@ class SettingsDialog(QDialog):
 
         # Leader Key
         self.leader_combo = QComboBox()
-        self.leader_combo.addItems(["Double-Tap Shift", "Double-Tap Ctrl", "Double-Tap Alt", "Double-Tap Super"])
+        self.leader_combo.addItem(t("leader.double_shift"), "Double-Tap Shift")
+        self.leader_combo.addItem(t("leader.double_ctrl"), "Double-Tap Ctrl")
+        self.leader_combo.addItem(t("leader.double_alt"), "Double-Tap Alt")
+        self.leader_combo.addItem(t("leader.double_super"), "Double-Tap Super")
         leader_val = settings.value(KEY_LEADER_KEY, constants.DEFAULT_LEADER_KEY)
         if leader_val == "Shift+Space": leader_val = "Double-Tap Shift"
-        idx = self.leader_combo.findText(leader_val)
+        idx = self.leader_combo.findData(leader_val)
         if idx >= 0:
             self.leader_combo.setCurrentIndex(idx)
         layout.addRow(t("settings.label.leader_key"), self.leader_combo)
@@ -152,13 +155,13 @@ class SettingsDialog(QDialog):
         # Max tokens
         self.tokens_spin = QSpinBox()
         self.tokens_spin.setRange(256, 32768)
-        self.tokens_spin.setValue(int(settings.value("max_tokens", constants.DEFAULT_MAX_TOKENS)))
+        self.tokens_spin.setValue(int(settings.value(KEY_MAX_TOKENS, constants.DEFAULT_MAX_TOKENS)))
         layout.addRow(t("settings.label.max_tokens"), self.tokens_spin)
 
         # GPU Memory Utilization
         self.gpu_combo = QComboBox()
         self.gpu_combo.addItems(["Default", "0.5", "0.75"])
-        self.gpu_combo.setCurrentText(settings.value("gpu_memory_utilization", constants.DEFAULT_GPU_MEMORY_UTILIZATION))
+        self.gpu_combo.setCurrentText(settings.value(KEY_GPU_UTIL, constants.DEFAULT_GPU_MEMORY_UTILIZATION))
         layout.addRow(t("settings.label.gpu_memory_utilization"), self.gpu_combo)
 
         # Dialogue Delay
@@ -196,7 +199,7 @@ class SettingsDialog(QDialog):
         self.target_window_combo = QComboBox()
         self.target_window_combo.setEditable(True)
         self.target_window_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.target_window_combo.addItem("None (Standard Overlay Mode)", "")
+        self.target_window_combo.addItem(t("settings.option.none_overlay"), "")
         try:
             titles = WindowBinder.get_active_window_titles()
             for title in titles:
@@ -252,12 +255,8 @@ class SettingsDialog(QDialog):
         if should_warn_http_to_non_loopback(normalized):
             choice = QMessageBox.warning(
                 self,
-                "HTTP to remote server",
-                "You configured Lemonade over HTTP to a host that is not loopback. "
-                "Traffic can be read or modified on the network path. Lemonade does not "
-                "provide HTTPS itself; use a VPN, SSH tunnel, or a TLS reverse proxy if "
-                "this endpoint is reachable beyond a single trusted machine.\n\n"
-                "Choose Save to continue or Cancel to go back.",
+                t("settings.warn.http_remote.title"),
+                t("settings.warn.http_remote.body"),
                 QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Save,
             )
@@ -275,7 +274,7 @@ class SettingsDialog(QDialog):
         selected_styles = [s for s, cb in self.style_checkboxes.items() if cb.isChecked()]
         self.settings.setValue(KEY_STYLES, selected_styles)
         self.settings.setValue(KEY_MAX_TOKENS, self.tokens_spin.value())
-        self.settings.setValue(KEY_LEADER_KEY, self.leader_combo.currentText())
+        self.settings.setValue(KEY_LEADER_KEY, self.leader_combo.currentData())
         self.settings.setValue(KEY_GPU_UTIL, self.gpu_combo.currentText())
         self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
@@ -283,7 +282,7 @@ class SettingsDialog(QDialog):
         self.settings.setValue("live_voice_raid", "true" if self.live_voice_raid_cb.isChecked() else "false")
         self.settings.setValue("live_raid_lore_save", "true" if self.live_raid_lore_save_cb.isChecked() else "false")
         target_val = self.target_window_combo.currentText().strip()
-        if target_val == "None (Standard Overlay Mode)":
+        if self.target_window_combo.currentIndex() == 0 or target_val == t("settings.option.none_overlay") or target_val == "None (Standard Overlay Mode)":
             target_val = ""
         self.settings.setValue(KEY_TARGET_WINDOW_TITLE, target_val)
         self.settings.setValue("developer_options", "true" if self.dev_options_cb.isChecked() else "false")
@@ -389,6 +388,8 @@ class XianApp(QWidget):
         self._lens: LensOverlayWindow | None = None
         # Active inference workers (prevent GC)
         self._workers: list = []
+        self._status_worker = None
+        self._pull_worker = None
         # Active result bubbles (prevent GC)
         self._bubbles: list = []
         # Map active InferenceWorker to its temporary/loading ResultBubble
@@ -424,7 +425,7 @@ class XianApp(QWidget):
         if icon.isNull():
             icon = QIcon.fromTheme("applications-graphics")
         self.tray.setIcon(icon)
-        self.tray.setToolTip("Xian-VL — Lens & Chat Assistant")
+        self.tray.setToolTip(t("tray.tooltip"))
 
         menu = QMenu()
         capture_action = menu.addAction(t("tray.menu.capture"))
@@ -457,7 +458,7 @@ class XianApp(QWidget):
         logger.info("[Prewarm Status] %s", msg)
         if hasattr(self, "tray") and self.tray:
             self.tray.showMessage(
-                "MAGE Setup",
+                t("tray.message.setup_title"),
                 msg,
                 QSystemTrayIcon.MessageIcon.Information,
                 5000
@@ -466,26 +467,10 @@ class XianApp(QWidget):
     def show_about_dialog(self):
         from mage.resources import get_resource_path
         
-        about_text = (
-            "<h3>MAGE — Gaming HUD for real-time screen translation</h3>"
-            "<p>Copyright &copy; 2026 Clementine Pendragon &lt;clem@pendragon.systems&gt;</p>"
-            "<p>Contact: <a href='mailto:clem@pendragon.systems'>clem@pendragon.systems</a><br>"
-            "Mailing Address: Clementine Pendragon, c/o Xian Project Development</p>"
-            "<p>This program is free software: you can redistribute it and/or modify "
-            "it under the terms of the GNU General Public License as published by "
-            "the Free Software Foundation, either version 3 of the License, or "
-            "(at your option) any later version.</p>"
-            "<p>This program is distributed in the hope that it will be useful, "
-            "but WITHOUT ANY WARRANTY; without even the implied warranty of "
-            "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the "
-            "GNU General Public License for more details.</p>"
-            "<p>You should have received a copy of the GNU General Public License "
-            "along with this program. If not, see <a href='https://www.gnu.org/licenses/'>https://www.gnu.org/licenses/</a>.</p>"
-        )
         msg = QMessageBox(self)
-        msg.setWindowTitle("About MAGE")
+        msg.setWindowTitle(t("about.dialog.title"))
         msg.setTextFormat(Qt.TextFormat.RichText)
-        msg.setText(about_text)
+        msg.setText(t("about.dialog.text"))
         
         # Try to load and set the icon
         icon_path = get_resource_path("xian.png")
@@ -527,6 +512,7 @@ class XianApp(QWidget):
                 base_url=self.processor.config.api_url
             )
             self._run_health_check()
+            self._safe_stop_worker("_prewarm_worker")
             self._prewarm_worker = PrewarmWorker(self.processor)
             self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
             self._prewarm_worker.start()
@@ -588,7 +574,7 @@ class XianApp(QWidget):
             # Instantly translate the selected dialogue region using the clean crop
             self._run_inference(image_data, "translate", rect)
             
-            bubble = ResultBubble("Dialogue Mode ON", anchor_rect=rect, auto_close_ms=3000)
+            bubble = ResultBubble(t("dialogue.status.activated"), anchor_rect=rect, auto_close_ms=3000)
             self._add_bubble(bubble)
             logger.info("Dialogue Mode Activated via Lens")
             return
@@ -705,7 +691,7 @@ class XianApp(QWidget):
         # If in dialogue mode and we already have a dialogue bubble, reuse it
         if self.dialogue_mode_active and self.dialogue_bubble and self.dialogue_bubble.isVisible():
             bubble = self.dialogue_bubble
-            bubble.update_text("Translating...", original_text="", show_stop=True)
+            bubble.update_text(t("bubble.status.translating"), original_text="", show_stop=True)
             # Re-position if anchor shifted
             if anchor and not anchor.isEmpty():
                 bubble._anchor_rect = anchor
@@ -713,7 +699,7 @@ class XianApp(QWidget):
         # If in cinematic mode and we already have a cinematic bubble, reuse it
         elif self.cinematic_mode_active and self.cinematic_bubble and self.cinematic_bubble.isVisible():
             bubble = self.cinematic_bubble
-            bubble.update_text("Translating...", original_text="")
+            bubble.update_text(t("bubble.status.translating"), original_text="")
             if anchor and not anchor.isEmpty():
                 bubble._anchor_rect = anchor
                 bubble._position_near(anchor)
@@ -721,7 +707,7 @@ class XianApp(QWidget):
             # Create a new bubble
             show_stop = self.dialogue_mode_active
             bubble = ResultBubble(
-                "Translating...",
+                t("bubble.status.translating"),
                 anchor_rect=anchor,
                 auto_close_ms=30000 if self.dialogue_mode_active else 0,
                 show_stop=show_stop,
@@ -876,6 +862,17 @@ class XianApp(QWidget):
             self._workers.remove(worker)
         except ValueError:
             pass
+
+    def _safe_stop_worker(self, attr_name: str):
+        worker = getattr(self, attr_name, None)
+        if worker is not None:
+            try:
+                if worker.isRunning():
+                    worker.quit()
+                    worker.wait(2000)
+            except Exception as e:
+                logger.error("Error stopping worker %s: %s", attr_name, e)
+            setattr(self, attr_name, None)
 
     def _setup_bubble_connections(self, bubble):
         self._apply_transient_parent(bubble)
@@ -1099,7 +1096,7 @@ class XianApp(QWidget):
                 self.dialogue_bubble.close()
                 self.dialogue_bubble = None
             
-            bubble = ResultBubble("Dialogue Mode Disabled", auto_close_ms=3000)
+            bubble = ResultBubble(t("dialogue.status.deactivated"), auto_close_ms=3000)
             self._add_bubble(bubble)
             logger.info("Dialogue Mode Deactivated")
         else:
@@ -1213,26 +1210,29 @@ class XianApp(QWidget):
         if not self.dialogue_mode_active or LensOverlayWindow._last_rect is None or LensOverlayWindow._last_rect.isEmpty():
             return
 
-        data = ScreenCapture.capture_screen()
-        if not data:
+        if hasattr(self, "_dialogue_capture_worker") and self._dialogue_capture_worker and self._dialogue_capture_worker.isRunning():
             return
 
-        img = QImage.fromData(data)
-        pixmap = QPixmap.fromImage(img)
         rect = LensOverlayWindow._last_rect
         total_geo = ScreenCapture.get_virtual_desktop_geometry()
+
+        from mage.workers import CaptureWorker
+        self._dialogue_capture_worker = CaptureWorker("dialogue", [rect], total_geo)
         
-        safe_rect = rect.translated(-total_geo.left(), -total_geo.top())
-        safe_rect = safe_rect.intersected(pixmap.rect())
-        
-        cropped = pixmap.copy(safe_rect)
-        
-        buffer = QBuffer()
-        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-        cropped.save(buffer, "JPG", 85)
-        cropped_data = bytes(buffer.buffer())
-        
-        self._run_inference(cropped_data, "translate", rect)
+        def on_done(cropped_data, anchor_rect):
+            self._run_inference(cropped_data, "translate", anchor_rect)
+            self._cleanup_worker(self._dialogue_capture_worker)
+            self._dialogue_capture_worker = None
+
+        def on_error(err):
+            logger.warning("Dialogue capture error: %s", err)
+            self._cleanup_worker(self._dialogue_capture_worker)
+            self._dialogue_capture_worker = None
+
+        self._dialogue_capture_worker.capture_done.connect(on_done)
+        self._dialogue_capture_worker.error.connect(on_error)
+        self._workers.append(self._dialogue_capture_worker)
+        self._dialogue_capture_worker.start()
 
     # ------------------------------------------------------------------
     # Cinematic Mode
@@ -1250,7 +1250,7 @@ class XianApp(QWidget):
             if self.cinematic_bubble:
                 self.cinematic_bubble.close()
                 self.cinematic_bubble = None
-            bubble = ResultBubble("Cinematic Mode Disabled", auto_close_ms=3000)
+            bubble = ResultBubble(t("cinematic.status.deactivated"), auto_close_ms=3000)
             self._add_bubble(bubble)
         else:
             if not CinematicLensOverlay._last_rects:
@@ -1262,7 +1262,7 @@ class XianApp(QWidget):
     def _activate_cinematic_mode(self):
         self.cinematic_mode_active = True
         self.hotkey_listener.cinematic_mode_active = True
-        bubble = ResultBubble("Cinematic Mode ON (Press ` to capture)", auto_close_ms=4000)
+        bubble = ResultBubble(t("cinematic.status.activated"), auto_close_ms=4000)
         self._add_bubble(bubble)
 
     def _show_cinematic_lens(self):
@@ -1277,74 +1277,65 @@ class XianApp(QWidget):
         if rects:
             self._activate_cinematic_mode()
         else:
-            bubble = ResultBubble("Cinematic Mode requires at least one region.", auto_close_ms=4000)
+            bubble = ResultBubble(t("cinematic.status.requires_region"), auto_close_ms=4000)
             self._add_bubble(bubble)
 
     def _on_cinematic_trigger(self):
         if not self.cinematic_mode_active or not CinematicLensOverlay._last_rects:
             return
 
+        if hasattr(self, "_cinematic_capture_worker") and self._cinematic_capture_worker and self._cinematic_capture_worker.isRunning():
+            return
+
         # Show capturing indicator
         self.cinematic_bubble = self._replace_persistent_bubble("cinematic_bubble", "Recording audio and capturing screen...")
 
-        data = ScreenCapture.capture_screen()
-        if not data:
-            return
-
-        img = QImage.fromData(data)
-        pixmap = QPixmap.fromImage(img)
         rects = CinematicLensOverlay._last_rects
         total_geo = ScreenCapture.get_virtual_desktop_geometry()
-        
-        # Composite rects
-        total_height = sum(r.height() for r in rects)
-        max_width = max(r.width() for r in rects)
-        
-        composite = QPixmap(max_width, total_height)
-        composite.fill(Qt.GlobalColor.black)
-        
-        from PyQt6.QtGui import QPainter  # delayed import: only needed when cinematic is triggered
-        painter = QPainter(composite)
-        y_offset = 0
-        for r in rects:
-            safe_rect = r.translated(-total_geo.left(), -total_geo.top())
-            safe_rect = safe_rect.intersected(pixmap.rect())
-            cropped = pixmap.copy(safe_rect)
-            painter.drawPixmap(0, y_offset, cropped)
-            y_offset += r.height()
-        painter.end()
 
-        buffer = QBuffer()
-        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-        composite.save(buffer, "JPG", 85)
-        composite_data = bytes(buffer.buffer())
+        from mage.workers import CaptureWorker
+        self._cinematic_capture_worker = CaptureWorker("cinematic", rects, total_geo)
 
-        source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
-        target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
-        styles = _parse_styles(self.settings)
+        def on_done(composite_data, anchor_rect):
+            source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
+            target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
+            styles = _parse_styles(self.settings)
 
-        anchor_rect = rects[-1] if rects else QRect()
+            worker = CinematicWorker(
+                self.processor,
+                image_data=composite_data,
+                target_lang=target_lang,
+                styles=styles,
+                anchor_rect=anchor_rect,
+                source_lang=source_lang,
+            )
 
-        worker = CinematicWorker(
-            self.processor,
-            image_data=composite_data,
-            target_lang=target_lang,
-            styles=styles,
-            anchor_rect=anchor_rect,
-            source_lang=source_lang,
-        )
+            worker.translation_done.connect(
+                lambda results, act, w=worker: self._on_inference_done(results, act, w)
+            )
+            worker.error.connect(
+                lambda msg, w=worker: self._on_inference_error(msg, w)
+            )
+            worker.finished.connect(lambda w=worker: self._cleanup_worker(w))
 
-        worker.translation_done.connect(
-            lambda results, act, w=worker: self._on_inference_done(results, act, w)
-        )
-        worker.error.connect(
-            lambda msg, w=worker: self._on_inference_error(msg, w)
-        )
-        worker.finished.connect(lambda w=worker: self._cleanup_worker(w))
+            self._workers.append(worker)
+            worker.start()
+            logger.info("CinematicWorker started")
 
-        self._workers.append(worker)
-        worker.start()
-        logger.info("CinematicWorker started")
+            self._cleanup_worker(self._cinematic_capture_worker)
+            self._cinematic_capture_worker = None
+
+        def on_error(err):
+            logger.warning("Cinematic capture error: %s", err)
+            if self.cinematic_bubble and self._is_valid_widget(self.cinematic_bubble):
+                self.cinematic_bubble.update_text(f"⚠ Capture Error: {err}")
+            self._cleanup_worker(self._cinematic_capture_worker)
+            self._cinematic_capture_worker = None
+
+        self._cinematic_capture_worker.capture_done.connect(on_done)
+        self._cinematic_capture_worker.error.connect(on_error)
+        self._workers.append(self._cinematic_capture_worker)
+        self._cinematic_capture_worker.start()
 
     # ------------------------------------------------------------------
     # Raid Mode
@@ -1357,7 +1348,7 @@ class XianApp(QWidget):
             return
             
         logger.info("Triggered Raid Mode")
-        self.raid_bubble = self._replace_persistent_bubble("raid_bubble", "Recording raid leader...")
+        self.raid_bubble = self._replace_persistent_bubble("raid_bubble", t("raid.status.recording"))
 
         source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
@@ -1429,6 +1420,7 @@ class XianApp(QWidget):
     # Health check
     # ------------------------------------------------------------------
     def _run_health_check(self):
+        self._safe_stop_worker("_status_worker")
         api_url = _normalized_api_url_from_settings(self.settings)
         self._status_worker = StatusWorker(api_url)
         self._status_worker.status_changed.connect(self._on_health_result)
@@ -1474,6 +1466,7 @@ class XianApp(QWidget):
 
     def _pull_model(self, model_name: str):
         """Download a model via the Lemonade /v1/pull endpoint."""
+        self._safe_stop_worker("_pull_worker")
         api_url = _normalized_api_url_from_settings(self.settings)
         gpu_util = self.settings.value(KEY_GPU_UTIL, constants.DEFAULT_GPU_MEMORY_UTILIZATION)
         self._pull_worker = ModelPullWorker(api_url, model_name, gpu_util)
@@ -1508,6 +1501,7 @@ class XianApp(QWidget):
             self._run_health_check()
             
             # Pre-warm target model in VRAM
+            self._safe_stop_worker("_prewarm_worker")
             self._prewarm_worker = PrewarmWorker(self.processor)
             self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
             self._prewarm_worker.start()
@@ -1733,4 +1727,14 @@ class XianApp(QWidget):
                 self.target_binder.close()
             except Exception:
                 pass
+        if hasattr(self, "hotkey_listener") and self.hotkey_listener:
+            try:
+                self.hotkey_listener.stop()
+            except Exception as e:
+                logger.error("Error stopping hotkey listener on close: %s", e)
+        if hasattr(self, "mouse_listener") and self.mouse_listener:
+            try:
+                self.mouse_listener.stop()
+            except Exception as e:
+                logger.error("Error stopping mouse listener on close: %s", e)
         super().closeEvent(event)

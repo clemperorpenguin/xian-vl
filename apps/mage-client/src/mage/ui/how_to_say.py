@@ -24,6 +24,7 @@ from PyQt6.QtGui import QGuiApplication, QFont, QKeyEvent, QCursor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
 from mage.utils.window_binder import set_bypass_compositor_hint_x11
+from shared_types.state import t
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ class HowToSayDialog(QWidget):
         inner_layout.setSpacing(12)
 
         # Title
-        self.title_label = QLabel("Translate for Chat")
+        self.title_label = QLabel(t("chat.title.translate"))
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_font = QFont("sans-serif", 12, QFont.Weight.Bold)
         self.title_label.setFont(title_font)
@@ -73,14 +74,14 @@ class HowToSayDialog(QWidget):
         inner_layout.addWidget(self.title_label)
 
         # Input field
-        self.input_label = QLabel("Original:")
+        self.input_label = QLabel(t("chat.label.original"))
         self.input_label.setStyleSheet("color: #888; font-size: 11px;")
         inner_layout.addWidget(self.input_label)
         
         self.input_field = QTextEdit()
         self.input_field.setMinimumWidth(400)
         self.input_field.setMaximumHeight(80)
-        self.input_field.setPlaceholderText("Type what you want to say in game chat...")
+        self.input_field.setPlaceholderText(t("chat.placeholder.type_message"))
         self.input_field.setStyleSheet(f"""
             QTextEdit {{
                 background-color: #2A2A2A;
@@ -95,7 +96,7 @@ class HowToSayDialog(QWidget):
         inner_layout.addWidget(self.input_field)
 
         # Output field
-        self.output_label = QLabel("Translation:")
+        self.output_label = QLabel(t("chat.label.translation"))
         self.output_label.setStyleSheet("color: #888; font-size: 11px;")
         inner_layout.addWidget(self.output_label)
         
@@ -134,21 +135,21 @@ class HowToSayDialog(QWidget):
             QPushButton:disabled {{ background-color: #222; color: #555; border: 1px solid #333; }}
         """
 
-        self.btn_translate = QPushButton("Translate")
+        self.btn_translate = QPushButton(t("chat.button.translate"))
         self.btn_translate.setStyleSheet(btn_style)
         self.btn_translate.clicked.connect(self._on_translate)
         
-        self.btn_regenerate = QPushButton("Regenerate")
+        self.btn_regenerate = QPushButton(t("chat.button.regenerate"))
         self.btn_regenerate.setStyleSheet(btn_style)
         self.btn_regenerate.clicked.connect(self._on_translate)
         self.btn_regenerate.setEnabled(False)
         
-        self.btn_copy = QPushButton("Copy")
+        self.btn_copy = QPushButton(t("chat.button.copy"))
         self.btn_copy.setStyleSheet(btn_style)
         self.btn_copy.clicked.connect(self._on_copy)
         self.btn_copy.setEnabled(False)
         
-        self.btn_save = QPushButton("Save")
+        self.btn_save = QPushButton(t("chat.button.save"))
         self.btn_save.setStyleSheet(btn_style)
         self.btn_save.clicked.connect(self._on_save)
         self.btn_save.setEnabled(False)
@@ -164,7 +165,7 @@ class HowToSayDialog(QWidget):
     def _on_translate(self):
         text = self.input_field.toPlainText().strip()
         if text:
-            self.status_label.setText("Translating...")
+            self.status_label.setText(t("chat.status.translating"))
             self.status_label.setStyleSheet("color: #4ecdc4;")
             self.btn_translate.setEnabled(False)
             self.btn_regenerate.setEnabled(False)
@@ -177,7 +178,7 @@ class HowToSayDialog(QWidget):
         text = self.output_field.toPlainText().strip()
         if text:
             QApplication.clipboard().setText(text)
-            self.status_label.setText("Copied to clipboard!")
+            self.status_label.setText(t("chat.status.copied"))
             self.status_label.setStyleSheet("color: #4ecdc4;")
 
     def _on_save(self):
@@ -191,15 +192,15 @@ class HowToSayDialog(QWidget):
                 save_path = save_dir / "saved_translations.txt"
                 with open(save_path, "a", encoding="utf-8") as f:
                     f.write(f"Original ({self.target_lang}): {original}\nTranslation ({self.source_lang}): {translated}\n---\n")
-                self.status_label.setText(f"Saved to {save_path}")
+                self.status_label.setText(t("chat.status.saved").format(path=save_path))
                 self.status_label.setStyleSheet("color: #4ecdc4;")
             except Exception as e:
-                self.status_label.setText(f"Failed to save: {e}")
+                self.status_label.setText(t("chat.status.error").format(error=e))
                 self.status_label.setStyleSheet("color: #e74c3c;")
 
     def set_result(self, translated_text: str):
         self.output_field.setPlainText(translated_text)
-        self.status_label.setText("Translation complete.")
+        self.status_label.setText(t("chat.status.complete"))
         self.status_label.setStyleSheet("color: #4ecdc4;")
         self._on_copy() # Auto-copy by default
         self.btn_translate.setEnabled(True)
@@ -208,7 +209,7 @@ class HowToSayDialog(QWidget):
         self.btn_save.setEnabled(True)
 
     def set_error(self, error_msg: str):
-        self.status_label.setText(f"Error: {error_msg}")
+        self.status_label.setText(t("chat.status.error").format(error=error_msg))
         self.status_label.setStyleSheet("color: #e74c3c;")
         self.btn_translate.setEnabled(True)
         self.btn_regenerate.setEnabled(True)
@@ -217,9 +218,9 @@ class HowToSayDialog(QWidget):
         self.target_lang = target_lang
         self.source_lang = source_lang
         
-        self.title_label.setText(f"Translate for Chat ({target_lang} → {source_lang})")
-        self.input_label.setText(f"Original ({target_lang}):")
-        self.output_label.setText(f"Translation ({source_lang}):")
+        self.title_label.setText(t("chat.title.translate") + f" ({target_lang} → {source_lang})")
+        self.input_label.setText(t("chat.label.original") + f" ({target_lang}):")
+        self.output_label.setText(t("chat.label.translation") + f" ({source_lang}):")
         
         self.input_field.clear()
         self.output_field.clear()

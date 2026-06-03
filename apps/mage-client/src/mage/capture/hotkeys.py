@@ -24,6 +24,8 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["HotkeyListener", "create_hotkey_listener"]
+
 class HotkeyListener(QObject):
     """Base class for global hotkey listeners."""
     trigger_lens = pyqtSignal()
@@ -59,9 +61,11 @@ if sys.platform == "linux":
         """
         def __init__(self):
             super().__init__()
+            self._lock = threading.RLock()
             self.running = False
             self.devices = []
             self._threads = []
+            self._monitor_thread = None
             
             self.leader_mod = 'shift'
             self.command_mode_active = False
@@ -78,15 +82,28 @@ if sys.platform == "linux":
             self._find_keyboards()
             
         def _find_keyboards(self):
-            """Find all keyboard devices in /dev/input/"""
+            """Find all keyboard devices in /dev/input/ and initialize them."""
             try:
-                devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
-                for device in devices:
-                    # Check if it has keys
-                    if evdev.ecodes.EV_KEY in device.capabilities():
-                        # Check if it has standard keyboard keys (like KEY_A)
-                        if evdev.ecodes.KEY_A in device.capabilities()[evdev.ecodes.EV_KEY]:
-                            self.devices.append(device)
+                for path in evdev.list_devices():
+                    # Avoid opening devices we are already listening to
+                    if any(d.path == path for d in self.devices):
+                        continue
+                    try:
+                        device = evdev.InputDevice(path)
+                    except Exception:
+                        continue
+                    
+                    is_keyboard = False
+                    try:
+                        if evdev.ecodes.EV_KEY in device.capabilities():
+                            if evdev.ecodes.KEY_A in device.capabilities()[evdev.ecodes.EV_KEY]:
+                                is_keyboard = True
+                    except Exception:
+                        pass
+                        
+                    if is_keyboard:
+                        self.devices.append(device)
+                        with self._lock:
                             self.modifiers[device.path] = {
                                 'super': False,
                                 'shift': False,
@@ -94,16 +111,26 @@ if sys.platform == "linux":
                                 'alt': False
                             }
                             self.mod_clean[device.path] = True
-                            logger.info("EvdevListener: Found keyboard - %s at %s", device.name, device.path)
+                        logger.info("EvdevListener: Found keyboard - %s at %s", device.name, device.path)
+                        if self.running:
+                            thread = threading.Thread(target=self._listen_device, args=(device,), daemon=True)
+                            thread.start()
+                            self._threads.append((device.path, thread))
+                    else:
+                        try:
+                            device.close()
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.error("EvdevListener: Failed to find keyboards (are you in the 'input' group?): %s", e)
 
         def set_leader_key(self, leader_string: str):
-            # Handle both "Double-Tap Shift" and legacy "Shift+Space"
-            leader_string = leader_string.lower().replace('+space', '')
-            parts = leader_string.split()
-            if len(parts) > 0:
-                self.leader_mod = parts[-1]  # "shift", "ctrl", "alt", "super"
+            with self._lock:
+                # Handle both "Double-Tap Shift" and legacy "Shift+Space"
+                leader_string = leader_string.lower().replace('+space', '')
+                parts = leader_string.split()
+                if len(parts) > 0:
+                    self.leader_mod = parts[-1]  # "shift", "ctrl", "alt", "super"
 
         def _is_leader_mod_key(self, keycode):
             if self.leader_mod == 'shift': return keycode in (42, 54)
@@ -112,32 +139,56 @@ if sys.platform == "linux":
             if self.leader_mod == 'super': return keycode in (125, 126)
             return False
 
+        def _monitor_devices_loop(self):
+            """Periodically check for new input devices while running."""
+            while self.running:
+                for _ in range(50):
+                    if not self.running:
+                        return
+                    time.sleep(0.1)
+                self._find_keyboards()
+
         def start(self):
             """Start listening threads for all keyboards."""
-            if not self.devices:
-                logger.warning("EvdevListener: No keyboards found to listen to.")
-                return
-                
             self.running = True
+            
+            # Start listener threads for current devices
             for device in self.devices:
                 thread = threading.Thread(target=self._listen_device, args=(device,), daemon=True)
                 thread.start()
-                self._threads.append(thread)
+                self._threads.append((device.path, thread))
+                
+            self._monitor_thread = threading.Thread(target=self._monitor_devices_loop, daemon=True)
+            self._monitor_thread.start()
                 
             logger.info("EvdevListener: Started listening on %d devices.", len(self.devices))
 
         def stop(self):
-            """Stop listening."""
+            """Stop listening and clean up all resources."""
             self.running = False
-            for device in self.devices:
+            for device in list(self.devices):
                 try:
                     device.close()
                 except Exception:
                     pass
+            for path, thread in self._threads:
+                try:
+                    thread.join(timeout=2.0)
+                except Exception:
+                    pass
+            self._threads.clear()
+            self.devices.clear()
+            if self._monitor_thread:
+                try:
+                    self._monitor_thread.join(timeout=2.0)
+                except Exception:
+                    pass
+                self._monitor_thread = None
 
         def cancel_command_mode(self):
-            self.command_mode_active = False
-            self.command_mode_end_time = 0.0
+            with self._lock:
+                self.command_mode_active = False
+                self.command_mode_end_time = 0.0
 
         def _listen_device(self, device: evdev.InputDevice):
             """Listen loop for a single device."""
@@ -148,10 +199,25 @@ if sys.platform == "linux":
                         
                     if event.type == evdev.ecodes.EV_KEY:
                         key_event = evdev.categorize(event)
-                        self._handle_key_event(device.path, key_event)
+                        with self._lock:
+                            self._handle_key_event(device.path, key_event)
             except Exception as e:
                 if self.running:
-                    logger.error("EvdevListener: Error reading from %s: %s", device.name, e)
+                    logger.warning("EvdevListener: Device disconnected or error on %s: %s", device.path, e)
+            finally:
+                try:
+                    device.close()
+                except Exception:
+                    pass
+                with self._lock:
+                    if device in self.devices:
+                        self.devices.remove(device)
+                    if device.path in self.modifiers:
+                        del self.modifiers[device.path]
+                    if device.path in self.mod_clean:
+                        del self.mod_clean[device.path]
+                    if device.path in self.last_leader_press_time:
+                        del self.last_leader_press_time[device.path]
 
         def _handle_key_event(self, device_path: str, event):
             """Process individual key events and detect hotkeys."""
@@ -161,6 +227,9 @@ if sys.platform == "linux":
             is_modifier = keycode in (125, 126, 42, 54, 29, 97, 56, 100)
             
             # Update modifier tracking on any state change
+            if device_path not in self.modifiers:
+                self.modifiers[device_path] = {'super': False, 'shift': False, 'ctrl': False, 'alt': False}
+                
             if keycode in (125, 126):
                 self.modifiers[device_path]['super'] = is_pressed
             elif keycode in (42, 54):  # Shift
@@ -198,7 +267,7 @@ if sys.platform == "linux":
                         self.mod_clean[device_path] = True
 
                 # KEY_ESC is 1
-                if self.command_mode_active and keycode == 1:
+                if self.command_mode_active and keycode == evdev.ecodes.KEY_ESC:
                     logger.info("EvdevListener: Command Mode CANCELLED via ESC")
                     self.command_mode_active = False
                     self.command_mode_cancelled.emit()
@@ -206,54 +275,53 @@ if sys.platform == "linux":
 
                 # Check cinematic trigger globally (if mode is active)
                 # KEY_GRAVE is 41 (backtick/tilde key)
-                if self.cinematic_mode_active and keycode == 41:
+                if self.cinematic_mode_active and keycode == evdev.ecodes.KEY_GRAVE:
                     logger.info("EvdevListener: Triggered Cinematic Capture")
                     self.cinematic_capture.emit()
                     return
                 
                 if self.command_mode_active:
                     # KEY_C is 46
-                    if keycode == 46:
+                    if keycode == evdev.ecodes.KEY_C:
                         logger.info("EvdevListener: Triggered Lens")
                         self.trigger_lens.emit()
                         self.command_mode_active = False
                         
                     # KEY_A is 30
-                    elif keycode == 30:
+                    elif keycode == evdev.ecodes.KEY_A:
                         logger.info("EvdevListener: Triggered Chat")
                         self.trigger_chat.emit()
                         self.command_mode_active = False
 
                     # KEY_S is 31
-                    elif keycode == 31:
+                    elif keycode == evdev.ecodes.KEY_S:
                         logger.info("EvdevListener: Triggered Settings")
                         self.trigger_settings.emit()
                         self.command_mode_active = False
 
                     # KEY_O is 24
-                    elif keycode == 24:
+                    elif keycode == evdev.ecodes.KEY_O:
                         logger.info("EvdevListener: Triggered Dialogue Mode")
                         self.trigger_dialogue_mode.emit()
                         self.command_mode_active = False
 
                     # KEY_M is 50
-                    elif keycode == 50:
+                    elif keycode == evdev.ecodes.KEY_M:
                         logger.info("EvdevListener: Triggered Cinematic Mode")
                         self.trigger_cinematic_mode.emit()
                         self.command_mode_active = False
 
                     # KEY_T is 20
-                    elif keycode == 20:
+                    elif keycode == evdev.ecodes.KEY_T:
                         logger.info("EvdevListener: Triggered Translate")
                         self.trigger_how_to_say.emit()
                         self.command_mode_active = False
 
                     # KEY_R is 19
-                    elif keycode == 19:
+                    elif keycode == evdev.ecodes.KEY_R:
                         logger.info("EvdevListener: Triggered Raid Mode")
                         self.trigger_raid_mode.emit()
                         self.command_mode_active = False
-
 
 else:
     from pynput import keyboard
@@ -387,6 +455,8 @@ else:
             if self.listener:
                 self.listener.stop()
                 self.listener = None
+            with self.lock:
+                self.current_keys.clear()
 
         def cancel_command_mode(self):
             with self.lock:

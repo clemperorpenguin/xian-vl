@@ -60,6 +60,7 @@ async def test_raid_worker_resilience(qapp):
     
     # Mock LemonadeClient
     mock_lemonade_client = MagicMock()
+    mock_lemonade_client.__aenter__.return_value = mock_lemonade_client
     mock_transcribe = AsyncMock()
     # Let first transcription fail/timeout, and second pass
     mock_transcribe.side_effect = [

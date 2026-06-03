@@ -24,6 +24,8 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["MouseListener", "create_mouse_listener"]
+
 class MouseListener(QObject):
     """Base class for global mouse click listeners."""
     left_click = pyqtSignal()
@@ -51,14 +53,29 @@ if sys.platform == "linux":
         def _find_mice(self):
             """Find all mouse devices in /dev/input/"""
             try:
-                devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
-                for device in devices:
-                    # Check if it has keys and specifically BTN_LEFT (272)
-                    if evdev.ecodes.EV_KEY in device.capabilities():
-                        keys = device.capabilities()[evdev.ecodes.EV_KEY]
-                        if evdev.ecodes.BTN_LEFT in keys:
-                            self.devices.append(device)
-                            logger.info("EvdevMouseListener: Found mouse - %s at %s", device.name, device.path)
+                for path in evdev.list_devices():
+                    try:
+                        device = evdev.InputDevice(path)
+                    except Exception:
+                        continue
+                    
+                    is_mouse = False
+                    try:
+                        if evdev.ecodes.EV_KEY in device.capabilities():
+                            keys = device.capabilities()[evdev.ecodes.EV_KEY]
+                            if evdev.ecodes.BTN_LEFT in keys:
+                                is_mouse = True
+                    except Exception:
+                        pass
+                        
+                    if is_mouse:
+                        self.devices.append(device)
+                        logger.info("EvdevMouseListener: Found mouse - %s at %s", device.name, device.path)
+                    else:
+                        try:
+                            device.close()
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.error("EvdevMouseListener: Failed to find mice: %s", e)
 

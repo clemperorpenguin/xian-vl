@@ -137,7 +137,7 @@ def translate_strings(en_data: dict, target_lang_name: str) -> dict:
     )
     
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=120.0) as response:
             result = json.loads(response.read().decode("utf-8"))
             content = result["choices"][0]["message"]["content"]
             translated_dict = json.loads(content)

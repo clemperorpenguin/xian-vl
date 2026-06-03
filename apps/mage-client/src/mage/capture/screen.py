@@ -31,6 +31,8 @@ from PyQt6.QtCore import QBuffer, QIODevice, QRect
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["ScreenCapture"]
+
 
 class ScreenCapture:
     """Handle screen capture using multiple backends for Wayland/X11 compatibility"""
@@ -177,7 +179,8 @@ class ScreenCapture:
                 if result.returncode == 0 and os.path.exists(tmp_path):
                     with open(tmp_path, "rb") as f:
                         data = f.read()
-                    return data
+                    if not ScreenCapture._is_image_empty(data):
+                        return data
         except Exception:
             pass
 
@@ -187,7 +190,7 @@ class ScreenCapture:
                 tmp_path = os.path.join(tmpdir, "capture.png")
                 # Using dbus-send as a fallback to avoid requiring a dbus library
                 # org.gnome.Shell.Screenshot.Screenshot(bool include_cursor, bool flash, string filename)
-                subprocess.run([
+                result = subprocess.run([
                     "dbus-send", "--session", "--type=method_call",
                     "--dest=org.gnome.Shell.Screenshot",
                     "/org/gnome/Shell/Screenshot",
@@ -195,10 +198,11 @@ class ScreenCapture:
                     "boolean:false", "boolean:false", f"string:{tmp_path}"
                 ], capture_output=True, env=clean_subprocess_env(), timeout=5)
 
-                if os.path.exists(tmp_path):
+                if result.returncode == 0 and os.path.exists(tmp_path):
                     with open(tmp_path, "rb") as f:
                         data = f.read()
-                    return data
+                    if not ScreenCapture._is_image_empty(data):
+                        return data
         except Exception as e:
             logger.debug("GNOME DBus capture error: %s", e)
 
@@ -223,17 +227,16 @@ class ScreenCapture:
         img = QImage.fromData(data)
         if img.isNull(): return True
 
-        # Check a few points (corners and center)
+        # Check a 5x5 grid of points (25 points total)
         w, h = img.width(), img.height()
-        if w < 2 or h < 2: return True
+        if w < 5 or h < 5: return True
 
-        points = [
-            img.pixelColor(0, 0),
-            img.pixelColor(w-1, 0),
-            img.pixelColor(0, h-1),
-            img.pixelColor(w-1, h-1),
-            img.pixelColor(w//2, h//2)
-        ]
+        points = []
+        for i in range(5):
+            for j in range(5):
+                x = int(i * (w - 1) / 4.0)
+                y = int(j * (h - 1) / 4.0)
+                points.append(img.pixelColor(x, y))
 
         # Only reject if all sampled points are truly black or white
         black = QColor(0, 0, 0)

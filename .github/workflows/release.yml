@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-lemonade:
     name: Build Embeddable Lemonade (${{ matrix.os }})
@@ -13,9 +16,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
-            preset: default
-            artifact_name: lemonade-embeddable-ubuntu-x64
           - os: windows-latest
             preset: windows
             artifact_name: lemonade-embeddable-windows-x64
@@ -26,12 +26,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Install Dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build g++ pkg-config libssl-dev libdrm-dev
 
       - name: Setup CMake and Ninja (macOS)
         if: runner.os == 'macOS'
@@ -106,3 +100,35 @@ jobs:
           path: |
             apps/mage-client/*.zip
             apps/mage-client/*.dmg
+
+  release:
+    name: Create GitHub Release
+    needs: build-mage
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mage-client-Windows
+          path: artifacts/Windows
+
+      - name: Download macOS Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mage-client-macOS
+          path: artifacts/macOS
+
+      - name: Prepare Release Files
+        run: |
+          mkdir -p release_dist
+          find artifacts/ -type f \( -name "*.zip" -o -name "*.dmg" \) -exec cp {} release_dist/ \;
+          ls -la release_dist/
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release_dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

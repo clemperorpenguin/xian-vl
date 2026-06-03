@@ -46,11 +46,35 @@ To add MAGE to your desktop application menu:
 ./mage.sh --install
 ```
 
-To remove the desktop entry:
+To add MAGE to your menu **and** automatically install system dependencies, build the embeddable Lemonade server from source, and pull the default vision-language model:
+
+```bash
+./mage.sh --install --build
+```
+
+To remove the desktop entry and icon:
 
 ```bash
 ./mage.sh --uninstall
 ```
+
+### Pre-built Releases (Windows & macOS)
+
+If you are running Windows or macOS, or prefer not to build from source, download pre-built packages from the [GitHub Releases](https://github.com/clemperorpenguin/xian-vl/releases) page.
+
+Releases come in two variants:
+- **Lite** (`mage-client-lite.zip`): Standalone lightweight version. Requires connecting to an external running Lemonade Server.
+- **Full** (`mage-client-full.zip` / `mage-client-full.dmg`): Bundled with the embedded `lemond` server, which starts and stops automatically when the application runs.
+
+#### Windows
+1. Download `mage-client-lite.zip` or `mage-client-full.zip`.
+2. Extract the archive.
+3. Double-click `mage-client.exe` to run.
+
+#### macOS
+1. Download `mage-client-lite.dmg` or `mage-client-full.dmg`.
+2. Double-click the DMG and drag `mage-client.app` to your **Applications** directory.
+3. Open and run the application.
 
 ### Manual Setup (All Platforms)
 

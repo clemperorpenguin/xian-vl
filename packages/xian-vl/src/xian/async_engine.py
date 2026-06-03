@@ -35,6 +35,19 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
+from urllib.parse import urlparse
+
+def sanitize_url(url: str) -> str:
+    try:
+        p = urlparse(url)
+        if p.password or p.username:
+            netloc = p.netloc.split("@")[-1]
+            return f"{p.scheme}://{netloc}{p.path}"
+    except Exception:
+        pass
+    return url
+
+
 class AsyncEngine(threading.Thread):
     """Background thread with a persistent event loop and OpenAI client."""
 
@@ -46,28 +59,40 @@ class AsyncEngine(threading.Thread):
         self._client: AsyncOpenAI | None = None
         self._ready = threading.Event()
 
+    def _handle_exception(self, loop, context):
+        msg = context.get("exception", context.get("message"))
+        logger.error("Unhandled exception in AsyncEngine loop: %s", msg)
+
     # ── Public API ────────────────────────────────────────────────────
 
     @property
     def loop(self) -> asyncio.AbstractEventLoop:
-        self._ready.wait()      # block until loop is running
-        assert self._loop is not None
+        if not self._ready.wait(timeout=10.0):
+            raise RuntimeError("AsyncEngine failed to start (timeout)")
+        if not self._loop or not self._loop.is_running():
+            raise RuntimeError("AsyncEngine loop is not running or has stopped")
         return self._loop
 
     @property
     def client(self) -> AsyncOpenAI:
-        self._ready.wait()      # block until loop is running
-        assert self._client is not None
+        if not self._ready.wait(timeout=10.0):
+            raise RuntimeError("AsyncEngine failed to start (timeout)")
+        if not self._client:
+            raise RuntimeError("AsyncEngine client is not initialized")
         return self._client
 
     def submit(self, coro: Coroutine[Any, Any, T]) -> Future[T]:
         """Schedule *coro* on the engine loop; return a concurrent.futures.Future."""
-        self._ready.wait()
+        if not self._ready.wait(timeout=10.0):
+            raise RuntimeError("AsyncEngine failed to start (timeout)")
+        if not self._loop or not self._loop.is_running():
+            raise RuntimeError("AsyncEngine loop is not running or has stopped")
         return asyncio.run_coroutine_threadsafe(coro, self._loop)  # type: ignore[arg-type]
 
     def reconfigure(self, base_url: str, api_key: str = "not-needed") -> None:
         """Replace the client with a new base_url (e.g. after settings change)."""
-        self._ready.wait()
+        if not self._ready.wait(timeout=10.0):
+            raise RuntimeError("AsyncEngine failed to start (timeout)")
         # Verify self._loop exists and is running
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._do_reconfigure, base_url, api_key)
@@ -84,6 +109,11 @@ class AsyncEngine(threading.Thread):
                 for t in tasks:
                     t.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
+                if self._client:
+                    try:
+                        await self._client.close()
+                    except Exception as e:
+                        logger.error("Error closing OpenAI client in shutdown: %s", e)
                 self._loop.stop()
             self._loop.call_soon_threadsafe(
                 lambda: self._loop.create_task(_graceful_stop())
@@ -93,16 +123,15 @@ class AsyncEngine(threading.Thread):
 
     def run(self) -> None:
         self._loop = asyncio.new_event_loop()
+        self._loop.set_exception_handler(self._handle_exception)
         asyncio.set_event_loop(self._loop)
         self._client = AsyncOpenAI(base_url=self._base_url, api_key=self._api_key)
         self._ready.set()
-        logger.info("AsyncEngine started (base_url=%s)", self._base_url)
+        logger.info("AsyncEngine started (base_url=%s)", sanitize_url(self._base_url))
         try:
             self._loop.run_forever()
         finally:
-            # Check if event loop is closed to avoid run_until_complete errors
-            if not self._loop.is_closed():
-                self._loop.run_until_complete(self._client.close())
+            if self._loop and not self._loop.is_closed():
                 self._loop.close()
             logger.info("AsyncEngine stopped")
 
@@ -111,7 +140,7 @@ class AsyncEngine(threading.Thread):
         async def _swap():
             old = self._client
             self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
-            logger.info("AsyncEngine reconfigured (base_url=%s)", base_url)
+            logger.info("AsyncEngine reconfigured (base_url=%s)", sanitize_url(base_url))
             if old:
                 await old.close()
         self._loop.create_task(_swap())

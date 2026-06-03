@@ -59,6 +59,42 @@ _LANG_CODE_TO_NAME = {
     "ru": "Russian",
 }
 
+# Precompiled regular expressions for performance in streaming paths
+THINK_TAGS_PAT = re.compile(r'<think>.*?</think>', re.DOTALL)
+THINK_OPEN_PAT = re.compile(r'<think>.*$', re.DOTALL)
+REPETITION_1_PAT = re.compile(r'(.)\1{14,}$')
+REPETITION_2_PAT = re.compile(r'(.{2,50}?)\1{2,}$')
+CONFIDENCE_PAT = re.compile(
+    r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?(?:CONFIDENCE)\b|[\(\[]\s*CONFIDENCE\s*[\)\]])\D*?([0-9.]+)',
+    re.IGNORECASE
+)
+DOUBLE_NEWLINE_PAT = re.compile(r'\n\s*\n')
+ORIG_MARKER_PAT = re.compile(
+    r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?ORIGINAL\b|[\(\[]\s*ORIGINAL\s*[\)\]])[^\w\n]*[:\n]?',
+    re.IGNORECASE
+)
+TRANS_MARKER_PAT = re.compile(
+    r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?TRANSLAT[a-zA-Z]*\b|[\(\[]\s*TRANSLAT[a-zA-Z]*\s*[\)\]])[^\w\n]*[:\n]?',
+    re.IGNORECASE
+)
+ORIG_MATCH_PAT = re.compile(
+    r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?ORIGINAL\b|[\(\[]\s*ORIGINAL\s*[\)\]])[^\w\n]*[:\n][ \t]*(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:[\(\[]?\s*(?:TRANSLAT|CONFIDENCE)|TRANSLAT[a-zA-Z]*\b|CONFIDENCE\b)|\Z)',
+    re.DOTALL | re.IGNORECASE
+)
+TRANS_MATCH_PAT = re.compile(
+    r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?TRANSLAT[a-zA-Z]*\b|[\(\[]\s*TRANSLAT[a-zA-Z]*\s*[\)\]])[^\w\n]*[:\n][ \t]*(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:[\(\[]?\s*(?:ORIGINAL|CONFIDENCE)|ORIGINAL\b|CONFIDENCE\b)|\Z)',
+    re.DOTALL | re.IGNORECASE
+)
+CLEAN_ORIG_PAT = re.compile(
+    r'^(?:The image contains.*?text:|The text in the image is:|The extracted text is:|The.*?text is:)\s*',
+    re.IGNORECASE
+)
+PLACEHOLDER_PAT = re.compile(
+    r'^\[\s*.*?(?:text|translation|score|original|translated|english|chinese|placeholder|insert|label|here|extract|direct).*?\]$',
+    re.IGNORECASE
+)
+TRUNCATE_REPEATED_PAT = re.compile(r'(.{1,12}?)\1{4,}$')
+
 logger = logging.getLogger(__name__)
 
 
@@ -136,6 +172,15 @@ class VLProcessor:
         self.wiki_dir = self.find_wiki_dir()
         logger.info("Using wiki directory: %s", self.wiki_dir)
 
+        # Glossary cache
+        self._glossary_cache = {}
+        self._glossary_last_loaded = 0.0
+        self._glossary_mtime = 0.0
+
+        # Initialize LocalWikiSearcher cache fields
+        self._local_searcher_cache = None
+        self._local_searcher_dir = None
+
     def _validate_file_path(self, path: str, allow_dirs: list[str] | None = None) -> str:
         """Validate that a file path is within allowed directories."""
         if not os.path.isabs(path):
@@ -152,6 +197,14 @@ class VLProcessor:
     @property
     def client(self) -> AsyncOpenAI:
         return self.engine.client
+
+    @property
+    def local_searcher(self) -> LocalWikiSearcher:
+        with self._lock:
+            if not hasattr(self, "_local_searcher_cache") or self._local_searcher_cache is None or self._local_searcher_dir != self.wiki_dir:
+                self._local_searcher_cache = LocalWikiSearcher(wiki_dir=self.wiki_dir)
+                self._local_searcher_dir = self.wiki_dir
+            return self._local_searcher_cache
 
     def get_model_name(self) -> str:
         """Resolve the model name to use for standard completions/vision tasks."""
@@ -197,10 +250,20 @@ class VLProcessor:
         return os.path.abspath(os.path.join(os.getcwd(), "wiki"))
 
     def load_glossary_from_wiki(self) -> dict[str, str]:
-        glossary = {}
         if not os.path.exists(self.wiki_dir):
-            return glossary
+            return {}
         
+        try:
+            current_mtime = os.path.getmtime(self.wiki_dir)
+        except Exception:
+            current_mtime = 0.0
+
+        current_time = time.time()
+        # Cache glossary for 60 seconds unless directory mtime changes
+        if (current_time - self._glossary_last_loaded < 60.0) and (current_mtime == self._glossary_mtime):
+            return self._glossary_cache
+
+        glossary = {}
         try:
             for filename in os.listdir(self.wiki_dir):
                 if not filename.endswith(".md"):
@@ -224,6 +287,9 @@ class VLProcessor:
                                         glossary[original_names.strip()] = str(title).strip()
                 except Exception as e:
                     logger.warning("Failed to parse frontmatter from %s: %s", filepath, e)
+            self._glossary_cache = glossary
+            self._glossary_last_loaded = current_time
+            self._glossary_mtime = current_mtime
         except Exception as e:
             logger.warning("Failed to read glossary from wiki directory: %s", e)
         return glossary
@@ -266,10 +332,10 @@ class VLProcessor:
         if width > max_dimension or height > max_dimension:
             if width > height:
                 new_width = max_dimension
-                new_height = int((height * max_dimension) / width)
+                new_height = max(1, int((height * max_dimension) / width))
             else:
                 new_height = max_dimension
-                new_width = int((width * max_dimension) / height)
+                new_width = max(1, int((width * max_dimension) / height))
 
             image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
@@ -336,8 +402,7 @@ class VLProcessor:
         query = self.get_recent_text_for_search()
         if query:
             try:
-                local_searcher = LocalWikiSearcher(wiki_dir=self.wiki_dir)
-                results = local_searcher.search(query, num_results=2)
+                results = self.local_searcher.search(query, num_results=2)
                 if results:
                     context_parts = ["\nLORE REFERENCE ARTICLES:\nUse the following background lore articles for context and translation accuracy:"]
                     for i, res in enumerate(results, 1):
@@ -361,7 +426,7 @@ class VLProcessor:
         cleaned = text
         if "<think>" in text:
             if "</think>" in text:
-                cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+                cleaned = THINK_TAGS_PAT.sub('', text)
             else:
                 # If the model is currently in the thinking block (has <think> but no closing tag),
                 # we skip repetition detection entirely to allow the reasoning process to complete.
@@ -371,11 +436,11 @@ class VLProcessor:
             return False
             
         # 1. Simple single character repeat
-        if re.search(r'(.)\1{14,}$', cleaned):
+        if REPETITION_1_PAT.search(cleaned):
             return True
             
         # 2. Multi-character regex for short patterns
-        match = re.search(r'(.{2,50}?)\1{2,}$', cleaned)
+        match = REPETITION_2_PAT.search(cleaned)
         if match and len(match.group(0)) >= 20:
             return True
             
@@ -400,13 +465,26 @@ class VLProcessor:
         Returns (original_text, translated_text, confidence_score).
         """
         # Strip thinking tags if present
-        cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
-        cleaned = re.sub(r'<think>.*$', '', cleaned, flags=re.DOTALL).strip()
+        cleaned = THINK_TAGS_PAT.sub('', response).strip()
+        cleaned = THINK_OPEN_PAT.sub('', cleaned).strip()
+
+        # Check if the response contains a JSON block
+        json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+        if json_match:
+            try:
+                candidate = json_match.group(0).strip()
+                data = json.loads(candidate)
+                if isinstance(data, dict):
+                    original_text = data.get("original", data.get("original_text", ""))
+                    translation = data.get("translation", data.get("translated_text", ""))
+                    confidence = float(data.get("confidence", 0.85))
+                    return original_text, translation, confidence
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning("Failed to parse response as JSON: %s", e)
 
         # Parse confidence score using keyword search
         confidence = 0.85
-        conf_pattern = r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?(?:CONFIDENCE)\b|[\(\[]\s*CONFIDENCE\s*[\)\]])\D*?([0-9.]+)'
-        conf_matches = list(re.finditer(conf_pattern, cleaned, re.IGNORECASE))
+        conf_matches = list(CONFIDENCE_PAT.finditer(cleaned))
         if conf_matches:
             try:
                 confidence = float(conf_matches[-1].group(1).strip())
@@ -415,7 +493,7 @@ class VLProcessor:
                 pass
 
         # Split on double-newline for fallback parsing (confidence only)
-        parts = re.split(r'\n\s*\n', cleaned, maxsplit=2)
+        parts = DOUBLE_NEWLINE_PAT.split(cleaned, maxsplit=2)
         if not conf_matches and len(parts) == 3:
             try:
                 val = float(parts[2].strip())
@@ -424,29 +502,18 @@ class VLProcessor:
                 pass
 
         # Extract ORIGINAL and TRANSLATED sections using a highly resilient regex.
-        # Markers must be formatted either at the start of a line (with optional list/bold prefixes)
-        # or enclosed in brackets/parentheses to avoid matching conversational step titles like "Refine Translation:".
-        orig_marker_pat = r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?ORIGINAL\b|[\(\[]\s*ORIGINAL\s*[\)\]])[^\w\n]*[:\n]?'
-        trans_marker_pat = r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?TRANSLAT[a-zA-Z]*\b|[\(\[]\s*TRANSLAT[a-zA-Z]*\s*[\)\]])[^\w\n]*[:\n]?'
-
         orig_match = None
-        orig_matches = list(re.finditer(
-            r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?ORIGINAL\b|[\(\[]\s*ORIGINAL\s*[\)\]])[^\w\n]*[:\n][ \t]*(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:[\(\[]?\s*(?:TRANSLAT|CONFIDENCE)|TRANSLAT[a-zA-Z]*\b|CONFIDENCE\b)|\Z)',
-            cleaned, re.DOTALL | re.IGNORECASE
-        ))
+        orig_matches = list(ORIG_MATCH_PAT.finditer(cleaned))
         if orig_matches:
             orig_match = orig_matches[-1]
 
         trans_match = None
-        trans_matches = list(re.finditer(
-            r'(?:(?:^|\n)[ \t]*(?:\d+\.\s*)?(?:\*|-)?\s*(?:\*\*)?TRANSLAT[a-zA-Z]*\b|[\(\[]\s*TRANSLAT[a-zA-Z]*\s*[\)\]])[^\w\n]*[:\n][ \t]*(.*?)(?=\n\s*(?:\d+\.\s*)?\**\s*(?:[\(\[]?\s*(?:ORIGINAL|CONFIDENCE)|ORIGINAL\b|CONFIDENCE\b)|\Z)',
-            cleaned, re.DOTALL | re.IGNORECASE
-        ))
+        trans_matches = list(TRANS_MATCH_PAT.finditer(cleaned))
         if trans_matches:
             trans_match = trans_matches[-1]
 
-        has_orig_marker = bool(re.search(orig_marker_pat, cleaned, re.IGNORECASE))
-        has_trans_marker = bool(re.search(trans_marker_pat, cleaned, re.IGNORECASE))
+        has_orig_marker = bool(ORIG_MARKER_PAT.search(cleaned))
+        has_trans_marker = bool(TRANS_MARKER_PAT.search(cleaned))
 
         # If it has at least one marker, we trust our regex matches (even if empty because it's streaming)
         if has_orig_marker or has_trans_marker:
@@ -456,10 +523,7 @@ class VLProcessor:
             if orig_match:
                 original_text = orig_match.group(1).strip()
                 original_text = original_text.strip(' \t\n\r"\'`*•-')
-                original_text = re.sub(
-                    r'^(?:The image contains.*?text:|The text in the image is:|The extracted text is:|The.*?text is:)\s*',
-                    '', original_text, flags=re.IGNORECASE
-                )
+                original_text = CLEAN_ORIG_PAT.sub('', original_text)
                 original_text = original_text.strip(' \t\n\r"\'`*•-')
                 
             if trans_match:
@@ -467,20 +531,13 @@ class VLProcessor:
                 translation = translation.strip(' \t\n\r"\'`*•-')
 
             # Filter out template placeholders
-            placeholder_pat = re.compile(
-                r'^\[\s*.*?(?:text|translation|score|original|translated|english|chinese|placeholder|insert|label|here|extract|direct).*?\]$',
-                re.IGNORECASE
-            )
-            if placeholder_pat.match(original_text):
+            if PLACEHOLDER_PAT.match(original_text):
                 original_text = ""
-            if placeholder_pat.match(translation):
+            if PLACEHOLDER_PAT.match(translation):
                 translation = ""
                 
             return original_text, translation, confidence
 
-        # If no markers are present AT ALL, it is either still streaming unstructured reasoning,
-        # or the model completely failed the layout. We return empty strings to prevent leaking
-        # unstructured reasoning to the UI, unless the fallback double-newline split succeeded.
         if len(parts) == 3:
             try:
                 val = float(parts[2].strip())
@@ -633,7 +690,7 @@ class VLProcessor:
                         # Final attempt also looped — truncate the repeated tail and use what we have
                         logger.warning("Loop persisted after %d attempts, truncating repeated content", max_attempts)
                         # Strip the repeated tail
-                        accumulated = re.sub(r'(.{1,12}?)\1{4,}$', r'\1', accumulated)
+                        accumulated = TRUNCATE_REPEATED_PAT.sub(r'\1', accumulated)
 
                 results = self._build_result(accumulated, image)
 
@@ -775,8 +832,7 @@ class VLProcessor:
         # 2. Perform RAG Search (using transcript as query)
         if transcript:
             try:
-                local_searcher = LocalWikiSearcher(wiki_dir=self.wiki_dir)
-                results = local_searcher.search(transcript, num_results=2)
+                results = self.local_searcher.search(transcript, num_results=2)
                 if results:
                     context_parts = ["\nLORE REFERENCE ARTICLES:\nUse the following background lore articles for context and translation accuracy:"]
                     for i, res in enumerate(results, 1):
@@ -885,7 +941,7 @@ class VLProcessor:
                         continue
                     else:
                         logger.warning("Loop persisted after %d attempts, truncating repeated content", max_attempts)
-                        final_output = re.sub(r'(.{1,12}?)\1{4,}$', r'\1', final_output)
+                        final_output = TRUNCATE_REPEATED_PAT.sub(r'\1', final_output)
                         
                 results = self._build_result(final_output, image)
                 break

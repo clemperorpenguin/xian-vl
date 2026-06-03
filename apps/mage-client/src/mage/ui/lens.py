@@ -25,6 +25,7 @@ from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent, QPixmap, QImage, QG
 from mage.capture.screen import ScreenCapture
 from mage.ui.theme import accent_hex, accent_hover_hex, accent_qcolor
 from mage.utils.window_binder import set_bypass_compositor_hint_x11
+from shared_types.state import t
 
 logger = logging.getLogger(__name__)
 
@@ -58,19 +59,19 @@ class ActionBarWidget(QWidget):
             }}
         """)
         
-        btn_translate = QPushButton("Translate")
+        btn_translate = QPushButton(t("lens.button.translate"))
         btn_translate.clicked.connect(lambda: self._on_click("translate"))
         
-        btn_dialogue = QPushButton("Dialogue")
+        btn_dialogue = QPushButton(t("lens.button.dialogue"))
         btn_dialogue.clicked.connect(lambda: self._on_click("dialogue"))
         
-        btn_explain = QPushButton("Explain")
+        btn_explain = QPushButton(t("lens.button.explain"))
         btn_explain.clicked.connect(lambda: self._on_click("explain"))
         
-        btn_dictionary = QPushButton("Dictionary")
+        btn_dictionary = QPushButton(t("lens.button.dictionary"))
         btn_dictionary.clicked.connect(lambda: self._on_click("dictionary"))
         
-        btn_chat = QPushButton("Chat Context")
+        btn_chat = QPushButton(t("lens.button.chat_context"))
         btn_chat.clicked.connect(lambda: self._on_click("chat"))
         
         layout.addWidget(btn_translate)
@@ -286,9 +287,9 @@ class CinematicLensOverlay(QWidget):
             QPushButton {{ background-color: #333; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-weight: bold; }}
             QPushButton:hover {{ background-color: {accent_hex()}; }}
         """)
-        btn_confirm = QPushButton("Confirm")
+        btn_confirm = QPushButton(t("lens.button.confirm"))
         btn_confirm.clicked.connect(self._on_confirm)
-        btn_clear = QPushButton("Clear All")
+        btn_clear = QPushButton(t("lens.button.clear_all"))
         btn_clear.clicked.connect(self._on_clear)
         layout.addWidget(btn_confirm)
         layout.addWidget(btn_clear)
