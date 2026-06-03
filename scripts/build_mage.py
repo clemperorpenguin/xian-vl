@@ -186,16 +186,17 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
             
     print("Build complete.")
     
+    suffix = "Windows-x86-64" if sys.platform == "win32" else "MacOS-ARM64"
+    archive_name = f"mage-client-{suffix}-{'full' if include_lemonade else 'lite'}"
+
     if sys.platform == "win32":
         # Create a zip file
-        zip_name = "mage-client-full" if include_lemonade else "mage-client-lite"
-        zip_path = app_dir / f"{zip_name}.zip"
+        zip_path = app_dir / f"{archive_name}.zip"
         print(f"Creating {zip_path}...")
-        shutil.make_archive(str(app_dir / zip_name), 'zip', dist_dir, "mage-client")
+        shutil.make_archive(str(app_dir / archive_name), 'zip', dist_dir, "mage-client")
         print(f"Generated {zip_path}")
         
     elif sys.platform == "darwin":
-        archive_name = "mage-client-full" if include_lemonade else "mage-client-lite"
         zip_path = app_dir / f"{archive_name}.zip"
         print(f"Creating zip archive {zip_path}...")
         shutil.make_archive(str(app_dir / archive_name), 'zip', dist_dir, "mage-client.app")
