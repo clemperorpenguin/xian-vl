@@ -71,20 +71,18 @@ def test_clean_subprocess_env_frozen_without_orig():
         assert "LD_LIBRARY_PATH_ORIG" not in cleaned
         assert "DYLD_LIBRARY_PATH_ORIG" not in cleaned
 
-def test_clean_subprocess_env_appimage_stripping():
+def test_clean_subprocess_env_meipass_stripping():
     from mage.utils.env import clean_subprocess_env
     
     mock_env = {
-        "PATH": "/tmp/.mount_mage123/usr/bin/mage-client:/usr/bin",
-        "APPDIR": "/tmp/.mount_mage123",
-        "APPIMAGE": "/home/clem/mage.AppImage",
-        "LD_LIBRARY_PATH": "/tmp/.mount_mage123/usr/bin/mage-client:/tmp/.mount_mage123/usr/lib:/usr/lib64",
-        "LD_LIBRARY_PATH_ORIG": "/tmp/.mount_mage123/usr/lib:/usr/lib64",
-        "DYLD_LIBRARY_PATH": "/tmp/.mount_mage123/usr/bin/mage-client:/tmp/.mount_mage123/usr/lib:/usr/local/lib",
-        "DYLD_LIBRARY_PATH_ORIG": "/tmp/.mount_mage123/usr/lib:/usr/local/lib",
-        "QT_PLUGIN_PATH": "/tmp/.mount_mage123/usr/bin/mage-client/plugins:/usr/lib/qt/plugins",
-        "XDG_DATA_DIRS": "/tmp/.mount_mage123/usr/share:/usr/local/share:/usr/share",
-        "PYTHONHOME": "/tmp/.mount_mage123/python_env",
+        "PATH": "/tmp/_MEI12345/usr/bin:/usr/bin",
+        "LD_LIBRARY_PATH": "/tmp/_MEI12345/lib:/usr/lib64",
+        "LD_LIBRARY_PATH_ORIG": "/tmp/_MEI12345/lib:/usr/lib64",
+        "DYLD_LIBRARY_PATH": "/tmp/_MEI12345/dylib:/usr/local/lib",
+        "DYLD_LIBRARY_PATH_ORIG": "/tmp/_MEI12345/dylib:/usr/local/lib",
+        "QT_PLUGIN_PATH": "/tmp/_MEI12345/plugins:/usr/lib/qt/plugins",
+        "XDG_DATA_DIRS": "/usr/local/share:/usr/share",
+        "PYTHONHOME": "/tmp/_MEI12345/python_env",
         "PYTHONPATH": "/usr/lib/python3.11"
     }
     
@@ -97,7 +95,37 @@ def test_clean_subprocess_env_appimage_stripping():
         assert cleaned["XDG_DATA_DIRS"] == "/usr/local/share:/usr/share"
         assert cleaned["PYTHONPATH"] == "/usr/lib/python3.11"
         assert "PYTHONHOME" not in cleaned
-        assert "APPDIR" not in cleaned
-        assert "APPIMAGE" not in cleaned
+        assert "DYLD_LIBRARY_PATH_ORIG" not in cleaned
+
+
+def test_clean_subprocess_env_meipass_stripping_windows():
+    from mage.utils.env import clean_subprocess_env
+    
+    mock_env = {
+        "PATH": "C:\\Users\\User\\AppData\\Local\\Temp\\_MEI12345\\usr\\bin;C:\\Windows\\system32",
+        "LD_LIBRARY_PATH": "C:\\Users\\User\\AppData\\Local\\Temp\\_MEI12345\\lib;C:\\usr\\lib64",
+        "LD_LIBRARY_PATH_ORIG": "C:\\Users\\User\\AppData\\Local\\Temp\\_MEI12345\\lib;C:\\usr\\lib64",
+        "DYLD_LIBRARY_PATH": "C:\\Users\\User\\AppData\\Local\\Temp\\_MEI12345\\dylib;C:\\usr\\local\\lib",
+        "DYLD_LIBRARY_PATH_ORIG": "C:\\Users\\User\\AppData\\Local\\Temp\\_MEI12345\\dylib;C:\\usr\\local\\lib",
+        "QT_PLUGIN_PATH": "C:\\Users\\User\\AppData\\Local\\Temp\\_MEI12345\\plugins;C:\\usr\\lib\\qt\\plugins",
+        "XDG_DATA_DIRS": "C:\\usr\\local\\share;C:\\usr\\share",
+        "PYTHONHOME": "C:\\Users\\User\\AppData\\Local\\Temp\\_MEI12345\\python_env",
+        "PYTHONPATH": "C:\\usr\\lib\\python3.11"
+    }
+    
+    # Mock sys._MEIPASS as a Windows path
+    with patch("sys.frozen", True, create=True), \
+         patch("sys._MEIPASS", "C:\\Users\\User\\AppData\\Local\\Temp\\_MEI12345", create=True), \
+         patch("os.environ", mock_env), \
+         patch("os.pathsep", ";"):
+        cleaned = clean_subprocess_env()
+        assert cleaned["PATH"] == "C:\\Windows\\system32"
+        assert cleaned["LD_LIBRARY_PATH"] == "C:\\usr\\lib64"
+        assert cleaned["DYLD_LIBRARY_PATH"] == "C:\\usr\\local\\lib"
+        assert cleaned["QT_PLUGIN_PATH"] == "C:\\usr\\lib\\qt\\plugins"
+        assert cleaned["XDG_DATA_DIRS"] == "C:\\usr\\local\\share;C:\\usr\\share"
+        assert cleaned["PYTHONPATH"] == "C:\\usr\\lib\\python3.11"
+        assert "PYTHONHOME" not in cleaned
         assert "LD_LIBRARY_PATH_ORIG" not in cleaned
         assert "DYLD_LIBRARY_PATH_ORIG" not in cleaned
+

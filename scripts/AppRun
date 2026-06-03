@@ -1,8 +1,0 @@
-#!/bin/bash
-HERE="$(dirname "$(readlink -f "${0}")")"
-export PATH="${HERE}/usr/bin/mage-client:${PATH}"
-# Workaround for Qt platforms and libraries in PyInstaller AppImage
-export QT_PLUGIN_PATH="${HERE}/usr/bin/mage-client/PyQt6/Qt6/plugins"
-export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS}"
-
-exec "${HERE}/usr/bin/mage-client/mage-client" "$@"

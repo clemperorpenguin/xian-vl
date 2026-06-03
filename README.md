@@ -30,24 +30,40 @@ See it in action on YouTube: https://www.youtube.com/watch?v=Izu_8pql7cE
 - **User Permissions**: Your user must be in the `input` group for global hotkey capturing (`sudo usermod -aG input $USER` and log out/in)
 - **Lemonade Server**: A running Lemonade Server instance (accessible at `http://localhost:13305` by default)
 
-### Quick Setup
+### Quick Setup (Linux)
 
-Clone the monorepo and sync the workspace:
+Clone the repository and run the bootstrap script — it installs [`uv`](https://docs.astral.sh/uv/), syncs all dependencies, and launches MAGE automatically:
+
+```bash
+git clone https://github.com/clemperorpenguin/xian-vl.git
+cd xian-vl
+./mage.sh
+```
+
+To add MAGE to your desktop application menu:
+
+```bash
+./mage.sh --install
+```
+
+To remove the desktop entry:
+
+```bash
+./mage.sh --uninstall
+```
+
+### Manual Setup (All Platforms)
+
+If you prefer to manage the environment yourself:
 
 ```bash
 git clone https://github.com/clemperorpenguin/xian-vl.git
 cd xian-vl
 uv sync --all-packages
-```
-
-### Launching the Application
-
-Ensure the Lemonade backend server is running, then launch MAGE from the root directory:
-
-```bash
 uv run --package mage-client mage
 ```
 
+### Controls
 - **Open Action Menu / OSD** — Double-Tap `Shift` (Default Leader Key)
 - **Trigger Screen Capture** — Action Menu `C` (select screen region, then Translate / Explain / Chat)
 - **Toggle Chat Sidebar** — Action Menu `A`

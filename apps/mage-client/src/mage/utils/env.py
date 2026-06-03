@@ -22,16 +22,15 @@ import os
 import sys
 
 def clean_subprocess_env() -> dict[str, str]:
-    """Return a copy of os.environ with PyInstaller's and AppImage's environment variables cleaned or removed.
+    """Return a copy of os.environ with PyInstaller's environment variables cleaned or removed.
     
     This ensures spawned system subprocesses (like lemond, whisper-server, spectacle, audio recorder,
     or screenshot tools) don't try to load bundled dynamic libraries, plugins, or configurations
-    from the AppImage/PyInstaller environment, avoiding crashes and driver conflicts.
+    from the PyInstaller environment, avoiding crashes and driver conflicts.
     """
     env = os.environ.copy()
     
-    # Identify mount and extraction folders to strip them
-    appdir = env.get("APPDIR", "")
+    # Identify PyInstaller extraction folder to strip from paths
     meipass = getattr(sys, '_MEIPASS', "")
     
     def clean_path_var(var_name: str, restore_orig: bool = False):
@@ -52,11 +51,12 @@ def clean_subprocess_env() -> dict[str, str]:
             if not part:
                 continue
             is_bundled = False
-            if appdir and part.startswith(appdir):
+            # Normalize paths to forward slashes for cross-platform robustness
+            normalized_part = part.replace('\\', '/')
+            normalized_meipass = meipass.replace('\\', '/') if meipass else ""
+            if normalized_meipass and normalized_part.startswith(normalized_meipass):
                 is_bundled = True
-            if meipass and part.startswith(meipass):
-                is_bundled = True
-            if "/.mount_" in part or "/_MEI" in part:
+            if "/_MEI" in normalized_part:
                 is_bundled = True
                 
             if not is_bundled:
@@ -85,17 +85,13 @@ def clean_subprocess_env() -> dict[str, str]:
         val = env.get(py_var, "")
         if val:
             is_bundled = False
-            if appdir and appdir in val:
+            normalized_val = val.replace('\\', '/')
+            normalized_meipass = meipass.replace('\\', '/') if meipass else ""
+            if normalized_meipass and normalized_meipass in normalized_val:
                 is_bundled = True
-            if meipass and meipass in val:
-                is_bundled = True
-            if "/.mount_" in val or "/_MEI" in val:
+            if "/_MEI" in normalized_val:
                 is_bundled = True
             if is_bundled:
                 env.pop(py_var, None)
-                
-    # 6. Remove AppImage markers to prevent child processes from detecting AppImage state
-    env.pop("APPDIR", None)
-    env.pop("APPIMAGE", None)
 
     return env

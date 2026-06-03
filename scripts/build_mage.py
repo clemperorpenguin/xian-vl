@@ -24,7 +24,54 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+
+def _generate_icon(png_path: Path, out_dir: Path) -> str | None:
+    """Convert xian.png to the platform-native icon format.
+
+    Returns the path to the converted icon, or None if conversion fails
+    (in which case PyInstaller will use its default icon).
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        print("Warning: Pillow not available — skipping icon conversion.", file=sys.stderr)
+        return None
+
+    if sys.platform == "darwin":
+        # macOS requires .icns
+        icns_path = out_dir / "xian.icns"
+        try:
+            img = Image.open(png_path).convert("RGBA")
+            # .icns needs specific sizes; save the 512×512 and let macOS pick
+            img = img.resize((512, 512), Image.LANCZOS)
+            img.save(str(icns_path), format="ICNS")
+            print(f"Generated macOS icon: {icns_path}")
+            return str(icns_path)
+        except Exception as e:
+            print(f"Warning: Failed to generate .icns icon: {e}", file=sys.stderr)
+            return None
+
+    elif sys.platform == "win32":
+        # Windows requires .ico
+        ico_path = out_dir / "xian.ico"
+        try:
+            img = Image.open(png_path).convert("RGBA")
+            # .ico supports multiple sizes; include common ones
+            sizes = [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+            resized = [img.resize(s, Image.LANCZOS) for s in sizes]
+            resized[0].save(str(ico_path), format="ICO", sizes=sizes, append_images=resized[1:])
+            print(f"Generated Windows icon: {ico_path}")
+            return str(ico_path)
+        except Exception as e:
+            print(f"Warning: Failed to generate .ico icon: {e}", file=sys.stderr)
+            return None
+
+    # Linux / other — PNG is fine
+    return str(png_path)
+
 
 def build(include_lemonade: bool, lemonade_dir: Path | None):
     base_dir = Path(__file__).resolve().parent.parent
@@ -33,7 +80,24 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
     if not (app_dir / "src" / "mage" / "main.py").exists():
         print(f"Error: Could not find main.py at {app_dir}")
         sys.exit(1)
-        
+
+    # Clean previous build and dist directories to prevent artifact bleeding
+    build_dir = app_dir / "build"
+    dist_dir = app_dir / "dist"
+    if build_dir.exists():
+        print(f"Cleaning build directory: {build_dir}")
+        shutil.rmtree(build_dir)
+    if dist_dir.exists():
+        print(f"Cleaning dist directory: {dist_dir}")
+        shutil.rmtree(dist_dir)
+
+    # ── Icon conversion ──────────────────────────────────────────────────
+    icon_tmp = Path(tempfile.mkdtemp(prefix="mage-icon-"))
+    icon_path = _generate_icon(base_dir / "xian.png", icon_tmp)
+
+    # ── Paths to bundle ──────────────────────────────────────────────────
+    locales_dir = base_dir / "packages" / "shared-types" / "locales"
+
     # Build with PyInstaller
     print("Running PyInstaller...")
     cmd = [
@@ -41,11 +105,34 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
         "--name", "mage-client",
         "--windowed",
         "--onedir",
-        "--icon", str(base_dir / "xian.png"),
+        # --- Data files ---
         "--add-data", f"{base_dir / 'xian.png'}{os.pathsep}.",
+        "--add-data", f"{locales_dir}{os.pathsep}locales",
+        # --- Hidden imports (dynamic / conditional imports PyInstaller can't trace) ---
+        "--hidden-import", "pynput.keyboard",
+        "--hidden-import", "pynput.mouse",
+        "--hidden-import", "pynput._util",
+        "--hidden-import", "httpx",
+        "--hidden-import", "httpx._transports",
+        "--hidden-import", "httpx._transports.default",
+        "--hidden-import", "openai",
+        "--hidden-import", "yaml",
+        "--hidden-import", "imagehash",
+        "--hidden-import", "numpy",
+        "--hidden-import", "cv2",
+        "--hidden-import", "lmdb",
+        # --- Collect-all for packages with compiled extensions / complex internals ---
+        "--collect-all", "pydantic",
+        "--collect-all", "pydantic_core",
         "--noconfirm",
         str(app_dir / "src" / "mage" / "main.py")
     ]
+
+    # Insert --icon only if we have a valid converted icon
+    if icon_path:
+        cmd.insert(cmd.index("--noconfirm"), "--icon")
+        cmd.insert(cmd.index("--noconfirm"), icon_path)
+
     
     # Run PyInstaller from app_dir
     try:

@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Dict, Any
 
@@ -20,10 +21,15 @@ class RuntimeState:
     def _init_state(self):
         self.ui_language: str = "en"
         self._locale_data: Dict[str, Any] = {}
-        # Locate the locales directory assuming it's in packages/shared-types/locales
-        # __file__ is .../packages/shared-types/src/shared_types/state.py
-        current_dir = Path(__file__).resolve().parent
-        self.locales_dir = current_dir.parent.parent / "locales"
+        # Locate the locales directory — path differs between dev and frozen builds
+        if getattr(sys, 'frozen', False):
+            # PyInstaller bundles locales into _MEIPASS/locales via --add-data
+            base = Path(getattr(sys, '_MEIPASS', Path(sys.executable).parent))
+            self.locales_dir = base / "locales"
+        else:
+            # Dev mode: __file__ is .../packages/shared-types/src/shared_types/state.py
+            current_dir = Path(__file__).resolve().parent
+            self.locales_dir = current_dir.parent.parent / "locales"
         self.load_locale(self.ui_language)
 
     def load_locale(self, lang: str):

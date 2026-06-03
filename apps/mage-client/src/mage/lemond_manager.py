@@ -87,22 +87,28 @@ def start_lemond_if_embedded():
         )
         logger.info("Embedded lemond started with PID %d", _lemond_process.pid)
         
-        # Wait for the port 13305 to become active
-        import socket
-        import time
-        logger.info("Waiting for embedded lemond to start on port 13305...")
-        for i in range(20): # Up to 10 seconds (20 * 0.5s)
-            if _lemond_process.poll() is not None:
-                logger.error("Embedded lemond exited prematurely with code %s", _lemond_process.poll())
-                break
-            try:
-                with socket.create_connection(("127.0.0.1", 13305), timeout=0.5):
-                    logger.info("Embedded lemond is active and responding on port 13305.")
+        # Start socket polling loop in a background thread to prevent blocking main thread
+        import threading
+        def wait_for_port():
+            import socket
+            import time
+            logger.info("Waiting for embedded lemond to start on port 13305...")
+            for i in range(20): # Up to 10 seconds (20 * 0.5s)
+                if _lemond_process is None or _lemond_process.poll() is not None:
+                    code = _lemond_process.poll() if _lemond_process else "unknown"
+                    logger.error("Embedded lemond exited prematurely with code %s", code)
                     break
-            except (ConnectionRefusedError, socket.timeout):
-                time.sleep(0.5)
-        else:
-            logger.warning("Timed out waiting for embedded lemond to respond on port 13305.")
+                try:
+                    with socket.create_connection(("127.0.0.1", 13305), timeout=0.5):
+                        logger.info("Embedded lemond is active and responding on port 13305.")
+                        break
+                except (ConnectionRefusedError, socket.timeout):
+                    time.sleep(0.5)
+            else:
+                logger.warning("Timed out waiting for embedded lemond to respond on port 13305.")
+                
+        thread = threading.Thread(target=wait_for_port, name="lemond-startup-waiter", daemon=True)
+        thread.start()
         
         # Register atexit handler to ensure it gets killed
         atexit.register(stop_lemond)
