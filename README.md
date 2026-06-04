@@ -28,13 +28,13 @@ See it in action on YouTube: https://www.youtube.com/watch?v=Izu_8pql7cE
 
 ### Requirements
 
-- **Linux with Wayland** (X11 also supported; global key-bindings require `evdev` inputs)
-- **User Permissions**: Your user must be in the `input` group for global hotkey capturing (`sudo usermod -aG input $USER` and log out/in)
-- **Lemonade Server**: A running Lemonade Server instance (accessible at `http://localhost:13305` by default)
+- **Linux**: Wayland or X11. To capture global hotkeys, your user must be in the `input` group (`sudo usermod -aG input $USER` followed by a log out/in).
+- **macOS**: Accessibility API permissions (granted when prompted on launch for input capturing).
+- **Lemonade Server**: A running Lemonade Server instance (accessible at `http://localhost:13305` by default), unless using a bundled/embedded setup.
 
-### Quick Setup (Linux)
+### Quick Setup (Linux & macOS)
 
-Clone the repository and run the bootstrap script — it installs [`uv`](https://docs.astral.sh/uv/), syncs all dependencies, and launches MAGE automatically:
+Clone the repository and run the bootstrap script — it automatically installs [`uv`](https://docs.astral.sh/uv/), syncs all dependencies, and launches MAGE:
 
 ```bash
 git clone https://github.com/clemperorpenguin/xian-vl.git
@@ -42,46 +42,40 @@ cd xian-vl
 ./mage.sh
 ```
 
-To add MAGE to your desktop application menu:
+#### Installing / Registering the Application
+You can register MAGE in your system's application menu (Linux) or Applications directory (macOS):
 
-```bash
-./mage.sh --install
-```
+- **Default Installation**:
+  ```bash
+  ./mage.sh --install
+  ```
+  - **Linux**: Creates a `.desktop` shortcut launcher.
+  - **macOS**: Creates a launcher at `/Applications/MAGE.app`, automatically downloads the pre-built embeddable Lemonade server binary, and pre-pulls the default vision-language model.
 
-To add MAGE to your menu **and** automatically install system dependencies, build the embeddable Lemonade server from source, and pull the default vision-language model:
+- **Build Lemonade from Source**:
+  If you want to build the embeddable Lemonade server from scratch (useful for custom optimizations or specific platforms):
+  ```bash
+  ./mage.sh --install --build
+  ```
 
-```bash
-./mage.sh --install --build
-```
+- **Uninstallation**:
+  To clean up and remove the registered shortcut and files:
+  ```bash
+  ./mage.sh --uninstall
+  ```
 
-To remove the desktop entry and icon:
+### Pre-built Releases (Windows)
 
-```bash
-./mage.sh --uninstall
-```
-
-### Pre-built Releases (Windows & macOS)
-
-If you are running Windows or macOS, or prefer not to build from source, download pre-built packages from the [GitHub Releases](https://github.com/clemperorpenguin/xian-vl/releases) page.
+If you are running Windows, or prefer not to run via the command line, download pre-built packages from the [GitHub Releases](https://github.com/clemperorpenguin/xian-vl/releases) page.
 
 Releases come in two variants:
 - **Lite**: Standalone lightweight version. Requires connecting to an external running Lemonade Server.
-- **Full**: Bundled with the embedded `lemond` server, which starts and stops automatically when the application runs.
+- **Full**: Bundling the embedded `lemond` server, which starts and stops automatically when MAGE runs.
 
-#### Windows
+#### Windows Setup
 1. Download `mage-client-Windows-x86-64-lite.zip` or `mage-client-Windows-x86-64-full.zip`.
 2. Extract the archive.
 3. Double-click `mage-client.exe` to run.
-
-#### macOS
-1. Download `mage-client-MacOS-ARM64-lite.dmg` or `mage-client-MacOS-ARM64-full.dmg` (or ZIP equivalents).
-2. Double-click the DMG and drag `mage-client.app` to your **Applications** directory.
-3. Open and run the application.
-   > [!NOTE]
-   > Because the application is not notarized/signed by Apple, Gatekeeper will block it with a warning saying the application is "damaged and can't be opened". You can easily fix this by running the following command in your terminal:
-   > ```bash
-   > xattr -cr /Applications/mage-client.app
-   > ```
 
 ### Manual Setup (All Platforms)
 
