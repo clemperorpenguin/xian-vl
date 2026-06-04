@@ -18,11 +18,14 @@
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# mage.sh — Distro-agnostic bootstrap for MAGE on Linux.
+# mage.sh — Cross-platform bootstrap for MAGE on Linux and macOS.
 #
 #   ./mage.sh              Install uv + deps, then launch MAGE.
-#   ./mage.sh --install    Create a .desktop entry and icon for the app menu.
-#   ./mage.sh --uninstall  Remove the .desktop entry and icon.
+#   ./mage.sh --install    Register MAGE in your application menu / Launchpad.
+#   ./mage.sh --install --build
+#                          Register MAGE, install embeddable Lemonade, and pull
+#                          the default vision-language model.
+#   ./mage.sh --uninstall  Remove the application entry created by --install.
 #   ./mage.sh --help       Show this help message.
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -30,11 +33,16 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ICON_SRC="${REPO_DIR}/xian.png"
+PLATFORM="$(uname -s)"
 
+# Linux desktop integration paths
 DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/512x512/apps"
 DESKTOP_FILE="${DESKTOP_DIR}/mage.desktop"
 ICON_FILE="${ICON_DIR}/mage.png"
+
+# macOS application bundle path
+MACOS_APP="/Applications/MAGE.app"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -43,12 +51,14 @@ print_usage() {
 Usage: ./mage.sh [OPTION]
 
 Options:
-  --install     Create a desktop entry and icon so MAGE appears in your
-                application menu.
+  --install     Register MAGE in your application menu (Linux) or Launchpad
+                (macOS). On macOS, embeddable Lemonade is downloaded and the
+                default model is pulled automatically.
   --install --build
-                Create a desktop entry, build embeddable Lemonade from source,
-                and pull the default vision-language model.
-  --uninstall   Remove the desktop entry and icon created by --install.
+                Register MAGE and build embeddable Lemonade from source
+                instead of downloading a pre-built binary.
+  --uninstall   Remove the application entry created by --install.
+  --build       Build embeddable Lemonade from source without registering.
   --help        Show this help message.
 
 With no options, MAGE is launched directly. If uv or project dependencies
@@ -89,6 +99,8 @@ sync_deps() {
     echo "── Syncing workspace dependencies… ──"
     (cd "${REPO_DIR}" && uv sync --all-packages)
 }
+
+# ── Linux-only: build dependencies for compiling Lemonade from source ────────
 
 install_build_deps() {
     echo "── Detecting Linux distribution family… ──"
@@ -142,6 +154,8 @@ install_build_deps() {
     esac
 }
 
+# ── Linux: build Lemonade from source ────────────────────────────────────────
+
 build_lemonade() {
     echo "── Building embeddable Lemonade from source… ──"
     
@@ -171,17 +185,76 @@ build_lemonade() {
     local stage_dir="${dirs[0]}"
     echo "Staged files located at: ${stage_dir}"
     
-    # Install files locally
+    _install_lemonade_from_dir "${stage_dir}"
+}
+
+# ── macOS: download pre-built Lemonade from GitHub releases ──────────────────
+
+download_lemonade() {
+    echo "── Downloading pre-built embeddable Lemonade for macOS… ──"
+
+    # Determine latest release tag
+    local release_json
+    release_json=$(curl -fsSL "https://api.github.com/repos/lemonade-sdk/lemonade/releases/latest")
+    local tag
+    tag=$(echo "${release_json}" | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+    local version="${tag#v}"
+    echo "Latest Lemonade release: ${version}"
+
+    # Determine architecture suffix
+    local arch
+    arch="$(uname -m)"
+    local arch_suffix="macos-arm64"
+    if [[ "${arch}" == "x86_64" ]]; then
+        arch_suffix="macos-x64"
+    fi
+
+    local tarball="lemonade-embeddable-${version}-${arch_suffix}.tar.gz"
+    local download_url="https://github.com/lemonade-sdk/lemonade/releases/download/${tag}/${tarball}"
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    trap "rm -rf '${tmp_dir}'" EXIT
+
+    echo "Downloading ${download_url}…"
+    curl -fSL -o "${tmp_dir}/${tarball}" "${download_url}"
+
+    echo "Extracting…"
+    tar -xzf "${tmp_dir}/${tarball}" -C "${tmp_dir}"
+
+    # Find the extracted directory (lemonade-embeddable-*)
+    local extracted_dir
+    extracted_dir=$(find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d | head -1)
+    if [[ -z "${extracted_dir}" || ! -d "${extracted_dir}" ]]; then
+        echo "Error: Could not find extracted lemonade directory in ${tmp_dir}." >&2
+        exit 1
+    fi
+
+    _install_lemonade_from_dir "${extracted_dir}"
+
+    # Clean up trap will remove tmp_dir
+    trap - EXIT
+    rm -rf "${tmp_dir}"
+}
+
+# ── Shared: install lemonade binaries from a staging directory ────────────────
+
+_install_lemonade_from_dir() {
+    local stage_dir="$1"
+
+    # Copy lemond server binary
     echo "Copying lemond server to repository root…"
     cp -f "${stage_dir}/lemond" "${REPO_DIR}/lemond"
     chmod +x "${REPO_DIR}/lemond"
     
+    # Copy resources
     echo "Copying resources to repository root…"
     if [[ -d "${REPO_DIR}/resources" ]]; then
         rm -rf "${REPO_DIR}/resources"
     fi
     cp -r "${stage_dir}/resources" "${REPO_DIR}/resources"
     
+    # Copy lemonade CLI
     echo "Copying lemonade CLI to ~/.local/bin/lemonade…"
     mkdir -p "${HOME}/.local/bin"
     cp -f "${stage_dir}/lemonade" "${HOME}/.local/bin/lemonade"
@@ -205,7 +278,7 @@ build_lemonade() {
     echo "Waiting for lemond to respond on port 13305…"
     local ready=false
     for i in {1..30}; do
-        if bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/13305' &>/dev/null; then
+        if curl -sf "http://127.0.0.1:13305/v1/models" >/dev/null 2>&1; then
             ready=true
             break
         fi
@@ -235,7 +308,7 @@ build_lemonade() {
 
 # ── Actions ───────────────────────────────────────────────────────────────────
 
-do_install() {
+do_install_linux() {
     ensure_uv
     sync_deps
 
@@ -288,7 +361,117 @@ DESKTOP
     fi
 }
 
-do_uninstall() {
+do_install_macos() {
+    ensure_uv
+    sync_deps
+
+    echo "── Creating macOS application bundle… ──"
+
+    local app_dir="${MACOS_APP}"
+    local contents="${app_dir}/Contents"
+    local macos_dir="${contents}/MacOS"
+    local res_dir="${contents}/Resources"
+
+    mkdir -p "${macos_dir}" "${res_dir}"
+
+    # Generate .icns icon from xian.png if sips is available
+    if [[ -f "${ICON_SRC}" ]] && command -v sips &>/dev/null && command -v iconutil &>/dev/null; then
+        echo "Generating macOS icon from xian.png…"
+        local iconset_dir
+        iconset_dir=$(mktemp -d)/mage.iconset
+        mkdir -p "${iconset_dir}"
+
+        # Generate all required icon sizes
+        for size in 16 32 64 128 256 512; do
+            sips -z "${size}" "${size}" "${ICON_SRC}" --out "${iconset_dir}/icon_${size}x${size}.png" >/dev/null 2>&1
+        done
+        # Retina variants (e.g., icon_16x16@2x.png = 32x32)
+        for size in 16 32 128 256; do
+            local double=$((size * 2))
+            cp "${iconset_dir}/icon_${double}x${double}.png" "${iconset_dir}/icon_${size}x${size}@2x.png" 2>/dev/null || true
+        done
+        # 512@2x = 1024, generate separately
+        sips -z 1024 1024 "${ICON_SRC}" --out "${iconset_dir}/icon_512x512@2x.png" >/dev/null 2>&1
+
+        iconutil -c icns -o "${res_dir}/mage.icns" "${iconset_dir}" 2>/dev/null || true
+        rm -rf "$(dirname "${iconset_dir}")"
+    elif [[ -f "${ICON_SRC}" ]]; then
+        # Fallback: just copy the PNG
+        cp "${ICON_SRC}" "${res_dir}/mage.png"
+    fi
+
+    # Determine the icon filename that was created
+    local icon_file="mage.icns"
+    if [[ ! -f "${res_dir}/mage.icns" ]]; then
+        icon_file="mage.png"
+    fi
+
+    # Create Info.plist
+    cat > "${contents}/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>MAGE</string>
+    <key>CFBundleDisplayName</key>
+    <string>MAGE</string>
+    <key>CFBundleIdentifier</key>
+    <string>systems.pendragon.mage</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleExecutable</key>
+    <string>mage-launcher</string>
+    <key>CFBundleIconFile</key>
+    <string>${icon_file}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+
+    # Create launcher script
+    cat > "${macos_dir}/mage-launcher" <<LAUNCHER
+#!/usr/bin/env bash
+# MAGE.app launcher — delegates to the repository mage.sh
+exec "${REPO_DIR}/mage.sh" "\$@"
+LAUNCHER
+    chmod +x "${macos_dir}/mage-launcher"
+
+    echo ""
+    echo "✓ MAGE.app installed to ${app_dir}"
+    echo "  You should now see MAGE in Launchpad and Spotlight."
+    echo "  To launch from the terminal: ${REPO_DIR}/mage.sh"
+
+    # On macOS, --install always provisions Lemonade.
+    # Use --build to compile from source instead of downloading.
+    if [[ "${BUILD_LEMONADE}" == "true" ]]; then
+        install_build_deps
+        build_lemonade
+    else
+        download_lemonade
+    fi
+}
+
+do_install() {
+    case "${PLATFORM}" in
+        Darwin)
+            do_install_macos
+            ;;
+        *)
+            do_install_linux
+            ;;
+    esac
+}
+
+do_uninstall_linux() {
     local removed=0
     if [[ -f "${DESKTOP_FILE}" ]]; then
         rm -f "${DESKTOP_FILE}"
@@ -310,6 +493,26 @@ do_uninstall() {
     else
         echo "✓ MAGE desktop entry removed."
     fi
+}
+
+do_uninstall_macos() {
+    if [[ -d "${MACOS_APP}" ]]; then
+        rm -rf "${MACOS_APP}"
+        echo "✓ Removed ${MACOS_APP}"
+    else
+        echo "Nothing to remove — MAGE.app is not installed."
+    fi
+}
+
+do_uninstall() {
+    case "${PLATFORM}" in
+        Darwin)
+            do_uninstall_macos
+            ;;
+        *)
+            do_uninstall_linux
+            ;;
+    esac
 }
 
 do_run() {

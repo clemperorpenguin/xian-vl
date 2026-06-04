@@ -40,21 +40,7 @@ def _generate_icon(png_path: Path, out_dir: Path) -> str | None:
         print("Warning: Pillow not available — skipping icon conversion.", file=sys.stderr)
         return None
 
-    if sys.platform == "darwin":
-        # macOS requires .icns
-        icns_path = out_dir / "xian.icns"
-        try:
-            img = Image.open(png_path).convert("RGBA")
-            # .icns needs specific sizes; save the 512×512 and let macOS pick
-            img = img.resize((512, 512), Image.LANCZOS)
-            img.save(str(icns_path), format="ICNS")
-            print(f"Generated macOS icon: {icns_path}")
-            return str(icns_path)
-        except Exception as e:
-            print(f"Warning: Failed to generate .icns icon: {e}", file=sys.stderr)
-            return None
-
-    elif sys.platform == "win32":
+    if sys.platform == "win32":
         # Windows requires .ico
         ico_path = out_dir / "xian.ico"
         try:
@@ -144,12 +130,8 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
     dist_dir = app_dir / "dist"
     
     # Determine the actual app directory where our executable lives
-    if sys.platform == "darwin":
-        bundle_dir = dist_dir / "mage-client.app" / "Contents" / "MacOS"
-        root_app = dist_dir / "mage-client.app"
-    else:
-        bundle_dir = dist_dir / "mage-client"
-        root_app = bundle_dir
+    bundle_dir = dist_dir / "mage-client"
+    root_app = bundle_dir
         
     if include_lemonade:
         if not lemonade_dir or not lemonade_dir.exists():
@@ -186,60 +168,14 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
             
     print("Build complete.")
     
-    suffix = "Windows-x86-64" if sys.platform == "win32" else "MacOS-ARM64"
+    suffix = "Windows-x86-64"
     archive_name = f"mage-client-{suffix}-{'full' if include_lemonade else 'lite'}"
 
-    if sys.platform == "win32":
-        # Create a zip file
-        zip_path = app_dir / f"{archive_name}.zip"
-        print(f"Creating {zip_path}...")
-        shutil.make_archive(str(app_dir / archive_name), 'zip', dist_dir, "mage-client")
-        print(f"Generated {zip_path}")
-        
-    elif sys.platform == "darwin":
-        zip_path = app_dir / f"{archive_name}.zip"
-        if shutil.which("zip"):
-            print(f"Creating zip archive {zip_path} using native zip to preserve symlinks...")
-            if zip_path.exists():
-                zip_path.unlink()
-            try:
-                subprocess.run([
-                    "zip", "-r", "-y",
-                    str(zip_path),
-                    "mage-client.app"
-                ], cwd=dist_dir, check=True)
-                print(f"Generated {zip_path}")
-            except Exception as e:
-                print(f"Warning: Native zip failed ({e}). Falling back to shutil...")
-                shutil.make_archive(str(app_dir / archive_name), 'zip', dist_dir, "mage-client.app")
-        else:
-            print(f"zip utility not found. Creating zip archive {zip_path} via shutil...")
-            shutil.make_archive(str(app_dir / archive_name), 'zip', dist_dir, "mage-client.app")
-            print(f"Generated {zip_path}")
-
-        dmg_path = app_dir / f"{archive_name}.dmg"
-        if shutil.which("create-dmg"):
-            print(f"Creating {dmg_path}...")
-            if dmg_path.exists():
-                dmg_path.unlink()
-            try:
-                subprocess.run([
-                    "create-dmg",
-                    "--volname", "MAGE",
-                    "--window-pos", "200", "120",
-                    "--window-size", "800", "400",
-                    "--icon-size", "100",
-                    "--icon", "mage-client.app", "200", "190",
-                    "--hide-extension", "mage-client.app",
-                    "--app-drop-link", "600", "185",
-                    str(dmg_path),
-                    str(root_app)
-                ], cwd=app_dir, check=True)
-                print(f"Generated {dmg_path}")
-            except subprocess.CalledProcessError as e:
-                print(f"DMG creation failed with exit code {e.returncode}. Proceeding with ZIP archive.", file=sys.stderr)
-        else:
-            print("create-dmg not found. Skipping DMG creation.")
+    # Create a zip file
+    zip_path = app_dir / f"{archive_name}.zip"
+    print(f"Creating {zip_path}...")
+    shutil.make_archive(str(app_dir / archive_name), 'zip', dist_dir, "mage-client")
+    print(f"Generated {zip_path}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build MAGE Client")

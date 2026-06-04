@@ -19,17 +19,10 @@ jobs:
           - os: windows-latest
             preset: windows
             artifact_name: lemonade-embeddable-windows-x64
-          - os: macos-latest
-            preset: default
-            artifact_name: lemonade-embeddable-macos-arm64
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Setup CMake and Ninja (macOS)
-        if: runner.os == 'macOS'
-        run: brew install cmake ninja
 
       - name: Configure CMake
         run: cmake --preset ${{ matrix.preset }} -DBUILD_WEB_APP=OFF
@@ -61,8 +54,6 @@ jobs:
         include:
           - os: windows-latest
             lemonade_artifact: lemonade-embeddable-windows-x64
-          - os: macos-latest
-            lemonade_artifact: lemonade-embeddable-macos-arm64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,27 +65,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Python (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install python@3.11
-          BREW_PREFIX=$(brew --prefix)
-          echo "$BREW_PREFIX/opt/python@3.11/libexec/bin" >> $GITHUB_PATH
-        shell: bash
-
       - name: Create Virtual Environment (Windows)
         if: runner.os == 'Windows'
         run: |
           python -m venv venv
           echo "VIRTUAL_ENV=venv" >> $env:GITHUB_ENV
           echo "PATH=venv\Scripts;$env:PATH" >> $env:GITHUB_ENV
-
-      - name: Create Virtual Environment (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          python -m venv venv
-          echo "VIRTUAL_ENV=venv" >> $GITHUB_ENV
-          echo "PATH=venv/bin:$PATH" >> $GITHUB_ENV
 
       - name: Install Python Dependencies
         run: |
@@ -122,7 +98,6 @@ jobs:
           name: mage-client-${{ runner.os }}
           path: |
             apps/mage-client/*.zip
-            apps/mage-client/*.dmg
 
   release:
     name: Create GitHub Release
@@ -136,16 +111,10 @@ jobs:
           name: mage-client-Windows
           path: artifacts/Windows
 
-      - name: Download macOS Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: mage-client-macOS
-          path: artifacts/macOS
-
       - name: Prepare Release Files
         run: |
           mkdir -p release_dist
-          find artifacts/ -type f \( -name "*.zip" -o -name "*.dmg" \) -exec cp {} release_dist/ \;
+          find artifacts/ -type f -name "*.zip" -exec cp {} release_dist/ \;
           ls -la release_dist/
 
       - name: Publish to GitHub Release
