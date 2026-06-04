@@ -6,22 +6,22 @@ This document outlines the planned milestones, upcoming features, and long-term 
 
 ## 🗺️ Current Roadmap Status
 
-- [x]  - Core HUD & Visual Translation**: PyQt6 overlay, Wayland hotkeys, Grim/Spectacle screenshot integration, local dictionary lookup, translation OSD menus, and settings panel.
-- [/]  - Multimodal Omni Integration**: Local Omni routing (`OmniModelRouter`), component auto-discovery via Lemonade, and basic TTS playback.
-- [ ]  - Unified Audio & Speech (Raid Mode & Live Streaming)**: Fully functional local ASR, voice loop translation, and low-latency voice command activation.
+- [x] **Core HUD & Visual Translation**: PyQt6 overlay, Wayland hotkeys, Grim/Spectacle screenshot integration, local dictionary lookup, translation OSD menus, and settings panel.
+- [x] **Multimodal Omni Integration**: Local Omni routing (`OmniModelRouter`), component auto-discovery via Lemonade, and basic TTS playback.
+- [/] **Unified Audio & Speech (Raid Mode & Live Streaming)**: Client-side Raid Mode Window overlay, custom ToggleSwitch, StatusDot LED, and optimized background TTS pipeline complete. Fully blocked by Lemonade server-side ASR model load failure (Lemonade Issue #2083).
 
 ---
 
 ## ⚡ Short-Term Goals (Next 1-3 Months)
 
-### 1. Raid Mode & ASR Stream Pipeline Hack
-* **Status**: Live speech translation (Raid Mode) is currently disabled due to server-side audio uploading/streaming limitations.
-* **Goal**: Restore the `RaidWorker` loop.
-* **Approach**: Perform hands-on experiments/hacking with chunked audio binaries and connection interfaces to bypass the current Lemonade server-side constraints. Implement noise-cancellation and local voice activity detection (VAD) to improve input quality before sending audio payloads.
+### 1. Resolve Server-Side ASR Blocker (Lemonade #2083)
+* **Status**: Client-side UI and background worker pipeline are fully implemented. Speech translation is currently blocked by Lemonade Server Issue #2083, which causes 500 errors when loading Whisper ASR models.
+* **Goal**: Resolve or work around Lemonade server-side Whisper loading limitations.
+* **Approach**: Investigate server-side configuration workarounds for model loading or collaborate with Lemonade core developers. Explore client-side local speech-to-text fallbacks if server-side fixes are delayed.
 
 ### 2. High-Priority MAGE Desktop Features
 * **Bilibili Support**: Support overlay capture and live-translation flows for Bilibili video streams and interface windows, making it easier for users to translate on-screen dialogue and commentary in real-time.
-* **Raid Mode UI Integration**: Connect the voice capture backend back into the status bar, displaying real-time speech logs directly in the OSD or a dedicated chat bubble overlay.
+* [x] **Raid Mode UI Integration**: Draggable overlay window (`RaidWindow`), custom slide switches, status LEDs, and real-time speech logs integrated into the MAGE HUD.
 
 ### 3. Expansion of UI Target Locales
 * **Approach**: Adding additional languages is straightforward. New strings can be appended to the reference [en.json](file:///packages/shared-types/locales/en.json) with description contexts, followed by running:
