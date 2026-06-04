@@ -41,6 +41,7 @@ from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, Cinemat
 from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
 from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.how_to_say import HowToSayDialog
+from mage.ui.raid_window import RaidWindow
 from mage.ui.result_bubble import ResultBubble
 from mage.capture.hotkeys import create_hotkey_listener
 from mage.capture.mouse import create_mouse_listener
@@ -349,6 +350,8 @@ class XianApp(QWidget):
 
         # --- Raid Mode ---
         self.raid_bubble = None
+        self.raid_window = None
+        self._raid_worker = None
 
         # --- Dialogue Mode ---
         self.dialogue_mode_active = False
@@ -1142,6 +1145,13 @@ class XianApp(QWidget):
                 pass
             self.raid_bubble = None
 
+        if hasattr(self, "raid_window") and self.raid_window:
+            try:
+                self.raid_window.close()
+            except Exception:
+                pass
+            self.raid_window = None
+
     def on_dialogue_click(self):
         if self.dialogue_mode_active:
             if self._is_click_inside_mage(QCursor.pos()):
@@ -1174,9 +1184,9 @@ class XianApp(QWidget):
                     return True
             except Exception:
                 pass
-        if hasattr(self, "raid_bubble") and self.raid_bubble:
+        if hasattr(self, "raid_window") and self.raid_window:
             try:
-                if self.raid_bubble.isVisible() and self.raid_bubble.geometry().contains(pos):
+                if self.raid_window.isVisible() and self.raid_window.geometry().contains(pos):
                     return True
             except Exception:
                 pass
@@ -1347,23 +1357,40 @@ class XianApp(QWidget):
             logger.info("Raid mode bypassed: developer options disabled")
             return
             
+        # If already running, toggle OFF
+        if hasattr(self, "_raid_worker") and self._raid_worker is not None:
+            self.stop_raid_mode()
+            return
+
         logger.info("Triggered Raid Mode")
-        self.raid_bubble = self._replace_persistent_bubble("raid_bubble", t("raid.status.recording"))
+        
+        # Instantiate/show the RaidWindow
+        if not hasattr(self, "raid_window") or not self.raid_window:
+            self.raid_window = RaidWindow(self.settings)
+            self.raid_window.audio_toggled.connect(self._on_raid_audio_toggled)
+            self.raid_window.stop_requested.connect(self.stop_raid_mode)
+            self._apply_transient_parent(self.raid_window)
+
+        self.raid_window.clear_log()
+        self.raid_window.set_status(t("raid.window.status.listening"), "listening")
+        self.raid_window.show()
+        self.raid_window.raise_()
 
         source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
-
         save_lore = self.settings.value("live_raid_lore_save", "false")
+        live_voice_raid = self.settings.value("live_voice_raid", "false")
 
         worker = RaidWorker(
             self.processor,
             target_lang=target_lang,
             source_lang=source_lang,
-            save_lore=(save_lore == "true" or save_lore is True)
+            save_lore=(save_lore == "true" or save_lore is True),
+            audio_enabled=(live_voice_raid == "true" or live_voice_raid is True)
         )
 
         worker.chunk_translated.connect(
-            lambda transcript, translation, w=worker: self._on_chunk_translated(transcript, translation, w)
+            lambda transcript, translation, audio_bytes, w=worker: self._on_chunk_translated(transcript, translation, audio_bytes, w)
         )
         worker.error.connect(
             lambda msg, w=worker: self._on_raid_error(msg, w)
@@ -1371,44 +1398,66 @@ class XianApp(QWidget):
         worker.progress.connect(
             lambda text, w=worker: self._on_raid_progress(text, w)
         )
-        worker.finished.connect(lambda w=worker: self._cleanup_worker(w))
+        worker.finished.connect(lambda w=worker: self._cleanup_raid_worker(w))
 
+        self._raid_worker = worker
         self._workers.append(worker)
         worker.start()
         logger.info("RaidWorker started")
 
-    def _on_raid_progress(self, text, worker):
-        if hasattr(self, "raid_bubble") and self.raid_bubble and self.raid_bubble.isVisible():
-            self.raid_bubble.update_text(text)
+    def stop_raid_mode(self):
+        if hasattr(self, "_raid_worker") and self._raid_worker is not None:
+            logger.info("Stopping Raid Mode")
+            self._raid_worker.stop()
+            self._raid_worker = None
+        if hasattr(self, "raid_window") and self.raid_window:
+            self.raid_window.close()
 
-    def _on_chunk_translated(self, transcript, translation, worker):
+    def _cleanup_raid_worker(self, worker):
+        self._cleanup_worker(worker)
+        if hasattr(self, "_raid_worker") and self._raid_worker == worker:
+            self._raid_worker = None
+        if hasattr(self, "raid_window") and self.raid_window:
+            self.raid_window.set_status(t("raid.window.status.idle"), "idle")
+
+    def _on_raid_audio_toggled(self, checked):
+        if hasattr(self, "_raid_worker") and self._raid_worker is not None:
+            self._raid_worker.set_audio_enabled(checked)
+
+    def _on_raid_progress(self, text, worker):
+        if hasattr(self, "raid_window") and self.raid_window and self.raid_window.isVisible():
+            state = "listening"
+            if "transcrib" in text.lower():
+                state = "processing"
+                text = t("raid.window.status.processing")
+            elif "translat" in text.lower():
+                state = "processing"
+                text = t("raid.window.status.processing")
+            elif "speech" in text.lower():
+                state = "listening"
+                text = t("raid.window.status.listening")
+            elif "synthesiz" in text.lower():
+                state = "processing"
+                text = t("raid.window.status.processing")
+            self.raid_window.set_status(text, state)
+
+    def _on_chunk_translated(self, transcript, translation, audio_bytes, worker):
         logger.info("Raid chunk translated: %s -> %s", transcript, translation)
         
-        if hasattr(self, "raid_bubble") and self.raid_bubble and self.raid_bubble.isVisible():
-            current_text = getattr(self.raid_bubble, "_raid_text_buffer", [])
-            current_text.append(translation)
-            if len(current_text) > 5:
-                current_text = current_text[-5:]
-            self.raid_bubble._raid_text_buffer = current_text
-            
-            display_text = " ".join(current_text)
-            self.raid_bubble.update_text(display_text)
-            # Update original text dynamically too
-            if hasattr(self.raid_bubble, "original_text"):
-                self.raid_bubble.original_text = transcript
-        else:
-            self.raid_bubble = self._replace_persistent_bubble("raid_bubble", translation, original_text=transcript)
-            self.raid_bubble._raid_text_buffer = [translation]
+        if hasattr(self, "raid_window") and self.raid_window and self.raid_window.isVisible():
+            self.raid_window.append_translation(transcript, translation)
 
-        # Raid Mode optionally plays audio (translating and cloning voices)
+        # Sequential background TTS synthesis was executed inside RaidWorker.
+        # Play the received WAV bytes directly in the background thread.
         live_voice_raid = self.settings.value("live_voice_raid", "false")
-        if live_voice_raid == "true" or live_voice_raid is True:
-            self._speak_text(translation, source=False)
+        if (live_voice_raid == "true" or live_voice_raid is True) and audio_bytes:
+            from mage.capture.audio import play_audio_async
+            play_audio_async(audio_bytes)
 
     def _on_raid_error(self, msg, worker):
         logger.error("Raid Mode error: %s", msg)
-        if hasattr(self, "raid_bubble") and self.raid_bubble and self.raid_bubble.isVisible():
-            self.raid_bubble.update_text(f"⚠ Error: {msg}")
+        if hasattr(self, "raid_window") and self.raid_window and self.raid_window.isVisible():
+            self.raid_window.set_status(f"⚠ Error: {msg}", "error")
         else:
             bubble = ResultBubble(
                 f"⚠ Raid Mode Error: {msg}",
@@ -1597,7 +1646,7 @@ class XianApp(QWidget):
                     any(active_win == b for b in self._bubbles if self._is_valid_widget(b)) or
                     any(active_win == b for b in self._active_bubbles.values() if self._is_valid_widget(b)) or
                     active_win == self.cinematic_bubble or
-                    active_win == self.raid_bubble or
+                    active_win == self.raid_window or
                     active_win == self.dialogue_bubble
                 )
 
@@ -1617,8 +1666,8 @@ class XianApp(QWidget):
 
             if self.cinematic_bubble:
                 raw_overlays.append(self.cinematic_bubble)
-            if self.raid_bubble:
-                raw_overlays.append(self.raid_bubble)
+            if self.raid_window:
+                raw_overlays.append(self.raid_window)
             if self.dialogue_bubble:
                 raw_overlays.append(self.dialogue_bubble)
 
@@ -1693,7 +1742,7 @@ class XianApp(QWidget):
         for b in self._active_bubbles.values():
             if self._is_valid_widget(b):
                 bubbles.append(b)
-        for b in [self.cinematic_bubble, self.raid_bubble, self.dialogue_bubble]:
+        for b in [self.cinematic_bubble, self.raid_bubble, self.dialogue_bubble, self.raid_window]:
             if self._is_valid_widget(b):
                 bubbles.append(b)
 

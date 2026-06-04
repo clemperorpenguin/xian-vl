@@ -85,5 +85,11 @@
   "cinematic.status.deactivated": "映画モード無効",
   "cinematic.status.recording": "オーディオ録音とスクリーンキャプチャ中...",
   "raid.status.recording": "レイドリーダーの録画中...",
-  "cinematic.status.requires_region": "シネマティックモードは、少なくとも 1 つの地域を指定する必要があります。"
+  "cinematic.status.requires_region": "シネマティックモードは、少なくとも 1 つの地域を指定する必要があります。",
+  "raid.window.title": "Xian — レイドモードログ",
+  "raid.window.audio_switch": "翻訳済み音声",
+  "raid.window.clear": "ログをクリア",
+  "raid.window.status.idle": "アイドル",
+  "raid.window.status.listening": "...リスニング中",
+  "raid.window.status.processing": "...翻訳中"
 }

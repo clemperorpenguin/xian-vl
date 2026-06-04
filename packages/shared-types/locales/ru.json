@@ -85,5 +85,11 @@
   "cinematic.status.deactivated": "Кинематографический режим ВЫКЛ",
   "cinematic.status.recording": "Запись аудио и захват экрана...",
   "raid.status.recording": "Запись лидера рейда...",
-  "cinematic.status.requires_region": "Режим кинематографического отображения требует хотя бы одной области."
+  "cinematic.status.requires_region": "Режим кинематографического отображения требует хотя бы одной области.",
+  "raid.window.title": "Xian — Режим рейда: Журнал",
+  "raid.window.audio_switch": "Перевод аудио",
+  "raid.window.clear": "Очистить журнал",
+  "raid.window.status.idle": "Ожидание",
+  "raid.window.status.listening": "Слушание...",
+  "raid.window.status.processing": "Перевод..."
 }

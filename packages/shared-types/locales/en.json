@@ -346,6 +346,30 @@
   "cinematic.status.requires_region": {
     "value": "Cinematic Mode requires at least one region.",
     "context": "System feedback bubble text shown when user attempts cinematic mode without defining region"
+  },
+  "raid.window.title": {
+    "value": "Xian — Raid Mode Log",
+    "context": "Title of the raid mode window"
+  },
+  "raid.window.audio_switch": {
+    "value": "Translated Audio",
+    "context": "Label next to the translated audio toggle switch"
+  },
+  "raid.window.clear": {
+    "value": "Clear Log",
+    "context": "Button label to clear translation log"
+  },
+  "raid.window.status.idle": {
+    "value": "Idle",
+    "context": "Status text when raid mode is inactive"
+  },
+  "raid.window.status.listening": {
+    "value": "Listening...",
+    "context": "Status text when raid mode is listening for speech"
+  },
+  "raid.window.status.processing": {
+    "value": "Translating...",
+    "context": "Status text when raid mode is translating speech"
   }
 }
 

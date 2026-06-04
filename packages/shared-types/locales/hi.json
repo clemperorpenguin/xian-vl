@@ -85,5 +85,11 @@
   "cinematic.status.deactivated": "फिल्मी मोड बंद",
   "cinematic.status.recording": "ऑडियो रिकॉर्डिंग और स्क्रीन कैप्चर...",
   "raid.status.recording": "राइड नेता रिकॉर्ड कर रहे हैं...",
-  "cinematic.status.requires_region": "सीनेमैटिक मोड में कम से कम एक क्षेत्र की आवश्यकता है।"
+  "cinematic.status.requires_region": "सीनेमैटिक मोड में कम से कम एक क्षेत्र की आवश्यकता है।",
+  "raid.window.title": "Xian — रैड मोड लॉग",
+  "raid.window.audio_switch": "अनुवादित आवाज़",
+  "raid.window.clear": "लॉग साफ़ करें",
+  "raid.window.status.idle": "सक्रिय नहीं",
+  "raid.window.status.listening": "श्रोत कर रहा है...",
+  "raid.window.status.processing": "अनुवाद कर रहा है..."
 }

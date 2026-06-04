@@ -85,5 +85,11 @@
   "cinematic.status.deactivated": "电影模式已禁用",
   "cinematic.status.recording": "正在录制音频并捕获屏幕...",
   "raid.status.recording": "正在录制队伍领袖...",
-  "cinematic.status.requires_region": "电影模式至少需要一个区域。"
+  "cinematic.status.requires_region": "电影模式至少需要一个区域。",
+  "raid.window.title": "Xian — 劫掠模式日志",
+  "raid.window.audio_switch": "翻译音频",
+  "raid.window.clear": "清除日志",
+  "raid.window.status.idle": "空闲",
+  "raid.window.status.listening": "监听中...",
+  "raid.window.status.processing": "翻译中..."
 }

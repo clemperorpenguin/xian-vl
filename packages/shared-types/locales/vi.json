@@ -85,5 +85,11 @@
   "cinematic.status.deactivated": "Chế độ Điện ảnh TẮT",
   "cinematic.status.recording": "Đang ghi âm và ghi màn hình...",
   "raid.status.recording": "Đang ghi lại lãnh đạo đội...",
-  "cinematic.status.requires_region": "Chế độ điện ảnh yêu cầu ít nhất một khu vực."
+  "cinematic.status.requires_region": "Chế độ điện ảnh yêu cầu ít nhất một khu vực.",
+  "raid.window.title": "Xian — Log Chế độ Raid",
+  "raid.window.audio_switch": "Dịch Âm thanh",
+  "raid.window.clear": "Xóa Log",
+  "raid.window.status.idle": "Đang chờ",
+  "raid.window.status.listening": "Đang nghe...",
+  "raid.window.status.processing": "Đang dịch..."
 }

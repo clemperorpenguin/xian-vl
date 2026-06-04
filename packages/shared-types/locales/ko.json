@@ -85,5 +85,11 @@
   "cinematic.status.deactivated": "영화 모드 비활성화",
   "cinematic.status.recording": "음향 및 화면 캡처 중...",
   "raid.status.recording": "대기 중 리더 기록 중...",
-  "cinematic.status.requires_region": "시네마틱 모드는 최소 하나의 지역을 필요로 합니다."
+  "cinematic.status.requires_region": "시네마틱 모드는 최소 하나의 지역을 필요로 합니다.",
+  "raid.window.title": "Xian — Raid 모드 로그",
+  "raid.window.audio_switch": "번역 오디오",
+  "raid.window.clear": "로그 삭제",
+  "raid.window.status.idle": "비활성화됨",
+  "raid.window.status.listening": "듣고 있음...",
+  "raid.window.status.processing": "번역 중..."
 }

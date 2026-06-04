@@ -85,5 +85,11 @@
   "cinematic.status.deactivated": "وضع السينمائي معطل",
   "cinematic.status.recording": "جاري تسجيل الصوت وتصوير الشاشة...",
   "raid.status.recording": "جاري تسجيل قائد المعركة...",
-  "cinematic.status.requires_region": "وضع السينمائي يتطلب على الأقل منطقة واحدة."
+  "cinematic.status.requires_region": "وضع السينمائي يتطلب على الأقل منطقة واحدة.",
+  "raid.window.title": "Xian — سجل وضع الغزوة",
+  "raid.window.audio_switch": "الصوت المترجم",
+  "raid.window.clear": "مسح السجل",
+  "raid.window.status.idle": "في انتظار الأمر",
+  "raid.window.status.listening": "...في الاستماع",
+  "raid.window.status.processing": "...في الترجمة"
 }

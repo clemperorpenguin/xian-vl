@@ -85,5 +85,11 @@
   "cinematic.status.deactivated": "Modo cinematográfico DESACTIVADO",
   "cinematic.status.recording": "Grabando audio y capturando pantalla...",
   "raid.status.recording": "Grabando líder de la expedición...",
-  "cinematic.status.requires_region": "El modo cinematográfico requiere al menos una región."
+  "cinematic.status.requires_region": "El modo cinematográfico requiere al menos una región.",
+  "raid.window.title": "Xian — Registro del modo Raid",
+  "raid.window.audio_switch": "Traducción de audio",
+  "raid.window.clear": "Limpiar registro",
+  "raid.window.status.idle": "Inactivo",
+  "raid.window.status.listening": "Escuchando...",
+  "raid.window.status.processing": "Traduciendo..."
 }

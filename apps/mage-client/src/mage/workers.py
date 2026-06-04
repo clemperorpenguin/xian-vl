@@ -403,21 +403,26 @@ class RaidWorker(QThread):
     No screen/image processing is involved.
     """
 
-    # (original_text, translated_text)
-    chunk_translated = pyqtSignal(str, str)
+    # (original_text, translated_text, audio_bytes)
+    chunk_translated = pyqtSignal(str, str, bytes)
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, processor, *, target_lang: str = "English", source_lang: str = "Chinese", save_lore: bool = False):
+    def __init__(self, processor, *, target_lang: str = "English", source_lang: str = "Chinese", save_lore: bool = False, audio_enabled: bool = False):
         super().__init__()
         self.processor = processor
         self.target_lang = target_lang
         self.source_lang = source_lang
         self.save_lore = save_lore
+        self._audio_enabled = audio_enabled
         self._running = True
 
     def stop(self):
         self._running = False
+
+    def set_audio_enabled(self, enabled: bool):
+        self._audio_enabled = enabled
+        logger.info("RaidWorker: Audio output set to %s", enabled)
 
     async def _run_async(self):
         from mage.capture.audio import ContinuousAudioStreamer
@@ -469,8 +474,19 @@ class RaidWorker(QThread):
                         )
                     except (asyncio.TimeoutError, Exception) as e:
                         logger.warning("Raid Mode transcription failed or timed out: %s", e)
-                        self.progress.emit(f"Transcription failed ({e}), listening...")
-                        continue
+                        err_msg = str(e).lower()
+                        if "500" in err_msg or "internal server error" in err_msg or "model_load_error" in err_msg:
+                            self.chunk_translated.emit(
+                                "[ASR Server Error]",
+                                "⚠️ ASR Server Error (500): Lemonade failed to load/start the speech-to-text model on the server. Live speech translation is disabled due to server-side backend limitations. (Ref: https://github.com/lemonade-sdk/lemonade/issues/2083)",
+                                b""
+                            )
+                            self._running = False
+                            self.progress.emit("ASR server error (500). Raid mode stopped.")
+                            break
+                        else:
+                            self.progress.emit(f"Transcription failed ({e}), listening...")
+                            continue
 
                     if not transcript or not transcript.strip():
                         self.progress.emit("Listening for speech...")
@@ -509,8 +525,28 @@ class RaidWorker(QThread):
                     if not translation:
                         logger.warning("Failed to parse translation from model output.")
                         translation = "[Translation Failed]"
+
+                    # Sequential background TTS synthesis if audio is enabled
+                    audio_bytes = b""
+                    if getattr(self, "_audio_enabled", False):
+                        try:
+                            self.progress.emit("Synthesizing audio...")
+                            tts_model = self.processor.router.tts(active_model)
+                            if tts_model:
+                                voice_param = "af_heart"
+                                if self.target_lang == "Chinese":
+                                    voice_param = "zf_xiaoxiao"
+                                elif self.target_lang == "Japanese":
+                                    voice_param = "jf_alpha"
+                                
+                                audio_bytes = await asyncio.wait_for(
+                                    client.tts(translation, voice=voice_param, model=tts_model),
+                                    timeout=15.0
+                                )
+                        except Exception as tts_err:
+                            logger.error("Raid Mode sequential TTS synthesis failed: %s", tts_err)
                             
-                    self.chunk_translated.emit(transcript, translation)
+                    self.chunk_translated.emit(transcript, translation, audio_bytes)
                     if self.save_lore and hasattr(self, "lore_filepath"):
                         try:
                             with open(self.lore_filepath, "a", encoding="utf-8") as f:
