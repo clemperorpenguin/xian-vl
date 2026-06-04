@@ -6,9 +6,9 @@ This document outlines the planned milestones, upcoming features, and long-term 
 
 ## 🗺️ Current Roadmap Status
 
-- [x] **V1.0 - Core HUD & Visual Translation**: PyQt6 overlay, Wayland hotkeys, Grim/Spectacle screenshot integration, local dictionary lookup, translation OSD menus, and settings panel.
-- [/] **V1.5 - Multimodal Omni Integration**: Local Omni routing (`OmniModelRouter`), component auto-discovery via Lemonade, and basic TTS playback.
-- [ ] **V2.0 - Unified Audio & Speech (Raid Mode & Live Streaming)**: Fully functional local ASR, voice loop translation, and low-latency voice command activation.
+- [x]  - Core HUD & Visual Translation**: PyQt6 overlay, Wayland hotkeys, Grim/Spectacle screenshot integration, local dictionary lookup, translation OSD menus, and settings panel.
+- [/]  - Multimodal Omni Integration**: Local Omni routing (`OmniModelRouter`), component auto-discovery via Lemonade, and basic TTS playback.
+- [ ]  - Unified Audio & Speech (Raid Mode & Live Streaming)**: Fully functional local ASR, voice loop translation, and low-latency voice command activation.
 
 ---
 
