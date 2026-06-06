@@ -370,6 +370,109 @@
   "raid.window.status.processing": {
     "value": "Translating...",
     "context": "Status text when raid mode is translating speech"
+  },
+  "osd.option.hud": {
+    "value": "HUD",
+    "context": "OSD option label for static translation HUD mode"
+  },
+  "hud.preset.dialog.title": {
+    "value": "Static Translation HUD",
+    "context": "Title of the HUD preset selection dialog"
+  },
+  "hud.preset.dialog.prompt": {
+    "value": "Choose to load an existing HUD configuration or create a new one:",
+    "context": "Prompt label inside HUD preset selection dialog"
+  },
+  "hud.preset.dialog.button.load": {
+    "value": "Load Selected Preset",
+    "context": "Button label to load an existing preset"
+  },
+  "hud.preset.dialog.button.create": {
+    "value": "Create New Preset",
+    "context": "Button label to create a new preset"
+  },
+  "hud.preset.dialog.button.cancel": {
+    "value": "Cancel",
+    "context": "Cancel button inside preset dialog"
+  },
+  "hud.setup.overlay.step1": {
+    "value": "Step 1/3: Click and drag to select the Hover Trigger area (invisible button region). Right-click to cancel.",
+    "context": "Instruction label shown during HUD setup step 1"
+  },
+  "hud.setup.overlay.step2": {
+    "value": "Step 2/3: Click and drag to select where the Translation Tooltip should display. Right-click to cancel.",
+    "context": "Instruction label shown during HUD setup step 2"
+  },
+  "hud.setup.overlay.step3": {
+    "value": "Step 3/3: Click and drag to select the original text Box to be translated. Right-click to cancel.",
+    "context": "Instruction label shown during HUD setup step 3"
+  },
+  "hud.confirm.dialog.title": {
+    "value": "Confirm HUD Button Translation",
+    "context": "Title of the HUD button translation confirmation dialog"
+  },
+  "hud.confirm.dialog.label.original": {
+    "value": "Detected Original Text:",
+    "context": "Label for original text in confirmation dialog"
+  },
+  "hud.confirm.dialog.label.translated": {
+    "value": "Translated Text:",
+    "context": "Label for translated text input in confirmation dialog"
+  },
+  "hud.confirm.dialog.button.confirm": {
+    "value": "Confirm & Save Button",
+    "context": "Button label to confirm and save the translation mapping"
+  },
+  "hud.confirm.dialog.button.recapture": {
+    "value": "Re-capture Translation Region",
+    "context": "Button label to re-select the translation region"
+  },
+  "hud.confirm.dialog.button.cancel": {
+    "value": "Cancel",
+    "context": "Cancel button text"
+  },
+  "hud.setup.status.saved": {
+    "value": "Added button to current preset config.",
+    "context": "Status feedback when a button is added to HUD preset"
+  },
+  "hud.setup.dialog.title": {
+    "value": "HUD Configuration Setup",
+    "context": "Title of the HUD setup control dialog"
+  },
+  "hud.setup.dialog.prompt": {
+    "value": "Configured Buttons: {count}",
+    "context": "Label showing the count of buttons currently configured in the preset"
+  },
+  "hud.setup.dialog.button.add": {
+    "value": "Add Another Button",
+    "context": "Button label to add another hover translation zone"
+  },
+  "hud.setup.dialog.button.save": {
+    "value": "Save Configuration",
+    "context": "Button label to save the HUD preset"
+  },
+  "hud.setup.dialog.save_prompt.title": {
+    "value": "Save HUD Preset",
+    "context": "Title of the preset save name prompt"
+  },
+  "hud.setup.dialog.save_prompt.label": {
+    "value": "Enter a name for the preset configuration:",
+    "context": "Label text asking for a preset name"
+  },
+  "hud.status.activated": {
+    "value": "HUD Mode Active (Preset: {name})",
+    "context": "Tray message when HUD mode is activated"
+  },
+  "hud.status.deactivated": {
+    "value": "HUD Mode Disabled",
+    "context": "Tray message when HUD mode is deactivated"
+  },
+  "settings.checkbox.hud_show_original": {
+    "value": "Show original text in HUD tooltips",
+    "context": "Checkbox label to show original text in HUD tooltips"
+  },
+  "settings.checkbox.hud_show_pinyin": {
+    "value": "Enable Pinyin in HUD tooltips",
+    "context": "Checkbox label to show Pinyin in HUD tooltips"
   }
 }
-

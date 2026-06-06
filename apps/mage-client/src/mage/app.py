@@ -50,6 +50,7 @@ from mage.capture.audio import play_audio_async
 from xian.dictionary import LocalDictionary
 from xian.lemonade_url import normalize_lemonade_api_base_url, should_warn_http_to_non_loopback
 from mage.ui.command_osd import CommandOSD
+from mage.ui.hud import HudManager
 from shared_types import constants
 from shared_types.enums import SourceLanguage, TargetLanguage, TranslationMode, TranslationStyle
 from mage.settings_keys import (
@@ -196,6 +197,17 @@ class SettingsDialog(QDialog):
         self.live_raid_lore_save_cb.setChecked(lr_lore_val == "true" or lr_lore_val is True)
         layout.addRow(self.live_raid_lore_save_cb)
 
+        # HUD original and pinyin settings
+        self.hud_show_original_cb = QCheckBox(t("settings.checkbox.hud_show_original"))
+        hud_orig_val = settings.value("hud_show_original", "true")
+        self.hud_show_original_cb.setChecked(hud_orig_val == "true" or hud_orig_val is True)
+        layout.addRow(self.hud_show_original_cb)
+
+        self.hud_show_pinyin_cb = QCheckBox(t("settings.checkbox.hud_show_pinyin"))
+        hud_pin_val = settings.value("hud_show_pinyin", "false")
+        self.hud_show_pinyin_cb.setChecked(hud_pin_val == "true" or hud_pin_val is True)
+        layout.addRow(self.hud_show_pinyin_cb)
+
         # Target Window Title
         self.target_window_combo = QComboBox()
         self.target_window_combo.setEditable(True)
@@ -282,6 +294,8 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
         self.settings.setValue("live_voice_raid", "true" if self.live_voice_raid_cb.isChecked() else "false")
         self.settings.setValue("live_raid_lore_save", "true" if self.live_raid_lore_save_cb.isChecked() else "false")
+        self.settings.setValue("hud_show_original", "true" if self.hud_show_original_cb.isChecked() else "false")
+        self.settings.setValue("hud_show_pinyin", "true" if self.hud_show_pinyin_cb.isChecked() else "false")
         target_val = self.target_window_combo.currentText().strip()
         if self.target_window_combo.currentIndex() == 0 or target_val == t("settings.option.none_overlay") or target_val == "None (Standard Overlay Mode)":
             target_val = ""
@@ -342,6 +356,11 @@ class XianApp(QWidget):
         self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
         if hasattr(self.hotkey_listener, "command_mode_cancelled"):
             self.hotkey_listener.command_mode_cancelled.connect(self.hide_osd)
+
+        # --- HUD Manager ---
+        self.hud_manager = HudManager(self)
+        self.hotkey_listener.trigger_hud.connect(self.hud_manager.show_hud_presets)
+
         self.hotkey_listener.start()
 
         # --- Cinematic Mode ---
@@ -537,6 +556,8 @@ class XianApp(QWidget):
             self.show_how_to_say()
         elif key == "R":
             self.start_raid_mode()
+        elif key == "H":
+            self.hud_manager.show_hud_presets()
         elif key == "S":
             self._open_settings()
 

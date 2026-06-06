@@ -129,6 +129,7 @@ class CommandOSD(QWidget):
         options_layout.addWidget(self._create_option("T", t("osd.option.translate")))
         self.raid_option = self._create_option("R", t("osd.option.raid"))
         options_layout.addWidget(self.raid_option)
+        options_layout.addWidget(self._create_option("H", t("osd.option.hud")))
         options_layout.addWidget(self._create_option("S", t("osd.option.settings")))
 
         inner_layout.addLayout(options_layout)

@@ -38,6 +38,7 @@ class HotkeyListener(QObject):
     command_mode_started = pyqtSignal()
     command_mode_cancelled = pyqtSignal()
     trigger_raid_mode = pyqtSignal()
+    trigger_hud = pyqtSignal()
 
     def start(self):
         pass
@@ -323,6 +324,12 @@ if sys.platform == "linux":
                         self.trigger_raid_mode.emit()
                         self.command_mode_active = False
 
+                    # KEY_H is 35
+                    elif keycode == evdev.ecodes.KEY_H:
+                        logger.info("EvdevListener: Triggered HUD")
+                        self.trigger_hud.emit()
+                        self.command_mode_active = False
+
 else:
     from pynput import keyboard
 
@@ -434,6 +441,10 @@ else:
                             elif char == 'r':
                                 logger.info("PynputListener: Triggered Raid Mode")
                                 self.trigger_raid_mode.emit()
+                                self.command_mode_active = False
+                            elif char == 'h':
+                                logger.info("PynputListener: Triggered HUD")
+                                self.trigger_hud.emit()
                                 self.command_mode_active = False
                     except Exception as e:
                         logger.debug("PynputListener error: %s", e)
