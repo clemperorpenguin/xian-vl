@@ -22,7 +22,9 @@ This document outlines the planned milestones, upcoming features, and long-term 
 ### 2. High-Priority MAGE Desktop Features
 * **Bilibili Support**: Support overlay capture and live-translation flows for Bilibili video streams and interface windows, making it easier for users to translate on-screen dialogue and commentary in real-time.
 * [x] **Raid Mode UI Integration**: Draggable overlay window (`RaidWindow`), custom slide switches, status LEDs, and real-time speech logs integrated into the MAGE HUD.
-* [ ] **Static Translations** Static translations on mouseover, eg tooltips for toolbar buttons.
+* [x] **Static Translations** Static translations on mouseover, eg tooltips for toolbar buttons - implemented in dev branch.
+* [x] **Windows Support** Lightly tested.
+* [ ] **Mac Support** Results returned from embedded lemonade are garbled, needs investigation. Permissions are weird on MacOS. Lightly tested, should work with a LAN or remote node.
 
 ### 3. Expansion of UI Target Locales
 * **Approach**: Adding additional languages is straightforward. New strings can be appended to the reference [en.json](file:///packages/shared-types/locales/en.json) with description contexts, followed by running:
