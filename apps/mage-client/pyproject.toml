@@ -28,3 +28,9 @@ packages = ["src/mage"]
 xian-vl = { workspace = true }
 shared-types = { workspace = true }
 wayland-automation = { git = "https://github.com/OTAKUWeBer/Wayland-automation.git", rev = "test/kde-fake-input-support" }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.10",
+]

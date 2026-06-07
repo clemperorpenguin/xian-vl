@@ -136,10 +136,6 @@ def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
     
     # Mock QCursor.pos to return (960, 540)
     monkeypatch.setattr("PyQt6.QtGui.QCursor.pos", lambda: QPoint(960, 540))
-    
-    # Mock MageMultiEvdevMouseTracker.start and get_position
-    monkeypatch.setattr("mage.ui.hud.MageMultiEvdevMouseTracker.start", lambda self: True)
-    monkeypatch.setattr("mage.ui.hud.MageMultiEvdevMouseTracker.get_position", mock_getter)
 
     with patch("wayland_automation.mouse_position.pick_backend_and_start", mock_pick):
         manager = HudManager(app)
@@ -166,19 +162,25 @@ def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
         assert manager.wayland_mouse_getter == mock_getter
         tracker = manager.wayland_mouse_controller
         assert tracker is not None
-        # Verify bounds were corrected
-        assert tracker.width == 1920
-        assert tracker.height == 1080
-        assert tracker.x == 960
-        assert tracker.y == 540
+        # Verify bounds and scale factors were computed and tracker seeded
+        assert tracker.width == 1080
+        assert tracker.height == 1920
+        assert tracker.x == 540
+        assert tracker.y == 960
+        assert manager.wayland_scale_x == 1920.0 / 1080.0
+        assert manager.wayland_scale_y == 1080.0 / 1920.0
         assert manager.timer.isActive() is True
         
         # Test _check_hover outside hover_rect
+        # Return physical coords that scale outside of hover_rect
+        mock_getter.return_value = (200, 200)
         manager._check_hover()
         assert manager.hovered_button is None
         
         # Test _check_hover inside hover_rect
-        mock_getter.return_value = (15, 15)
+        # Return physical coords that scale inside hover_rect [10, 10, 100, 100]
+        # (8, 26) * (1.777, 0.5625) = (14, 14) which is inside
+        mock_getter.return_value = (8, 26)
         manager.show_single_tooltip = MagicMock()
         manager._check_hover()
         manager.show_single_tooltip.assert_called_once()

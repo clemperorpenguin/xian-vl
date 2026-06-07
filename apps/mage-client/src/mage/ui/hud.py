@@ -45,116 +45,69 @@ logger = logging.getLogger(__name__)
 
 import threading
 
-class MageMultiEvdevMouseTracker:
-    """Listens to all REL_X/REL_Y pointer devices under Wayland to track cursor position."""
+def robust_find_device(self):
+    """Robust device selection for evdev fallback that ensures we pick the real mouse.
     
-    def __init__(self, seed_pos: QPoint, total_geo):
-        self.x = seed_pos.x() - total_geo.left()
-        self.y = seed_pos.y() - total_geo.top()
-        self.width = total_geo.width()
-        self.height = total_geo.height()
-        
-        self.running = False
-        self._lock = threading.Lock()
-        self.devices = []
-        self._threads = []
-
-    def start(self) -> bool:
+    Verifies that the device supports relative motion capabilities (REL_X and REL_Y)
+    and has physical mouse buttons (specifically BTN_LEFT = 0x110) to filter out
+    media keys and virtual keyboards.
+    """
+    fallback_path = None
+    for path in self.list_devices():
         try:
-            import evdev
-        except ImportError:
-            logger.error("evdev is not installed on this platform.")
-            return False
-            
+            dev = self.InputDevice(path)
+        except Exception:
+            continue
         try:
-            for path in evdev.list_devices():
-                try:
-                    device = evdev.InputDevice(path)
-                except Exception:
-                    continue
-                
-                try:
-                    caps = device.capabilities(skip_missing=True)
-                except TypeError:
-                    caps = device.capabilities()
-                except Exception:
-                    try:
-                        device.close()
-                    except Exception:
-                        pass
-                    continue
-                    
-                rels = caps.get(evdev.ecodes.EV_REL)
-                if rels:
-                    if isinstance(rels, dict):
-                        rels_list = list(rels.keys())
-                    else:
-                        rels_list = list(rels)
-                    if evdev.ecodes.REL_X in rels_list and evdev.ecodes.REL_Y in rels_list:
-                        self.devices.append(device)
-                        logger.info("MageMultiEvdevMouseTracker: Listening to mouse at %s (%s)", device.path, device.name)
-                    else:
-                        try:
-                            device.close()
-                        except Exception:
-                            pass
-                else:
-                    try:
-                        device.close()
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.error("MageMultiEvdevMouseTracker: Failed to list devices: %s", e)
-            
-        if not self.devices:
-            logger.warning("MageMultiEvdevMouseTracker: No mouse/pointer devices found.")
-            return False
-            
-        self.running = True
-        for device in self.devices:
-            t = threading.Thread(target=self._listen_device, args=(device,), daemon=True)
-            t.start()
-            self._threads.append(t)
-            
-        logger.info("MageMultiEvdevMouseTracker: Started listening on %d pointer devices", len(self.devices))
-        return True
-
-    def _listen_device(self, device):
-        try:
-            import evdev
-            for ev in device.read_loop():
-                if not self.running:
-                    break
-                if ev.type == evdev.ecodes.EV_REL:
-                    with self._lock:
-                        if ev.code == evdev.ecodes.REL_X:
-                            self.x += ev.value
-                        elif ev.code == evdev.ecodes.REL_Y:
-                            self.y += ev.value
-                        
-                        # Clamp
-                        if self.x < 0: self.x = 0
-                        if self.y < 0: self.y = 0
-                        if self.x >= self.width: self.x = self.width - 1
-                        if self.y >= self.height: self.y = self.height - 1
-        except Exception as e:
-            if self.running:
-                logger.debug("MageMultiEvdevMouseTracker: Stopped listening to %s: %s", device.name, e)
-
-    def get_position(self) -> tuple[int, int]:
-        with self._lock:
-            return int(self.x), int(self.y)
-
-    def stop(self):
-        self.running = False
-        for device in self.devices:
             try:
-                device.close()
+                caps = dev.capabilities(skip_missing=True)
+            except TypeError:
+                caps = dev.capabilities()
+        except Exception:
+            try:
+                dev.close()
             except Exception:
                 pass
-        self.devices = []
-        self._threads = []
-        logger.info("MageMultiEvdevMouseTracker: Stopped listening")
+            continue
+            
+        rels = caps.get(self.ecodes.EV_REL)
+        has_rel = False
+        if rels:
+            if isinstance(rels, dict):
+                rels_list = list(rels.keys())
+            else:
+                rels_list = list(rels)
+            if self.ecodes.REL_X in rels_list and self.ecodes.REL_Y in rels_list:
+                has_rel = True
+                
+        keys = caps.get(self.ecodes.EV_KEY)
+        has_btn = False
+        if keys:
+            if isinstance(keys, dict):
+                keys_list = list(keys.keys())
+            else:
+                keys_list = list(keys)
+            # BTN_LEFT is 0x110 (272)
+            if 0x110 in keys_list or 272 in keys_list:
+                has_btn = True
+                
+        if has_rel:
+            if has_btn:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+                return path
+            elif not fallback_path:
+                fallback_path = path
+                
+        try:
+            dev.close()
+        except Exception:
+            pass
+            
+    return fallback_path
+
 
 
 def get_hud_presets_dir() -> str:
@@ -740,6 +693,8 @@ class HudManager(QWidget):
         self.wayland_mouse_getter = None
         self.wayland_mouse_controller = None
         self.wayland_mouse_offset = QPoint(0, 0)
+        self.wayland_scale_x = 1.0
+        self.wayland_scale_y = 1.0
 
 
     def show_hud_presets(self):
@@ -882,6 +837,14 @@ class HudManager(QWidget):
             if is_wayland:
                 logger.info("Wayland session detected. Attempting wayland-automation mouse tracking...")
                 try:
+                    # Monkey-patch wayland_automation's EvdevFallback.find_device to be robust
+                    try:
+                        import wayland_automation.mouse_position
+                        wayland_automation.mouse_position.EvdevFallback.find_device = robust_find_device
+                        logger.info("Successfully monkey-patched wayland_automation find_device")
+                    except Exception as e:
+                        logger.error("Failed to monkey patch wayland-automation find_device: %s", e)
+
                     from wayland_automation.mouse_position import pick_backend_and_start
                     backend_name, getter_fn, controller_obj = pick_backend_and_start()
                     if backend_name:
@@ -889,35 +852,25 @@ class HudManager(QWidget):
                         self.wayland_mouse_getter = getter_fn
                         self.wayland_mouse_controller = controller_obj
                         
-                        if backend_name == "evdev":
-                            # Stop the single-device wayland-automation tracker
-                            if controller_obj:
-                                try:
-                                    controller_obj.stop()
-                                except Exception:
-                                    pass
+                        from mage.capture.screen import ScreenCapture
+                        total_geo = ScreenCapture.get_virtual_desktop_geometry()
+                        self.wayland_mouse_offset = QPoint(total_geo.left(), total_geo.top())
+                        self.wayland_scale_x = 1.0
+                        self.wayland_scale_y = 1.0
+                        
+                        if backend_name == "evdev" and controller_obj:
+                            # Calculate physical to logical scale factor
+                            physical_width = float(controller_obj.width or total_geo.width())
+                            physical_height = float(controller_obj.height or total_geo.height())
+                            self.wayland_scale_x = total_geo.width() / physical_width
+                            self.wayland_scale_y = total_geo.height() / physical_height
                             
-                            # Initialize and start our multi-device tracker instead
-                            try:
-                                from mage.capture.screen import ScreenCapture
-                                total_geo = ScreenCapture.get_virtual_desktop_geometry()
-                                self.wayland_mouse_offset = QPoint(total_geo.left(), total_geo.top())
-                                
-                                tracker = MageMultiEvdevMouseTracker(QCursor.pos(), total_geo)
-                                if tracker.start():
-                                    self.wayland_mouse_getter = tracker.get_position
-                                    self.wayland_mouse_controller = tracker
-                                    logger.info("Successfully started MageMultiEvdevMouseTracker with offset %s", self.wayland_mouse_offset)
-                                else:
-                                    logger.warning("Failed to start MageMultiEvdevMouseTracker. Disabling HUD.")
-                                    QMessageBox.warning(self.app, t("hud.preset.dialog.title"), t("hud.error.no_wayland_backend"))
-                                    self.deactivate()
-                                    return
-                            except Exception as ex:
-                                logger.exception("Failed to initialize multi-device evdev tracker")
-                                QMessageBox.warning(self.app, t("hud.preset.dialog.title"), t("hud.error.no_wayland_backend"))
-                                self.deactivate()
-                                return
+                            # Seed using QCursor.pos() translated to physical coordinates
+                            seed_pos = QCursor.pos()
+                            controller_obj.x = int((seed_pos.x() - total_geo.left()) / self.wayland_scale_x)
+                            controller_obj.y = int((seed_pos.y() - total_geo.top()) / self.wayland_scale_y)
+                            logger.info("Seeded wayland-automation evdev tracker at physical coords (%d, %d), scale factors: (%.3f, %.3f)",
+                                        controller_obj.x, controller_obj.y, self.wayland_scale_x, self.wayland_scale_y)
                         
                         self.timer.start(100)
                         logger.info("HUD Mode Active (Wayland), loaded preset: %s (buttons count: %d, timer active: %s)", 
@@ -966,6 +919,8 @@ class HudManager(QWidget):
             self.wayland_mouse_controller = None
         self.wayland_mouse_getter = None
         self.wayland_mouse_offset = QPoint(0, 0)
+        self.wayland_scale_x = 1.0
+        self.wayland_scale_y = 1.0
         
         logger.info("HUD Mode Disabled")
         if hasattr(self.app, "tray") and self.app.tray:
@@ -984,7 +939,9 @@ class HudManager(QWidget):
             try:
                 coords = self.wayland_mouse_getter()
                 if coords:
-                    pos = QPoint(coords[0], coords[1]) + self.wayland_mouse_offset
+                    scaled_x = int(coords[0] * self.wayland_scale_x)
+                    scaled_y = int(coords[1] * self.wayland_scale_y)
+                    pos = QPoint(scaled_x, scaled_y) + self.wayland_mouse_offset
                 else:
                     pos = QCursor.pos()
             except Exception as e:
