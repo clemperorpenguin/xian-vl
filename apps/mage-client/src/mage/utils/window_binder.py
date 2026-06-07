@@ -553,14 +553,26 @@ def os_environ_check():
 _bypass_hint_display = None
 
 
-def set_bypass_compositor_hint_x11(win_id: int):
+def set_bypass_compositor_hint_x11(win_id):
     """Set _NET_WM_BYPASS_COMPOSITOR to 2 (don't bypass) to keep compositor active on Linux."""
     global _bypass_hint_display
     if not sys.platform.startswith("linux"):
         return
     if not X11:
         return
+    
+    # Do not execute X11 calls if running natively under Wayland
+    from PyQt6.QtGui import QGuiApplication
+    qt_platform = QGuiApplication.platformName() if QGuiApplication.instance() else None
+    if qt_platform != "xcb":
+        return
+        
     try:
+        if win_id is not None:
+            try:
+                win_id = int(win_id)
+            except (TypeError, ValueError):
+                pass
         if _bypass_hint_display is None:
             _bypass_hint_display = X11.XOpenDisplay(None)
         display = _bypass_hint_display

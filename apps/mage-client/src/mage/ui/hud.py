@@ -612,7 +612,8 @@ class HudManager(QWidget):
         self.app = app
         self.active_preset = None
         self.hovered_button = None
-        self.tooltip_widget = None
+        self.tooltip_widgets = []
+        self.check_count = 0
         
         # The 100ms mouse hover polling loop
         self.timer = QTimer(self)
@@ -750,13 +751,23 @@ class HudManager(QWidget):
                 QMessageBox.critical(self.control_dialog, "Error", f"Failed to save preset:\n{e}")
 
     def load_preset(self, path: str):
-        """Load JSON preset data and begin hover tracking loop."""
+        """Load JSON preset data and begin hover tracking loop or display all on Wayland."""
         try:
             with open(path, "r", encoding="utf-8") as f:
                 self.active_preset = json.load(f)
             
-            self.timer.start(100)
-            logger.info("HUD Mode Active, loaded preset: %s", self.active_preset.get("name"))
+            # Detect platform
+            from PyQt6.QtGui import QGuiApplication
+            qt_platform = QGuiApplication.platformName() if QGuiApplication.instance() else None
+            is_wayland = (qt_platform == "wayland")
+            
+            if is_wayland:
+                logger.info("Wayland session detected. Global mouse tracking is restricted. Displaying all HUD tooltips concurrently.")
+                self.show_all_tooltips()
+            else:
+                self.timer.start(100)
+                logger.info("HUD Mode Active, loaded preset: %s (buttons count: %d, timer active: %s)", 
+                            self.active_preset.get("name"), len(self.active_preset.get("buttons", [])), self.timer.isActive())
             
             # Show a tray message
             if hasattr(self.app, "tray") and self.app.tray:
@@ -772,8 +783,9 @@ class HudManager(QWidget):
 
     def deactivate(self):
         """Stops the hover polling loop and destroys active tooltips."""
+        logger.info("Deactivating HUD Mode, stopping timer and closing tooltips.")
         self.timer.stop()
-        self.hide_tooltip()
+        self.clear_all_tooltips()
         self.hovered_button = None
         self.active_preset = None
         
@@ -791,6 +803,11 @@ class HudManager(QWidget):
             return
             
         pos = QCursor.pos()
+        self.check_count += 1
+        if self.check_count % 10 == 0:
+            logger.debug("HUD Timer Tick %d: cursor pos=%s, active buttons: %s",
+                         self.check_count, pos, [b["hover_rect"] for b in self.active_preset.get("buttons", [])])
+            
         matched_btn = None
         
         # Check if cursor is in any of the button trigger areas
@@ -802,39 +819,65 @@ class HudManager(QWidget):
                 
         if matched_btn:
             if self.hovered_button != matched_btn:
-                self.hide_tooltip()
+                logger.debug("Cursor entered button area! pos=%s, trigger_rect=%s, showing tooltip: %s", 
+                             pos, QRect(*matched_btn["hover_rect"]), matched_btn)
+                self.clear_all_tooltips()
                 self.hovered_button = matched_btn
-                self.show_tooltip(matched_btn)
+                self.show_single_tooltip(matched_btn)
         else:
-            self.hide_tooltip()
-            self.hovered_button = None
+            if self.hovered_button is not None:
+                logger.debug("Cursor left button area! pos=%s, hiding tooltip.", pos)
+                self.clear_all_tooltips()
+                self.hovered_button = None
 
-    def show_tooltip(self, button_cfg: dict):
-        """Displays the translation tooltip on the screen."""
-        display_rect = QRect(*button_cfg["display_rect"])
-        
-        # Settings configurations
-        show_original = self.app.settings.value("hud_show_original", "true") == "true"
-        show_pinyin = self.app.settings.value("hud_show_pinyin", "false") == "true"
-        
-        orig_text = button_cfg.get("original_text", "") if show_original else ""
-        pinyin_text = button_cfg.get("pinyin", "") if (show_pinyin and show_original) else ""
-        trans_text = button_cfg.get("translated_text", "")
-        
-        self.tooltip_widget = HudTooltip(
-            rect=display_rect,
-            text=trans_text,
-            original=orig_text,
-            pinyin=pinyin_text,
-            parent=None
-        )
-        self.app._apply_transient_parent(self.tooltip_widget)
+    def show_all_tooltips(self):
+        """Displays all tooltips in the preset concurrently (Wayland fallback)."""
+        self.clear_all_tooltips()
+        if not self.active_preset:
+            return
+            
+        for btn in self.active_preset.get("buttons", []):
+            widget = self._create_tooltip_widget(btn)
+            if widget:
+                self.tooltip_widgets.append(widget)
 
-    def hide_tooltip(self):
-        """Hides/destroys the current tooltip window."""
-        if self.tooltip_widget:
+    def show_single_tooltip(self, button_cfg: dict):
+        """Displays a single tooltip on the screen (X11/Win/Mac hover)."""
+        self.clear_all_tooltips()
+        widget = self._create_tooltip_widget(button_cfg)
+        if widget:
+            self.tooltip_widgets.append(widget)
+
+    def _create_tooltip_widget(self, button_cfg: dict) -> HudTooltip | None:
+        try:
+            display_rect = QRect(*button_cfg["display_rect"])
+            
+            # Settings configurations
+            show_original = self.app.settings.value("hud_show_original", "true") == "true"
+            show_pinyin = self.app.settings.value("hud_show_pinyin", "false") == "true"
+            
+            orig_text = button_cfg.get("original_text", "") if show_original else ""
+            pinyin_text = button_cfg.get("pinyin", "") if (show_pinyin and show_original) else ""
+            trans_text = button_cfg.get("translated_text", "")
+            
+            widget = HudTooltip(
+                rect=display_rect,
+                text=trans_text,
+                original=orig_text,
+                pinyin=pinyin_text,
+                parent=None
+            )
+            self.app._apply_transient_parent(widget)
+            return widget
+        except Exception as e:
+            logger.exception("Failed to create HUD tooltip widget")
+            return None
+
+    def clear_all_tooltips(self):
+        """Hides and destroys all currently shown tooltips."""
+        for widget in self.tooltip_widgets:
             try:
-                self.tooltip_widget.close()
+                widget.close()
             except Exception:
                 pass
-            self.tooltip_widget = None
+        self.tooltip_widgets.clear()
