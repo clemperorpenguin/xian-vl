@@ -88,3 +88,132 @@ def test_json_save_load(tmp_path):
     assert len(loaded["buttons"]) == 1
     assert loaded["buttons"][0]["hover_rect"] == [10, 10, 100, 100]
     assert loaded["buttons"][0]["translated_text"] == "Attack"
+
+
+class DummyApp:
+    def __init__(self):
+        from PyQt6.QtCore import QSettings
+        self.settings = QSettings("XianProject", "MageTest")
+        self.tray = None
+
+    def _apply_transient_parent(self, widget):
+        pass
+
+
+@pytest.fixture(scope="module", autouse=True)
+def q_app():
+    import sys
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if not app:
+        app = QApplication(sys.argv)
+    yield app
+
+
+def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
+    from unittest.mock import MagicMock, patch
+    from mage.ui.hud import HudManager
+
+    app = DummyApp()
+    app.settings.clear()
+    
+    mock_getter = MagicMock(return_value=(200, 200))
+    mock_controller = MagicMock()
+    mock_pick = MagicMock(return_value=("mock_backend", mock_getter, mock_controller))
+    
+    # Mock QGuiApplication.platformName to return "wayland"
+    monkeypatch.setattr("PyQt6.QtGui.QGuiApplication.platformName", lambda: "wayland")
+    
+    with patch("wayland_automation.mouse_position.pick_backend_and_start", mock_pick):
+        manager = HudManager(app)
+        
+        # Create a dummy preset file
+        preset_file = tmp_path / "test_preset.json"
+        preset_data = {
+            "name": "test_preset",
+            "buttons": [
+                {
+                    "hover_rect": [10, 10, 100, 100],
+                    "display_rect": [20, 20, 50, 50],
+                    "original_text": "攻击",
+                    "translated_text": "Attack",
+                    "pinyin": "gong1 ji1"
+                }
+            ]
+        }
+        with open(preset_file, "w", encoding="utf-8") as f:
+            json.dump(preset_data, f, indent=2)
+            
+        manager.load_preset(str(preset_file))
+        
+        assert manager.wayland_mouse_getter is mock_getter
+        assert manager.wayland_mouse_controller is mock_controller
+        assert manager.timer.isActive() is True
+        
+        # Test _check_hover outside hover_rect
+        manager._check_hover()
+        assert manager.hovered_button is None
+        
+        # Test _check_hover inside hover_rect
+        mock_getter.return_value = (15, 15)
+        manager.show_single_tooltip = MagicMock()
+        manager._check_hover()
+        manager.show_single_tooltip.assert_called_once()
+        
+        # Test deactivate stops controller
+        manager.deactivate()
+        mock_controller.stop.assert_called_once()
+        assert manager.wayland_mouse_getter is None
+        assert manager.wayland_mouse_controller is None
+        assert manager.timer.isActive() is False
+        
+    app.settings.clear()
+
+
+def test_wayland_no_backend_deactivates(tmp_path, monkeypatch, q_app):
+    from unittest.mock import MagicMock, patch
+    from mage.ui.hud import HudManager
+
+    app = DummyApp()
+    app.settings.clear()
+    
+    mock_pick = MagicMock(return_value=(None, None, None))
+    
+    # Mock QGuiApplication.platformName to return "wayland"
+    monkeypatch.setattr("PyQt6.QtGui.QGuiApplication.platformName", lambda: "wayland")
+    
+    # Mock QMessageBox.warning to prevent blocking popup
+    mock_warn = MagicMock()
+    monkeypatch.setattr("PyQt6.QtWidgets.QMessageBox.warning", mock_warn)
+    
+    with patch("wayland_automation.mouse_position.pick_backend_and_start", mock_pick):
+        manager = HudManager(app)
+        
+        # Create a dummy preset file
+        preset_file = tmp_path / "test_preset_no_backend.json"
+        preset_data = {
+            "name": "test_preset_no_backend",
+            "buttons": [
+                {
+                    "hover_rect": [10, 10, 100, 100],
+                    "display_rect": [20, 20, 50, 50],
+                    "original_text": "攻击",
+                    "translated_text": "Attack",
+                    "pinyin": "gong1 ji1"
+                }
+            ]
+        }
+        with open(preset_file, "w", encoding="utf-8") as f:
+            json.dump(preset_data, f, indent=2)
+            
+        manager.load_preset(str(preset_file))
+        
+        assert manager.wayland_mouse_getter is None
+        assert manager.wayland_mouse_controller is None
+        assert manager.timer.isActive() is False
+        assert manager.active_preset is None
+        mock_warn.assert_called_once()
+        
+    app.settings.clear()
+
+

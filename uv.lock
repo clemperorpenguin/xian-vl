@@ -419,6 +419,15 @@ wheels = [
 ]
 
 [[package]]
+name = "jeepney"
+version = "0.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/6f/357efd7602486741aa73ffc0617fb310a29b588ed0fd69c2399acbb85b0c/jeepney-0.9.0.tar.gz", hash = "sha256:cf0e9e845622b81e4a28df94c40345400256ec608d0e55bb8a3feaa9163f5732", size = 106758, upload-time = "2025-02-27T18:51:01.684Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b2/a3/e137168c9c44d18eff0376253da9f1e9234d0239e0ee230d2fee6cea8e55/jeepney-0.9.0-py3-none-any.whl", hash = "sha256:97e5714520c16fc0a45695e5365a2e11b81ea79bba796e26f9f1d178cb182683", size = 49010, upload-time = "2025-02-27T18:51:00.104Z" },
+]
+
+[[package]]
 name = "jiter"
 version = "0.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -717,6 +726,7 @@ dependencies = [
     { name = "pynput", marker = "sys_platform != 'linux'" },
     { name = "pyqt6" },
     { name = "shared-types" },
+    { name = "wayland-automation" },
     { name = "xian-vl" },
 ]
 
@@ -727,6 +737,7 @@ requires-dist = [
     { name = "pynput", marker = "sys_platform != 'linux'", specifier = ">=1.7.6" },
     { name = "pyqt6", specifier = ">=6.6" },
     { name = "shared-types", editable = "packages/shared-types" },
+    { name = "wayland-automation", git = "https://github.com/OTAKUWeBer/Wayland-automation.git?rev=test%2Fkde-fake-input-support" },
     { name = "xian-vl", editable = "packages/xian-vl" },
 ]
 
@@ -1995,6 +2006,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1f/93/041fca8274050e40e6791f267d82e0e2e27dd165627bd640d3e0e378d877/uvicorn-0.46.0.tar.gz", hash = "sha256:fb9da0926999cc6cb22dc7cd71a94a632f078e6ae47ff683c5c420750fb7413d", size = 88758, upload-time = "2026-04-23T07:16:00.151Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/31/a3/5b1562db76a5a488274b2332a97199b32d0442aca0ed193697fd47786316/uvicorn-0.46.0-py3-none-any.whl", hash = "sha256:bbebbcbed972d162afca128605223022bedd345b7bc7855ce66deb31487a9048", size = 70926, upload-time = "2026-04-23T07:15:58.355Z" },
+]
+
+[[package]]
+name = "wayland-automation"
+version = "0.2.7"
+source = { git = "https://github.com/OTAKUWeBer/Wayland-automation.git?rev=test%2Fkde-fake-input-support#22db96c0e0e29d2da01abc195b81ba37b1aff074" }
+dependencies = [
+    { name = "evdev" },
+    { name = "jeepney" },
 ]
 
 [[package]]

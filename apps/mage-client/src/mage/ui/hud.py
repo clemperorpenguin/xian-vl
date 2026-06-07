@@ -621,6 +621,11 @@ class HudManager(QWidget):
         self.setup_buttons = []
         self.control_dialog = None
         self.setup_overlay = None
+        
+        # Configured wayland mouse tracking
+        self.wayland_mouse_getter = None
+        self.wayland_mouse_controller = None
+
 
     def show_hud_presets(self):
         """HUD activation/deactivation handler triggered by hotkey or OSD."""
@@ -760,12 +765,32 @@ class HudManager(QWidget):
             is_wayland = (qt_platform == "wayland")
             
             if is_wayland:
-                logger.info("Wayland session detected. Global mouse tracking is restricted. Displaying all HUD tooltips concurrently.")
-                self.show_all_tooltips()
+                logger.info("Wayland session detected. Attempting wayland-automation mouse tracking...")
+                try:
+                    from wayland_automation.mouse_position import pick_backend_and_start
+                    backend_name, getter_fn, controller_obj = pick_backend_and_start()
+                    if backend_name:
+                        logger.info("Resolved wayland-automation mouse tracking backend: %s", backend_name)
+                        self.wayland_mouse_getter = getter_fn
+                        self.wayland_mouse_controller = controller_obj
+                        self.timer.start(100)
+                        logger.info("HUD Mode Active (Wayland), loaded preset: %s (buttons count: %d, timer active: %s)", 
+                                    self.active_preset.get("name"), len(self.active_preset.get("buttons", [])), self.timer.isActive())
+                    else:
+                        logger.warning("No wayland-automation backend could be resolved. Global mouse tracking is restricted. Disabling HUD.")
+                        QMessageBox.warning(self.app, t("hud.preset.dialog.title"), t("hud.error.no_wayland_backend"))
+                        self.deactivate()
+                        return
+                except Exception as e:
+                    logger.exception("Failed to initialize wayland-automation mouse tracking. Disabling HUD.")
+                    QMessageBox.warning(self.app, t("hud.preset.dialog.title"), t("hud.error.no_wayland_backend"))
+                    self.deactivate()
+                    return
             else:
                 self.timer.start(100)
                 logger.info("HUD Mode Active, loaded preset: %s (buttons count: %d, timer active: %s)", 
                             self.active_preset.get("name"), len(self.active_preset.get("buttons", [])), self.timer.isActive())
+
             
             # Show a tray message
             if hasattr(self.app, "tray") and self.app.tray:
@@ -786,6 +811,14 @@ class HudManager(QWidget):
         self.clear_all_tooltips()
         self.hovered_button = None
         self.active_preset = None
+        # Stop wayland-automation controller if it exists
+        if self.wayland_mouse_controller:
+            try:
+                self.wayland_mouse_controller.stop()
+            except Exception as e:
+                logger.error("Failed to stop wayland-automation mouse controller: %s", e)
+            self.wayland_mouse_controller = None
+        self.wayland_mouse_getter = None
         
         logger.info("HUD Mode Disabled")
         if hasattr(self.app, "tray") and self.app.tray:
@@ -800,7 +833,19 @@ class HudManager(QWidget):
         if not self.active_preset:
             return
             
-        pos = QCursor.pos()
+        if self.wayland_mouse_getter:
+            try:
+                coords = self.wayland_mouse_getter()
+                if coords:
+                    pos = QPoint(coords[0], coords[1])
+                else:
+                    pos = QCursor.pos()
+            except Exception as e:
+                logger.error("Error calling wayland_mouse_getter: %s", e)
+                pos = QCursor.pos()
+        else:
+            pos = QCursor.pos()
+            
         self.check_count += 1
         if self.check_count % 10 == 0:
             logger.debug("HUD Timer Tick %d: cursor pos=%s, active buttons: %s",

@@ -494,5 +494,9 @@
   "settings.checkbox.hud_show_pinyin": {
     "value": "Enable Pinyin in HUD tooltips",
     "context": "Checkbox label to show Pinyin in HUD tooltips"
+  },
+  "hud.error.no_wayland_backend": {
+    "value": "Global mouse tracking is restricted on this Wayland session. Please ensure evdev access is configured or use a supported compositor.",
+    "context": "Error message shown when HUD cannot start on Wayland because no tracking backend was resolved"
   }
 }

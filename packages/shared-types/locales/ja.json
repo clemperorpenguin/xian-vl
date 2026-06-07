@@ -122,5 +122,6 @@
   "hud.status.deactivated": "[プリセット：{name}] HUD モードが無効になりました。",
   "hud.countdown.label": "ボタンにマウスを合わせてください！\n画面のキャプチャを開始します（残り {secs}秒）...",
   "settings.checkbox.hud_show_original": "HUD ツールチップに元のテキストを表示",
-  "settings.checkbox.hud_show_pinyin": "HUD ツールチップにピンインを表示"
+  "settings.checkbox.hud_show_pinyin": "HUD ツールチップにピンインを表示",
+  "hud.error.no_wayland_backend": "この Wayland セッションでは、グローバルマウス追跡が制限されています。evdev アクセスの設定を確認するか、サポートされているコンポジットを使用してください。"
 }

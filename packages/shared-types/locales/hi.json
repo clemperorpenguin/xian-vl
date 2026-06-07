@@ -122,5 +122,6 @@
   "hud.status.deactivated": "HUD मोड निष्क्रिय",
   "hud.countdown.label": "अब बटन पर माउस होवर करें!\nस्क्रीन कैप्चर {secs} सेकंड में...",
   "settings.checkbox.hud_show_original": "HUD टू-टिप्स में मूल टेक्स्ट दिखाएं",
-  "settings.checkbox.hud_show_pinyin": "HUD टूलटिप्स में पिनयिन सक्षम करें"
+  "settings.checkbox.hud_show_pinyin": "HUD टूलटिप्स में पिनयिन सक्षम करें",
+  "hud.error.no_wayland_backend": "Wayलैंड सेशन पर ग्लोबल माउस ट्रैकिंग सीमित है। कृपया सुनिश्चित करें कि evdev एक्सेस कॉन्फ़िगर किया गया है या एक समर्थित कंपोज़िटर का उपयोग करें।"
 }

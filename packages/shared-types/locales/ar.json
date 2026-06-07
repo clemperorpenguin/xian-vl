@@ -122,5 +122,6 @@
   "hud.status.deactivated": "تم تعطيل وضع واجهة HUD",
   "hud.countdown.label": "حرك الفأرة فوق الزر الآن!\nجاري التقاط الشاشة خلال {secs} ثانية...",
   "settings.checkbox.hud_show_original": "عرض النص الأصلي في أدوات نص واجهة HUD",
-  "settings.checkbox.hud_show_pinyin": "تفعيل حروف البينيين في أدوات النافذة"
+  "settings.checkbox.hud_show_pinyin": "تفعيل حروف البينيين في أدوات النافذة",
+  "hud.error.no_wayland_backend": "يتم تقييد تتبع الماوس العالمي في هذا جلسة Wayland. يرجى التأكد من إعداد الوصول إلى evdev أو استخدام compositor مدعوم."
 }

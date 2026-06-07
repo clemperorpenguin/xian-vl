@@ -122,5 +122,6 @@
   "hud.status.deactivated": "HUD 模式已禁用",
   "hud.countdown.label": "请将鼠标悬停在按钮上！\n正在捕获屏幕，还有 {secs}秒...",
   "settings.checkbox.hud_show_original": "在 HUD 提示框中显示原始文本",
-  "settings.checkbox.hud_show_pinyin": "在 HUD 提示中启用拼音"
+  "settings.checkbox.hud_show_pinyin": "在 HUD 提示中启用拼音",
+  "hud.error.no_wayland_backend": "此 Wayland 会话限制了全局鼠标跟踪。请确保已配置 evdev 访问权限，或使用受支持的合成器。"
 }

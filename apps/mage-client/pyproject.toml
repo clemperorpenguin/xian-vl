@@ -11,6 +11,7 @@ dependencies = [
     "shared-types",
     "evdev>=1.7.0; sys_platform == 'linux'",
     "pynput>=1.7.6; sys_platform != 'linux'",
+    "wayland-automation",
 ]
 
 [project.scripts]
@@ -26,3 +27,4 @@ packages = ["src/mage"]
 [tool.uv.sources]
 xian-vl = { workspace = true }
 shared-types = { workspace = true }
+wayland-automation = { git = "https://github.com/OTAKUWeBer/Wayland-automation.git", rev = "test/kde-fake-input-support" }
