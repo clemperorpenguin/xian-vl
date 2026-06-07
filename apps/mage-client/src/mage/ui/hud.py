@@ -836,7 +836,7 @@ class HudManager(QWidget):
             text=trans_text,
             original=orig_text,
             pinyin=pinyin_text,
-            parent=self.app
+            parent=None
         )
         self.app._apply_transient_parent(self.tooltip_widget)
 
