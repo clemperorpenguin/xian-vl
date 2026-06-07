@@ -222,9 +222,9 @@ class HudSetupOverlay(QWidget):
     def _update_banner_text(self):
         if self.step == "hover_trigger":
             self.banner.setText(t("hud.setup.overlay.step1"))
-        elif self.step == "tooltip_display":
-            self.banner.setText(t("hud.setup.overlay.step2"))
         elif self.step == "ocr_source":
+            self.banner.setText(t("hud.setup.overlay.step2"))
+        elif self.step == "tooltip_display":
             self.banner.setText(t("hud.setup.overlay.step3"))
         self.banner.adjustSize()
         self.banner.move((self.width() - self.banner.width()) // 2, 40)
@@ -253,16 +253,82 @@ class HudSetupOverlay(QWidget):
             if rect.width() > 5 and rect.height() > 5:
                 if self.step == "hover_trigger":
                     self.hover_rect = rect
+                    self.start_ocr_capture_countdown()
+                elif self.step == "ocr_source":
+                    self.ocr_rect = rect
                     self.step = "tooltip_display"
                     self._update_banner_text()
                 elif self.step == "tooltip_display":
                     self.display_rect = rect
-                    self.step = "ocr_source"
-                    self._update_banner_text()
-                elif self.step == "ocr_source":
-                    self.ocr_rect = rect
                     self._finalize_selection()
             self.update()
+
+    def start_ocr_capture_countdown(self):
+        self.hide() # hide selection overlay to let mouse trigger game tooltip
+        self.countdown_val = 2
+        
+        self.countdown_widget = QWidget()
+        self.countdown_widget.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool |
+            Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.countdown_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        
+        root = QWidget(self.countdown_widget)
+        root.setStyleSheet(f"""
+            background-color: rgba(20, 20, 20, 230);
+            color: #eee;
+            border: 2px solid {accent_hex()};
+            border-radius: 8px;
+        """)
+        
+        lbl = QLabel(t("hud.countdown.label").format(secs=self.countdown_val), root)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet("font-size: 16px; font-weight: bold; padding: 16px; color: #fff;")
+        
+        layout = QVBoxLayout(self.countdown_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(root)
+        
+        self.countdown_widget.adjustSize()
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            geo = screen.geometry()
+            self.countdown_widget.move((geo.width() - self.countdown_widget.width()) // 2, 80)
+            
+        self.countdown_widget.show()
+        
+        self.countdown_timer = QTimer(self)
+        
+        def tick():
+            self.countdown_val -= 1
+            if self.countdown_val > 0:
+                lbl.setText(t("hud.countdown.label").format(secs=self.countdown_val))
+                self.countdown_widget.adjustSize()
+            else:
+                self.countdown_timer.stop()
+                self.countdown_widget.close()
+                self._capture_screen_for_ocr()
+                
+        self.countdown_timer.timeout.connect(tick)
+        self.countdown_timer.start(1000)
+
+    def _capture_screen_for_ocr(self):
+        # Capture screen now that the tooltip is shown
+        self.full_image_data = ScreenCapture.capture_screen()
+        if self.full_image_data:
+            img = QImage.fromData(self.full_image_data)
+            self.pixmap = QPixmap.fromImage(img)
+        else:
+            self.pixmap = QPixmap()
+            
+        # Re-show selection overlay to select the tooltip box
+        self.step = "ocr_source"
+        self._update_banner_text()
+        self.showFullScreen()
+        self.update()
 
     def _finalize_selection(self):
         # Crop the OCR region

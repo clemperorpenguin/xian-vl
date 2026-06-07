@@ -359,7 +359,7 @@ class XianApp(QWidget):
 
         # --- HUD Manager ---
         self.hud_manager = HudManager(self)
-        self.hotkey_listener.trigger_hud.connect(self.hud_manager.show_hud_presets)
+        self.hotkey_listener.trigger_hud.connect(self.show_hud_presets)
 
         self.hotkey_listener.start()
 
@@ -557,13 +557,18 @@ class XianApp(QWidget):
         elif key == "R":
             self.start_raid_mode()
         elif key == "H":
-            self.hud_manager.show_hud_presets()
+            self.show_hud_presets()
         elif key == "S":
             self._open_settings()
 
     # ------------------------------------------------------------------
     # Lens
     # ------------------------------------------------------------------
+    def show_hud_presets(self):
+        """Close OSD and open the HUD preset dialog."""
+        self.hide_osd()
+        self.hud_manager.show_hud_presets()
+
     def show_lens(self, dialogue_mode: bool = False):
         """Capture the screen and open the Lens overlay."""
         self.hide_osd()

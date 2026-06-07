@@ -400,11 +400,11 @@
     "context": "Instruction label shown during HUD setup step 1"
   },
   "hud.setup.overlay.step2": {
-    "value": "Step 2/3: Click and drag to select where the Translation Tooltip should display. Right-click to cancel.",
+    "value": "Step 2/3: Click and drag to select the original text Box to be translated (the tooltip). Right-click to cancel.",
     "context": "Instruction label shown during HUD setup step 2"
   },
   "hud.setup.overlay.step3": {
-    "value": "Step 3/3: Click and drag to select the original text Box to be translated. Right-click to cancel.",
+    "value": "Step 3/3: Click and drag to select where the Translation Tooltip should display. Right-click to cancel.",
     "context": "Instruction label shown during HUD setup step 3"
   },
   "hud.confirm.dialog.title": {
@@ -466,6 +466,10 @@
   "hud.status.deactivated": {
     "value": "HUD Mode Disabled",
     "context": "Tray message when HUD mode is deactivated"
+  },
+  "hud.countdown.label": {
+    "value": "Hover mouse over the button now!\nCapturing screen in {secs}s...",
+    "context": "Countdown notification label shown to user before screen capture"
   },
   "settings.checkbox.hud_show_original": {
     "value": "Show original text in HUD tooltips",
