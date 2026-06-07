@@ -625,6 +625,7 @@ class HudManager(QWidget):
         # Configured wayland mouse tracking
         self.wayland_mouse_getter = None
         self.wayland_mouse_controller = None
+        self.wayland_mouse_offset = QPoint(0, 0)
 
 
     def show_hud_presets(self):
@@ -781,22 +782,18 @@ class HudManager(QWidget):
                                 correct_w = total_geo.width()
                                 correct_h = total_geo.height()
                                 
-                                old_w = controller_obj.width if controller_obj.width else 1920
-                                old_h = controller_obj.height if controller_obj.height else 1080
+                                self.wayland_mouse_offset = QPoint(total_geo.left(), total_geo.top())
                                 
-                                old_center_x = old_w // 2
-                                old_center_y = old_h // 2
+                                current_actual_pos = QCursor.pos()
                                 
                                 with controller_obj._lock:
-                                    dx = controller_obj.x - old_center_x if controller_obj.x is not None else 0
-                                    dy = controller_obj.y - old_center_y if controller_obj.y is not None else 0
-                                    
                                     controller_obj.width = correct_w
                                     controller_obj.height = correct_h
-                                    controller_obj.x = (correct_w // 2) + dx
-                                    controller_obj.y = (correct_h // 2) + dy
-                                logger.info("Corrected evdev fallback screen resolution bounds: %dx%d (was %dx%d)", 
-                                            correct_w, correct_h, old_w, old_h)
+                                    controller_obj.x = current_actual_pos.x() - total_geo.left()
+                                    controller_obj.y = current_actual_pos.y() - total_geo.top()
+                                    
+                                logger.info("Corrected evdev fallback screen bounds: %dx%d offset: %s, seeded cursor to: %s", 
+                                            correct_w, correct_h, self.wayland_mouse_offset, current_actual_pos)
                             except Exception as ex:
                                 logger.exception("Failed to apply evdev fallback resolution correction")
                         
@@ -846,6 +843,7 @@ class HudManager(QWidget):
                 logger.error("Failed to stop wayland-automation mouse controller: %s", e)
             self.wayland_mouse_controller = None
         self.wayland_mouse_getter = None
+        self.wayland_mouse_offset = QPoint(0, 0)
         
         logger.info("HUD Mode Disabled")
         if hasattr(self.app, "tray") and self.app.tray:
@@ -864,7 +862,7 @@ class HudManager(QWidget):
             try:
                 coords = self.wayland_mouse_getter()
                 if coords:
-                    pos = QPoint(coords[0], coords[1])
+                    pos = QPoint(coords[0], coords[1]) + self.wayland_mouse_offset
                 else:
                     pos = QCursor.pos()
             except Exception as e:

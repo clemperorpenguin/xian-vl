@@ -131,8 +131,11 @@ def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
     monkeypatch.setattr("PyQt6.QtGui.QGuiApplication.platformName", lambda: "wayland")
     
     # Mock ScreenCapture.get_virtual_desktop_geometry
-    from PyQt6.QtCore import QRect
+    from PyQt6.QtCore import QRect, QPoint
     monkeypatch.setattr("mage.capture.screen.ScreenCapture.get_virtual_desktop_geometry", lambda: QRect(0, 0, 1920, 1080))
+    
+    # Mock QCursor.pos to return (960, 540)
+    monkeypatch.setattr("PyQt6.QtGui.QCursor.pos", lambda: QPoint(960, 540))
     
     with patch("wayland_automation.mouse_position.pick_backend_and_start", mock_pick):
         manager = HudManager(app)
