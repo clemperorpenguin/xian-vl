@@ -137,6 +137,10 @@ def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
     # Mock QCursor.pos to return (960, 540)
     monkeypatch.setattr("PyQt6.QtGui.QCursor.pos", lambda: QPoint(960, 540))
     
+    # Mock MageMultiEvdevMouseTracker.start and get_position
+    monkeypatch.setattr("mage.ui.hud.MageMultiEvdevMouseTracker.start", lambda self: True)
+    monkeypatch.setattr("mage.ui.hud.MageMultiEvdevMouseTracker.get_position", mock_getter)
+
     with patch("wayland_automation.mouse_position.pick_backend_and_start", mock_pick):
         manager = HudManager(app)
         
@@ -159,13 +163,14 @@ def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
             
         manager.load_preset(str(preset_file))
         
-        assert manager.wayland_mouse_getter is mock_getter
-        assert manager.wayland_mouse_controller is mock_controller
+        assert manager.wayland_mouse_getter == mock_getter
+        tracker = manager.wayland_mouse_controller
+        assert tracker is not None
         # Verify bounds were corrected
-        assert mock_controller.width == 1920
-        assert mock_controller.height == 1080
-        assert mock_controller.x == 960
-        assert mock_controller.y == 540
+        assert tracker.width == 1920
+        assert tracker.height == 1080
+        assert tracker.x == 960
+        assert tracker.y == 540
         assert manager.timer.isActive() is True
         
         # Test _check_hover outside hover_rect
