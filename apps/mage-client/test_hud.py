@@ -113,16 +113,26 @@ def q_app():
 def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
     from unittest.mock import MagicMock, patch
     from mage.ui.hud import HudManager
+    import threading
 
     app = DummyApp()
     app.settings.clear()
     
     mock_getter = MagicMock(return_value=(200, 200))
     mock_controller = MagicMock()
-    mock_pick = MagicMock(return_value=("mock_backend", mock_getter, mock_controller))
+    mock_controller.width = 1080
+    mock_controller.height = 1920
+    mock_controller.x = 540
+    mock_controller.y = 960
+    mock_controller._lock = threading.Lock()
+    mock_pick = MagicMock(return_value=("evdev", mock_getter, mock_controller))
     
     # Mock QGuiApplication.platformName to return "wayland"
     monkeypatch.setattr("PyQt6.QtGui.QGuiApplication.platformName", lambda: "wayland")
+    
+    # Mock ScreenCapture.get_virtual_desktop_geometry
+    from PyQt6.QtCore import QRect
+    monkeypatch.setattr("mage.capture.screen.ScreenCapture.get_virtual_desktop_geometry", lambda: QRect(0, 0, 1920, 1080))
     
     with patch("wayland_automation.mouse_position.pick_backend_and_start", mock_pick):
         manager = HudManager(app)
@@ -148,6 +158,11 @@ def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
         
         assert manager.wayland_mouse_getter is mock_getter
         assert manager.wayland_mouse_controller is mock_controller
+        # Verify bounds were corrected
+        assert mock_controller.width == 1920
+        assert mock_controller.height == 1080
+        assert mock_controller.x == 960
+        assert mock_controller.y == 540
         assert manager.timer.isActive() is True
         
         # Test _check_hover outside hover_rect

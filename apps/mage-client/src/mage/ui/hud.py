@@ -773,6 +773,33 @@ class HudManager(QWidget):
                         logger.info("Resolved wayland-automation mouse tracking backend: %s", backend_name)
                         self.wayland_mouse_getter = getter_fn
                         self.wayland_mouse_controller = controller_obj
+                        
+                        if backend_name == "evdev" and controller_obj:
+                            try:
+                                from mage.capture.screen import ScreenCapture
+                                total_geo = ScreenCapture.get_virtual_desktop_geometry()
+                                correct_w = total_geo.width()
+                                correct_h = total_geo.height()
+                                
+                                old_w = controller_obj.width if controller_obj.width else 1920
+                                old_h = controller_obj.height if controller_obj.height else 1080
+                                
+                                old_center_x = old_w // 2
+                                old_center_y = old_h // 2
+                                
+                                with controller_obj._lock:
+                                    dx = controller_obj.x - old_center_x if controller_obj.x is not None else 0
+                                    dy = controller_obj.y - old_center_y if controller_obj.y is not None else 0
+                                    
+                                    controller_obj.width = correct_w
+                                    controller_obj.height = correct_h
+                                    controller_obj.x = (correct_w // 2) + dx
+                                    controller_obj.y = (correct_h // 2) + dy
+                                logger.info("Corrected evdev fallback screen resolution bounds: %dx%d (was %dx%d)", 
+                                            correct_w, correct_h, old_w, old_h)
+                            except Exception as ex:
+                                logger.exception("Failed to apply evdev fallback resolution correction")
+                        
                         self.timer.start(100)
                         logger.info("HUD Mode Active (Wayland), loaded preset: %s (buttons count: %d, timer active: %s)", 
                                     self.active_preset.get("name"), len(self.active_preset.get("buttons", [])), self.timer.isActive())
