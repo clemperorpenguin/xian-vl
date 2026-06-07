@@ -224,8 +224,6 @@ class HudSetupOverlay(QWidget):
             self.banner.setText(t("hud.setup.overlay.step1"))
         elif self.step == "ocr_source":
             self.banner.setText(t("hud.setup.overlay.step2"))
-        elif self.step == "tooltip_display":
-            self.banner.setText(t("hud.setup.overlay.step3"))
         self.banner.adjustSize()
         self.banner.move((self.width() - self.banner.width()) // 2, 40)
 
@@ -256,10 +254,7 @@ class HudSetupOverlay(QWidget):
                     self.start_ocr_capture_countdown()
                 elif self.step == "ocr_source":
                     self.ocr_rect = rect
-                    self.step = "tooltip_display"
-                    self._update_banner_text()
-                elif self.step == "tooltip_display":
-                    self.display_rect = rect
+                    self.display_rect = rect  # Tooltip displays in same place as step 2 selection!
                     self._finalize_selection()
             self.update()
 
@@ -373,11 +368,6 @@ class HudSetupOverlay(QWidget):
         if not self.hover_rect.isEmpty():
             painter.setPen(QPen(QColor(230, 219, 116), 2))
             painter.drawRect(self.hover_rect.translated(-self.total_geo.left(), -self.total_geo.top()))
-            
-        # Display tooltip location: Green
-        if not self.display_rect.isEmpty():
-            painter.setPen(QPen(QColor(166, 226, 46), 2))
-            painter.drawRect(self.display_rect.translated(-self.total_geo.left(), -self.total_geo.top()))
             
         # OCR source: Cyan/Accent
         if not self.ocr_rect.isEmpty():
