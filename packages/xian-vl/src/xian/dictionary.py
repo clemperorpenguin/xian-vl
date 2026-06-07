@@ -101,6 +101,9 @@ class LocalDictionary:
             # Validate all members to prevent Zip Slip
             data_dir_resolved = self.data_dir.resolve()
             for member in zip_ref.namelist():
+                if member.startswith("/") or member.startswith("\\") or ".." in member:
+                    raise ValueError("Unsafe zip member: %s" % member)
+                
                 target = (data_dir_resolved / member).resolve()
                 if not target.is_relative_to(data_dir_resolved):
                     raise ValueError("Zip member escapes target directory: %s" % member)

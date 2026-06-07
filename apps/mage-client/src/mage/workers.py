@@ -441,8 +441,12 @@ class RaidWorker(QThread):
                 lore_dir = pathlib.Path.home() / ".local" / "share" / "xian-vl" / "lore"
                 lore_dir.mkdir(parents=True, exist_ok=True)
                 self.lore_filepath = lore_dir / f"Raid_Log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-                with open(self.lore_filepath, "w", encoding="utf-8") as f:
-                    f.write(f"# Raid Log ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n\n")
+                
+                def _init_lore():
+                    with open(self.lore_filepath, "w", encoding="utf-8") as f:
+                        f.write(f"# Raid Log ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n\n")
+                
+                await asyncio.to_thread(_init_lore)
             except Exception as e:
                 logger.error("Failed to initialize Raid Log file: %s", e)
                 self.save_lore = False
@@ -549,8 +553,10 @@ class RaidWorker(QThread):
                     self.chunk_translated.emit(transcript, translation, audio_bytes)
                     if self.save_lore and hasattr(self, "lore_filepath"):
                         try:
-                            with open(self.lore_filepath, "a", encoding="utf-8") as f:
-                                f.write(f"**Source**: {transcript}\n\n**Translation**: {translation}\n\n---\n")
+                            def _append_lore():
+                                with open(self.lore_filepath, "a", encoding="utf-8") as f:
+                                    f.write(f"**Source**: {transcript}\n\n**Translation**: {translation}\n\n---\n")
+                            await asyncio.to_thread(_append_lore)
                         except Exception as e:
                             logger.error("Failed to append to Raid Log file: %s", e)
 

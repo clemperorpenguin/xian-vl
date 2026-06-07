@@ -430,11 +430,38 @@ class LocalWikiSearcher:
 
     def __init__(self, wiki_dir: str = "wiki"):
         self.wiki_dir = wiki_dir
+        self._cache_mtime = 0.0
+        self._cache_docs: list[tuple[str, str, str, str]] = []
 
-    def search(self, query: str, num_results: int = 5) -> list[dict]:
+    async def search(self, query: str, num_results: int = 5) -> list[dict]:
         """Performs a simple keyword search over local wiki markdown files."""
-        if not os.path.exists(self.wiki_dir):
-            return []
+        def _load_wiki_docs():
+            if not os.path.exists(self.wiki_dir):
+                return []
+            try:
+                current_mtime = os.path.getmtime(self.wiki_dir)
+            except OSError:
+                current_mtime = 0.0
+            
+            if current_mtime != 0 and current_mtime == self._cache_mtime and self._cache_docs:
+                return self._cache_docs
+
+            docs = []
+            for filepath in glob.glob(os.path.join(self.wiki_dir, "*.md")):
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    filename = os.path.basename(filepath)
+                    title = filename.replace(".md", "")
+                    docs.append((filepath, filename, title, content))
+                except Exception as e:
+                    logger.error("Error reading wiki file %s: %s", filepath, e)
+            
+            self._cache_docs = docs
+            self._cache_mtime = current_mtime
+            return docs
+
+        docs = await asyncio.to_thread(_load_wiki_docs)
 
         results = []
         if any('\u4e00' <= char <= '\u9fff' for char in query) and ' ' not in query:
@@ -463,41 +490,32 @@ class LocalWikiSearcher:
             return []
 
         # Simple scoring based on term frequency
-        for filepath in glob.glob(os.path.join(self.wiki_dir, "*.md")):
-            try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    content = f.read()
+        for filepath, filename, title, content in docs:
+            content_lower = content.lower()
+            score = sum(content_lower.count(term) for term in query_terms)
 
-                content_lower = content.lower()
-                score = sum(content_lower.count(term) for term in query_terms)
+            if score > 0:
+                # Extract a snippet around the first match
+                first_match_idx = -1
+                for term in query_terms:
+                    idx = content_lower.find(term)
+                    if idx != -1 and (first_match_idx == -1 or idx < first_match_idx):
+                        first_match_idx = idx
 
-                if score > 0:
-                    filename = os.path.basename(filepath)
-                    title = filename.replace(".md", "")
+                snippet_start = max(0, first_match_idx - 100)
+                snippet_end = min(len(content), first_match_idx + 200)
+                snippet = content[snippet_start:snippet_end].strip()
+                if snippet_start > 0:
+                    snippet = "..." + snippet
+                if snippet_end < len(content):
+                    snippet = snippet + "..."
 
-                    # Extract a snippet around the first match
-                    first_match_idx = -1
-                    for term in query_terms:
-                        idx = content_lower.find(term)
-                        if idx != -1 and (first_match_idx == -1 or idx < first_match_idx):
-                            first_match_idx = idx
-
-                    snippet_start = max(0, first_match_idx - 100)
-                    snippet_end = min(len(content), first_match_idx + 200)
-                    snippet = content[snippet_start:snippet_end].strip()
-                    if snippet_start > 0:
-                        snippet = "..." + snippet
-                    if snippet_end < len(content):
-                        snippet = snippet + "..."
-
-                    results.append({
-                        "title": f"[LOCAL WIKI] {title}",
-                        "content": snippet,
-                        "url": f"file://{os.path.abspath(filepath)}",
-                        "score": score
-                    })
-            except Exception as e:
-                logger.error("Error reading wiki file %s: %s", filepath, e)
+                results.append({
+                    "title": f"[LOCAL WIKI] {title}",
+                    "content": snippet,
+                    "url": f"file://{os.path.abspath(filepath)}",
+                    "score": score
+                })
 
         # Sort by score descending
         results.sort(key=lambda x: x["score"], reverse=True)

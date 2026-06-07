@@ -908,6 +908,7 @@ class HudManager(QWidget):
         self.setup_buttons = []
         self.control_dialog = None
         self.setup_overlay = None
+        self._active_workers = set()
         
         # Configured wayland mouse tracking
         self.wayland_mouse_getter = None
@@ -1014,9 +1015,10 @@ class HudManager(QWidget):
                 
         worker.translation_done.connect(on_done)
         worker.error.connect(on_error)
+        worker.finished.connect(lambda: self._active_workers.discard(worker))
         worker.start()
         # Keep worker ref to prevent GC
-        self._worker_ref = worker
+        self._active_workers.add(worker)
 
     def _save_preset_prompt(self):
         # Save dialog prompt

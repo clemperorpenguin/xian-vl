@@ -90,41 +90,67 @@ def _resolve_host_ips(host: str, *, timeout_seconds: float = 2.0) -> list[ipaddr
     return ips
 
 
-def is_safe_http_url_for_untrusted_fetch(url: str, *, resolve_timeout_seconds: float = 2.0) -> bool:
-    """Return False if *url* must not be fetched (private IP, localhost, non-http(s), etc.)."""
+import httpcore
+
+class SSRFSafetyNetworkBackend(httpcore.AsyncNetworkBackend):
+    def __init__(self, original_backend: httpcore.AsyncNetworkBackend, safe_ip: str):
+        self.original = original_backend
+        self.safe_ip = safe_ip
+
+    async def connect_tcp(self, host: str, port: int, timeout: float, local_address=None, **kwargs):
+        # Override the host to dial the safe IP
+        return await self.original.connect_tcp(
+            self.safe_ip, port, timeout, local_address=local_address, **kwargs
+        )
+
+    async def connect_unix_socket(self, *args, **kwargs):
+        return await self.original.connect_unix_socket(*args, **kwargs)
+
+    async def sleep(self, *args, **kwargs):
+        return await self.original.sleep(*args, **kwargs)
+
+def resolve_safe_ip_for_untrusted_fetch(url: str, *, resolve_timeout_seconds: float = 2.0) -> str | None:
+    """Return the safe IP string if *url* must be fetched securely; otherwise None."""
     try:
         parsed = urllib.parse.urlparse(url.strip())
     except Exception:
-        return False
+        return None
 
     if parsed.scheme.lower() not in ("http", "https"):
-        return False
+        return None
 
     host = parsed.hostname
     if not host:
-        return False
+        return None
 
     if host.lower() in _FORBIDDEN_HOSTNAMES:
-        return False
+        return None
 
     literal = _literal_ip_from_host(host)
     if literal is not None:
-        return not _blocked_ip(literal)
+        if not _blocked_ip(literal):
+            return str(literal)
+        return None
 
     try:
         ips = _resolve_host_ips(host, timeout_seconds=resolve_timeout_seconds)
     except OSError as exc:
         logger.debug("DNS resolution failed for %s: %s", host, exc)
-        return False
+        return None
 
     if not ips:
-        return False
+        return None
 
     for ip in ips:
         if _blocked_ip(ip):
-            return False
+            return None
 
-    return True
+    return str(ips[0])
+
+
+def is_safe_http_url_for_untrusted_fetch(url: str, *, resolve_timeout_seconds: float = 2.0) -> bool:
+    """Return False if *url* must not be fetched (private IP, localhost, non-http(s), etc.)."""
+    return resolve_safe_ip_for_untrusted_fetch(url, resolve_timeout_seconds=resolve_timeout_seconds) is not None
 
 
 def markdown_http_https_url_or_none(url: str | None) -> str | None:
@@ -154,12 +180,27 @@ async def httpx_get_with_safe_redirects(
     """
     current = initial_url.strip()
     for _hop in range(max_hops + 1):
-        if not is_safe_http_url_for_untrusted_fetch(current, resolve_timeout_seconds=resolve_timeout_seconds):
+        safe_ip = resolve_safe_ip_for_untrusted_fetch(current, resolve_timeout_seconds=resolve_timeout_seconds)
+        if not safe_ip:
             logger.debug("Blocked unsafe enrichment URL: %s", current)
             return None
 
+        base_transport = getattr(client, "_transport", None)
+        if isinstance(base_transport, httpx.AsyncHTTPTransport) and hasattr(base_transport, "_pool") and hasattr(base_transport._pool, "_network_backend"):
+            transport = httpx.AsyncHTTPTransport(verify=getattr(client, 'verify', True))
+            original_backend = transport._pool._network_backend
+            transport._pool._network_backend = SSRFSafetyNetworkBackend(original_backend, safe_ip)
+        else:
+            transport = base_transport if base_transport is not None else httpx.AsyncHTTPTransport(verify=getattr(client, 'verify', True))
+
         try:
-            resp = await client.get(current, follow_redirects=False)
+            async with httpx.AsyncClient(
+                transport=transport,
+                timeout=client.timeout,
+                headers=client.headers,
+                cookies=client.cookies
+            ) as ephemeral_client:
+                resp = await ephemeral_client.get(current, follow_redirects=False)
         except httpx.HTTPError as exc:
             logger.debug("HTTP error for %s: %s", current, exc)
             return None
