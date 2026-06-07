@@ -120,7 +120,8 @@ class CommandOSD(MageOverlayWindow):
         options_layout.addWidget(self._create_option("T", t("osd.option.translate")))
         self.raid_option = self._create_option("R", t("osd.option.raid"))
         options_layout.addWidget(self.raid_option)
-        options_layout.addWidget(self._create_option("H", t("osd.option.hud")))
+        self.hud_option = self._create_option("H", t("osd.option.hud"))
+        options_layout.addWidget(self.hud_option)
         options_layout.addWidget(self._create_option("L", t("osd.option.layout")))
         options_layout.addWidget(self._create_option("S", t("osd.option.settings")))
 
@@ -254,5 +255,6 @@ class CommandOSD(MageOverlayWindow):
     def set_developer_options_visible(self, visible: bool):
         self.cinematic_option.setVisible(visible)
         self.raid_option.setVisible(visible)
+        self.hud_option.setVisible(visible)
         self.adjustSize()
         self.setFixedSize(self.size())

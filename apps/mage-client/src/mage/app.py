@@ -263,6 +263,8 @@ class SettingsDialog(QDialog):
         dev_options_val = settings.value("developer_options", "false")
         self.dev_options_cb.setChecked(dev_options_val == "true" or dev_options_val is True)
         layout.addRow(self.dev_options_cb)
+        self.dev_options_cb.toggled.connect(self._update_dev_visibility)
+        self._update_dev_visibility(self.dev_options_cb.isChecked())
 
         # Buttons
         btn_row = QHBoxLayout()
@@ -375,6 +377,12 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_TARGET_WINDOW_TITLE, target_val)
         self.settings.setValue("developer_options", "true" if self.dev_options_cb.isChecked() else "false")
         self.accept()
+
+    def _update_dev_visibility(self, checked):
+        self.live_voice_raid_cb.setVisible(checked)
+        self.live_raid_lore_save_cb.setVisible(checked)
+        self.hud_show_original_cb.setVisible(checked)
+        self.hud_show_pinyin_cb.setVisible(checked)
 
 
 class XianApp(QWidget):
@@ -646,6 +654,10 @@ class XianApp(QWidget):
     def show_hud_presets(self):
         """Close OSD and open the HUD preset dialog."""
         self.hide_osd()
+        dev_val = self.settings.value("developer_options", "false")
+        if not (dev_val == "true" or dev_val is True):
+            logger.info("HUD mode bypassed: developer options disabled")
+            return
         self.hud_manager.show_hud_presets()
 
     def show_lens(self, dialogue_mode: bool = False):
