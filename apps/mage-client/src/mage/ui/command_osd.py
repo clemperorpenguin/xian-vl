@@ -23,7 +23,7 @@ from PyQt6.QtGui import QGuiApplication, QFont, QCursor
 
 from mage.ui.theme import accent_hex
 from shared_types.enums import SourceLanguage, TargetLanguage
-from mage.utils.window_binder import set_bypass_compositor_hint_x11
+from mage.ui.overlay_base import MageOverlayWindow
 from shared_types.state import t
 
 logger = logging.getLogger(__name__)
@@ -71,22 +71,13 @@ class ClickableKeyLabel(QLabel):
             self.clicked.emit(self.action_id)
         super().mouseReleaseEvent(event)
 
-class CommandOSD(QWidget):
+class CommandOSD(MageOverlayWindow):
     setting_changed = pyqtSignal(str, str)
     command_triggered = pyqtSignal(str)
     osd_hidden = pyqtSignal()
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._drag_position = QPoint()
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool |
-            Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    def __init__(self, app, parent=None):
+        super().__init__(window_id="command_osd", app=app, parent=parent)
 
         # Main Layout
         layout = QVBoxLayout(self)
@@ -130,6 +121,7 @@ class CommandOSD(QWidget):
         self.raid_option = self._create_option("R", t("osd.option.raid"))
         options_layout.addWidget(self.raid_option)
         options_layout.addWidget(self._create_option("H", t("osd.option.hud")))
+        options_layout.addWidget(self._create_option("L", t("osd.option.layout")))
         options_layout.addWidget(self._create_option("S", t("osd.option.settings")))
 
         inner_layout.addLayout(options_layout)
@@ -235,42 +227,29 @@ class CommandOSD(QWidget):
         self.model_combo.blockSignals(False)
 
     def show_centered(self):
-        """Adjusts the size and moves the OSD to the absolute center of the screen."""
+        """Adjusts the size and moves the OSD to the absolute center of the screen unless saved."""
         self.adjustSize()
         self.setFixedSize(self.size())
         
-        screen = QGuiApplication.screenAt(QCursor.pos())
-        if not screen:
-            screen = QGuiApplication.primaryScreen()
-            
-        if screen:
-            geo = screen.geometry()
-            x = geo.center().x() - self.width() // 2
-            y = geo.center().y() - self.height() // 2
-            self.move(x, y)
+        preset = self.app.settings.value("layout_preset", "Default")
+        key = f"layout/{preset}/command_osd"
+        if self.app.settings.contains(key):
+            self.restore_geometry()
+        else:
+            screen = QGuiApplication.screenAt(QCursor.pos())
+            if not screen:
+                screen = QGuiApplication.primaryScreen()
+                
+            if screen:
+                geo = screen.geometry()
+                x = geo.center().x() - self.width() // 2
+                y = geo.center().y() - self.height() // 2
+                self.move(x, y)
         self.show()
 
     def hideEvent(self, event):
         super().hideEvent(event)
         self.osd_hidden.emit()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        set_bypass_compositor_hint_x11(self.winId())
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
-        else:
-            super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_position)
-            event.accept()
-        else:
-            super().mouseMoveEvent(event)
 
     def set_developer_options_visible(self, visible: bool):
         self.cinematic_option.setVisible(visible)

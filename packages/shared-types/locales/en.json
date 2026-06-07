@@ -247,6 +247,26 @@
     "value": "Settings",
     "context": "OSD option label for settings menu"
   },
+  "osd.option.layout": {
+    "value": "Layout",
+    "context": "OSD option label for UI layout edit mode"
+  },
+  "settings.label.layout_preset": {
+    "value": "Layout Preset:",
+    "context": "Label for layout preset dropdown in settings"
+  },
+  "settings.prompt.layout_preset.new": {
+    "value": "Enter name for the new layout preset:",
+    "context": "Dialog prompt asking user to name new layout preset"
+  },
+  "settings.error.layout_preset.exists": {
+    "value": "A layout preset with this name already exists.",
+    "context": "Error message when trying to create a preset that exists"
+  },
+  "settings.error.layout_preset.invalid": {
+    "value": "Preset name cannot be empty.",
+    "context": "Error message when layout preset name is empty"
+  },
   "osd.label.src": {
     "value": "Src:",
     "context": "Abbreviated label for source language selection in OSD"

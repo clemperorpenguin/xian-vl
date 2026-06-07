@@ -35,6 +35,7 @@ from PyQt6.QtGui import (
 
 from mage.ui.theme import accent_hex, accent_hover_hex, accent_qcolor
 from mage.utils.window_binder import set_bypass_compositor_hint_x11
+from mage.ui.overlay_base import MageOverlayWindow
 from mage.capture.screen import ScreenCapture
 from mage.workers import InferenceWorker
 from shared_types.state import t
@@ -538,20 +539,12 @@ class HudSetupControlDialog(QDialog):
         self.save_btn.setEnabled(count > 0)
 
 
-class HudTooltip(QWidget):
+class HudTooltip(MageOverlayWindow):
     """The floating text tooltip displayed statically when a trigger region is hovered."""
     
-    def __init__(self, rect: QRect, text: str, original: str = "", pinyin: str = "", parent=None):
-        super().__init__(parent)
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.WindowTransparentForInput |
-            Qt.WindowType.WindowDoesNotAcceptFocus |
-            Qt.WindowType.Tool
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    def __init__(self, index: int, rect: QRect, text: str, original: str = "", pinyin: str = "", app=None, parent=None):
+        super().__init__(window_id=f"hud_tooltip_{index}", app=app, parent=parent)
+        self.set_click_through(True)
         
         root = QWidget(self)
         root.setObjectName("TooltipRoot")
@@ -595,13 +588,18 @@ class HudTooltip(QWidget):
         outer.addWidget(root)
         
         # Layout sizing
-        self.setGeometry(rect)
         self.adjustSize()
+        preset = self.app.settings.value("layout_preset", "Default") if (self.app and hasattr(self.app, "settings") and self.app.settings) else "Default"
+        key = f"layout/{preset}/hud_tooltip_{index}"
+        has_saved = False
+        if self.app and hasattr(self.app, "settings") and self.app.settings:
+            has_saved = self.app.settings.contains(key)
+            
+        if has_saved:
+            self.restore_geometry()
+        else:
+            self.setGeometry(rect)
         self.show()
-        
-    def showEvent(self, event):
-        super().showEvent(event)
-        set_bypass_compositor_hint_x11(self.winId())
 
 
 class HudManager(QWidget):
@@ -836,19 +834,25 @@ class HudManager(QWidget):
         if not self.active_preset:
             return
             
-        for btn in self.active_preset.get("buttons", []):
-            widget = self._create_tooltip_widget(btn)
+        for index, btn in enumerate(self.active_preset.get("buttons", [])):
+            widget = self._create_tooltip_widget(btn, index)
             if widget:
                 self.tooltip_widgets.append(widget)
 
     def show_single_tooltip(self, button_cfg: dict):
         """Displays a single tooltip on the screen (X11/Win/Mac hover)."""
         self.clear_all_tooltips()
-        widget = self._create_tooltip_widget(button_cfg)
+        idx = -1
+        if self.active_preset:
+            try:
+                idx = self.active_preset.get("buttons", []).index(button_cfg)
+            except ValueError:
+                pass
+        widget = self._create_tooltip_widget(button_cfg, idx)
         if widget:
             self.tooltip_widgets.append(widget)
 
-    def _create_tooltip_widget(self, button_cfg: dict) -> HudTooltip | None:
+    def _create_tooltip_widget(self, button_cfg: dict, index: int = 0) -> HudTooltip | None:
         try:
             display_rect = QRect(*button_cfg["display_rect"])
             
@@ -861,10 +865,12 @@ class HudManager(QWidget):
             trans_text = button_cfg.get("translated_text", "")
             
             widget = HudTooltip(
+                index=index,
                 rect=display_rect,
                 text=trans_text,
                 original=orig_text,
                 pinyin=pinyin_text,
+                app=self.app,
                 parent=None
             )
             self.app._apply_transient_parent(widget)

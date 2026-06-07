@@ -29,7 +29,7 @@ import os
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QDialog, QFormLayout,
     QLineEdit, QComboBox, QSpinBox, QPushButton, QLabel, QVBoxLayout,
-    QHBoxLayout, QWidget, QCheckBox, QMessageBox
+    QHBoxLayout, QWidget, QCheckBox, QMessageBox, QInputDialog
 )
 from PyQt6.QtCore import Qt, QSettings, QRect, QTimer
 from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap, QCursor
@@ -232,6 +232,32 @@ class SettingsDialog(QDialog):
             self.target_window_combo.setCurrentIndex(0)
         layout.addRow(t("settings.label.target_window_title"), self.target_window_combo)
 
+        # Layout Presets
+        preset_layout = QHBoxLayout()
+        self.preset_combo = QComboBox()
+        presets = self.settings.value("layout_presets_list", ["Default"])
+        if not isinstance(presets, list):
+            presets = ["Default"]
+        self.preset_combo.addItems(presets)
+        
+        current_preset = self.settings.value("layout_preset", "Default")
+        idx = self.preset_combo.findText(current_preset)
+        if idx >= 0:
+            self.preset_combo.setCurrentIndex(idx)
+            
+        self.add_preset_btn = QPushButton("+")
+        self.add_preset_btn.setFixedWidth(30)
+        self.add_preset_btn.clicked.connect(self._add_preset)
+        
+        self.del_preset_btn = QPushButton("-")
+        self.del_preset_btn.setFixedWidth(30)
+        self.del_preset_btn.clicked.connect(self._del_preset)
+        
+        preset_layout.addWidget(self.preset_combo)
+        preset_layout.addWidget(self.add_preset_btn)
+        preset_layout.addWidget(self.del_preset_btn)
+        layout.addRow(t("settings.label.layout_preset"), preset_layout)
+
         # Developer Options Checkbox
         self.dev_options_cb = QCheckBox(t("settings.checkbox.dev_options"))
         dev_options_val = settings.value("developer_options", "false")
@@ -263,6 +289,52 @@ class SettingsDialog(QDialog):
             QPushButton:hover {{ background: {accent_hover_hex()}; }}
         """)
 
+    def _add_preset(self):
+        name, ok = QInputDialog.getText(
+            self,
+            t("settings.prompt.layout_preset.new"),
+            t("settings.prompt.layout_preset.new")
+        )
+        if ok:
+            name = name.strip()
+            if not name:
+                QMessageBox.critical(self, "Error", t("settings.error.layout_preset.invalid"))
+                return
+            presets = [self.preset_combo.itemText(i) for i in range(self.preset_combo.count())]
+            if name in presets:
+                QMessageBox.critical(self, "Error", t("settings.error.layout_preset.exists"))
+                return
+            
+            presets.append(name)
+            self.settings.setValue("layout_presets_list", presets)
+            self.preset_combo.addItem(name)
+            self.preset_combo.setCurrentText(name)
+
+    def _del_preset(self):
+        current = self.preset_combo.currentText()
+        if current == "Default":
+            QMessageBox.critical(self, "Error", "The Default preset cannot be deleted.")
+            return
+            
+        choice = QMessageBox.question(
+            self,
+            "Delete Preset",
+            f"Are you sure you want to delete the layout preset '{current}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if choice == QMessageBox.StandardButton.Yes:
+            presets = [self.preset_combo.itemText(i) for i in range(self.preset_combo.count())]
+            presets.remove(current)
+            self.settings.setValue("layout_presets_list", presets)
+            
+            self.settings.remove(f"layout/{current}")
+            
+            idx = self.preset_combo.findText(current)
+            if idx >= 0:
+                self.preset_combo.removeItem(idx)
+            self.preset_combo.setCurrentText("Default")
+
     def _save(self):
         normalized = normalize_lemonade_api_base_url(self.url_edit.text().strip())
         if should_warn_http_to_non_loopback(normalized):
@@ -278,6 +350,7 @@ class SettingsDialog(QDialog):
         self.url_edit.setText(normalized)
         self.settings.setValue(KEY_API_URL, normalized)
         self.settings.setValue(KEY_API_MODEL, self.model_combo.currentText())
+        self.settings.setValue("layout_preset", self.preset_combo.currentText())
         self.settings.setValue(KEY_SOURCE_LANG, self.source_lang_combo.currentText())
         self.settings.setValue(KEY_TARGET_LANG, self.lang_combo.currentText())
         self.settings.setValue(KEY_MODE, self.mode_combo.currentText())
@@ -337,6 +410,9 @@ class XianApp(QWidget):
         self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
         self._prewarm_worker.start()
 
+        # --- Layout Edit State ---
+        self.layout_edit_mode_active = False
+
         # --- Hotkeys ---
         self.hotkey_listener = create_hotkey_listener()
         
@@ -356,6 +432,7 @@ class XianApp(QWidget):
         self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
         if hasattr(self.hotkey_listener, "command_mode_cancelled"):
             self.hotkey_listener.command_mode_cancelled.connect(self.hide_osd)
+        self.hotkey_listener.trigger_layout_edit.connect(self.toggle_layout_edit_mode)
 
         # --- HUD Manager ---
         self.hud_manager = HudManager(self)
@@ -382,7 +459,7 @@ class XianApp(QWidget):
         self.dialogue_bubble = None
 
         # --- Command OSD ---
-        self.osd = CommandOSD()
+        self.osd = CommandOSD(self)
         self.osd.initialize_settings(
             source=self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG),
             target=self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG),
@@ -399,10 +476,10 @@ class XianApp(QWidget):
         self.osd_timer.timeout.connect(self.hide_osd)
 
         # --- Chat sidebar (created once, toggled) ---
-        self.chat_sidebar = ChatSidebar(self.processor)
+        self.chat_sidebar = ChatSidebar(self.processor, parent=self)
 
         # --- How to Say Dialog ---
-        self.how_to_say_dialog = HowToSayDialog()
+        self.how_to_say_dialog = HowToSayDialog(self)
         self.how_to_say_dialog.translation_requested.connect(self._on_how_to_say_submit)
         self.how_to_say_dialog.dialog_hidden.connect(self._on_osd_hidden)
 
@@ -558,6 +635,8 @@ class XianApp(QWidget):
             self.start_raid_mode()
         elif key == "H":
             self.show_hud_presets()
+        elif key == "L":
+            self.toggle_layout_edit_mode()
         elif key == "S":
             self._open_settings()
 
@@ -687,6 +766,8 @@ class XianApp(QWidget):
             self._bubbles = self._bubbles[-19:]
         self._bubbles.append(bubble)
         self._setup_bubble_connections(bubble)
+        if hasattr(self, "layout_edit_mode_active") and self.layout_edit_mode_active:
+            bubble.set_edit_mode(True)
 
     def _replace_persistent_bubble(self, attr_name: str, text: str, original_text: str = "", anchor: QRect = QRect(), border_color: str | None = None, truncated: bool = False, auto_close_ms: int = 0, show_stop: bool = False) -> ResultBubble:
         """Helper to close and recreate a persistent dialogue or cinematic bubble."""
@@ -712,6 +793,8 @@ class XianApp(QWidget):
                 lambda b=bubble: self._on_continue_requested(b)
             )
         self._setup_bubble_connections(bubble)
+        if hasattr(self, "layout_edit_mode_active") and self.layout_edit_mode_active:
+            bubble.set_edit_mode(True)
         return bubble
 
     def _on_inference_thinking(self, worker):
@@ -1392,7 +1475,7 @@ class XianApp(QWidget):
         
         # Instantiate/show the RaidWindow
         if not hasattr(self, "raid_window") or not self.raid_window:
-            self.raid_window = RaidWindow(self.settings)
+            self.raid_window = RaidWindow(self.settings, parent=self)
             self.raid_window.audio_toggled.connect(self._on_raid_audio_toggled)
             self.raid_window.stop_requested.connect(self.stop_raid_mode)
             self._apply_transient_parent(self.raid_window)
@@ -1589,7 +1672,55 @@ class XianApp(QWidget):
             self._setup_window_binder()
             dev_val = self.settings.value("developer_options", "false")
             self.osd.set_developer_options_visible(dev_val == "true" or dev_val is True)
+            
+            # Restore geometries according to layout preset
+            self.osd.restore_geometry()
+            self.chat_sidebar.restore_geometry()
+            self.how_to_say_dialog.restore_geometry()
+            if hasattr(self, "raid_window") and self.raid_window:
+                self.raid_window.restore_geometry()
+                
             logger.info("Settings updated and applied")
+
+    def toggle_layout_edit_mode(self):
+        """Toggle UI Layout Edit Mode for all overlays."""
+        if not hasattr(self, "layout_edit_mode_active"):
+            self.layout_edit_mode_active = False
+            
+        self.layout_edit_mode_active = not self.layout_edit_mode_active
+        active = self.layout_edit_mode_active
+        logger.info("Layout Edit Mode toggled: %s", active)
+        
+        # OSD: Make sure it's visible so it can be moved
+        if active:
+            if not self.osd.isVisible():
+                self.osd.show_centered()
+        else:
+            self.osd.hide()
+            
+        self.osd.set_edit_mode(active)
+        self.chat_sidebar.set_edit_mode(active)
+        self.how_to_say_dialog.set_edit_mode(active)
+        
+        if hasattr(self, "raid_window") and self.raid_window:
+            self.raid_window.set_edit_mode(active)
+            
+        # Dialogue bubble and cinematic bubble
+        if hasattr(self, "dialogue_bubble") and self.dialogue_bubble:
+            self.dialogue_bubble.set_edit_mode(active)
+        if hasattr(self, "cinematic_bubble") and self.cinematic_bubble:
+            self.cinematic_bubble.set_edit_mode(active)
+            
+        # All active bubbles
+        for bubble in self._bubbles:
+            if bubble.isVisible():
+                bubble.set_edit_mode(active)
+                
+        # All active HUD tooltips
+        if hasattr(self, "hud_manager") and self.hud_manager:
+            for widget in self.hud_manager.tooltip_widgets:
+                if widget.isVisible():
+                    widget.set_edit_mode(active)
 
     def _is_valid_widget(self, w):
         if w is None:

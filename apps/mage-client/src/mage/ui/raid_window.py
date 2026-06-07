@@ -23,7 +23,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QSize, QPropertyAnimation, QRec
 from PyQt6.QtGui import QGuiApplication, QFont, QCursor, QPainter, QColor, QBrush, QPen, QRadialGradient
 
 from mage.ui.theme import accent_hex, accent_hover_hex, accent_qcolor
-from mage.utils.window_binder import set_bypass_compositor_hint_x11
+from mage.ui.overlay_base import MageOverlayWindow
 from shared_types.state import t
 
 logger = logging.getLogger(__name__)
@@ -139,24 +139,15 @@ class StatusDot(QWidget):
         p.drawEllipse(0, 0, 14, 14)
 
 
-class RaidWindow(QWidget):
+class RaidWindow(MageOverlayWindow):
     """Frameless, draggable log window for Raid Mode translations."""
 
     audio_toggled = pyqtSignal(bool)
     stop_requested = pyqtSignal()
 
     def __init__(self, settings, parent=None):
-        super().__init__(parent)
+        super().__init__(window_id="raid_window", app=parent, parent=parent)
         self.settings = settings
-        self._drag_position = QPoint()
-
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
         # Main Layout
         layout = QVBoxLayout(self)
@@ -331,14 +322,12 @@ class RaidWindow(QWidget):
     # --- Window Placement & Geometry Persistence ------------------------------
     def showEvent(self, event):
         super().showEvent(event)
-        set_bypass_compositor_hint_x11(self.winId())
         self._update_style()  # pick up runtime accent color changes
         
         # Restore saved location
-        geom = self.settings.value("raid_window_geometry")
-        if geom:
-            self.restoreGeometry(geom)
-        else:
+        preset = self.app.settings.value("layout_preset", "Default")
+        key = f"layout/{preset}/raid_window"
+        if not self.app.settings.contains(key):
             screen = QGuiApplication.screenAt(QCursor.pos())
             if not screen:
                 screen = QGuiApplication.primaryScreen()
@@ -348,21 +337,5 @@ class RaidWindow(QWidget):
                 self.setGeometry(sg.right() - 480, sg.bottom() - 360, 450, 320)
 
     def closeEvent(self, event):
-        # Save position to settings
-        self.settings.setValue("raid_window_geometry", self.saveGeometry())
+        self.save_geometry()
         super().closeEvent(event)
-
-    # --- Draggable Framing ---------------------------------------------------
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
-        else:
-            super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_position)
-            event.accept()
-        else:
-            super().mouseMoveEvent(event)

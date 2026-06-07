@@ -21,7 +21,7 @@ import struct
 import math
 import subprocess
 
-async def test():
+async def run_audio_test():
     proc = await asyncio.create_subprocess_exec(
         "parecord", "--rate", "16000", "--channels", "1", "--format", "s16le", "--device", "@DEFAULT_MONITOR@", "-",
         stdout=subprocess.PIPE,
@@ -41,4 +41,4 @@ async def test():
             
     proc.terminate()
     
-asyncio.run(test())
+asyncio.run(run_audio_test())
