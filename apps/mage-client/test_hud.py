@@ -274,19 +274,23 @@ def test_multi_device_tracker(monkeypatch):
     mock_evdev.list_devices.return_value = ["/dev/input/event0"]
     mock_evdev.InputDevice.return_value = mock_device
     
-    # Overwrite evdev reference directly in the mage.ui.hud module to isolate the unit test
-    monkeypatch.setattr("mage.ui.hud.evdev", mock_evdev)
+    # We test the patched EvdevFallback class
+    import wayland_automation.mouse_position
     
-    from mage.ui.hud import MageMultiDeviceMouseTracker
-    
-    # Set EVDEV_AVAILABLE to True for the test
-    monkeypatch.setattr("mage.ui.hud.EVDEV_AVAILABLE", True)
-    
-    tracker = MageMultiDeviceMouseTracker(seed_x=100, seed_y=200, screen_width=1920, screen_height=1080)
+    # Set up evdev mock attributes on the tracker instance
+    tracker = wayland_automation.mouse_position.EvdevFallback(seed=(100, 200))
+    tracker.evdev = True
+    tracker.list_devices = mock_evdev.list_devices
+    tracker.InputDevice = mock_evdev.InputDevice
+    tracker.ecodes = mock_evdev.ecodes
     
     # Mock selectors
     mock_selector = MagicMock()
-    monkeypatch.setattr(tracker, "selector", mock_selector)
+    monkeypatch.setattr("selectors.DefaultSelector", lambda: mock_selector)
+    
+    # Mock wayland-info call in get_resolution
+    mock_get_res = MagicMock(return_value=("1920", "1080"))
+    monkeypatch.setattr("wayland_automation.utils.screen_resolution.get_resolution", mock_get_res)
     
     assert tracker.start() is True
     assert len(tracker.devices) == 1
