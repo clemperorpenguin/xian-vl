@@ -65,18 +65,17 @@ def robust_start(self) -> bool:
     self.devices = {}
     self.selector = selectors.DefaultSelector()
     
-    # Get screen resolution
+    # Get screen resolution from ScreenCapture virtual geometry (PyQt6-based)
     try:
-        from wayland_automation.utils.screen_resolution import get_resolution
-        res = get_resolution()
-        # get_resolution returns (width, height) as strings
-        if isinstance(res, tuple) and len(res) == 2:
-            self.width = int(res[0])
-            self.height = int(res[1])
+        from mage.capture.screen import ScreenCapture
+        total_geo = ScreenCapture.get_virtual_desktop_geometry()
+        if total_geo.width() > 0 and total_geo.height() > 0:
+            self.width = total_geo.width()
+            self.height = total_geo.height()
         else:
-            self.width, self.height = 1920, 1080
+            self.width, self.height = 1920, 1200
     except Exception:
-        self.width, self.height = 1920, 1080
+        self.width, self.height = 1920, 1200
 
     # Seed default coordinates if not already set
     if self.x is None or self.y is None:
@@ -268,6 +267,19 @@ def robust_clamp(self):
     if self.y < 0: self.y = 0
     if self.x >= self.width: self.x = self.width - 1
     if self.y >= self.height: self.y = self.height - 1
+    
+    # Rate-limited debug log if coordinates changed
+    import time
+    curr_x, curr_y = int(self.x), int(self.y)
+    last_x = getattr(self, "_last_logged_x", None)
+    last_y = getattr(self, "_last_logged_y", None)
+    if curr_x != last_x or curr_y != last_y:
+        now = time.time()
+        if now - getattr(self, "_last_log_time", 0) > 0.2:
+            self._last_logged_x = curr_x
+            self._last_logged_y = curr_y
+            self._last_log_time = now
+            logger.debug("EvdevFallback (Patched): Cursor pos changed to (%d, %d)", curr_x, curr_y)
 
 
 def robust_get_position(self) -> tuple[int, int]:
@@ -303,7 +315,16 @@ try:
     wayland_automation.mouse_position.EvdevFallback._clamp = robust_clamp
     wayland_automation.mouse_position.EvdevFallback.get_position = robust_get_position
     wayland_automation.mouse_position.EvdevFallback.stop = robust_stop
-    logger.info("Successfully monkey-patched wayland_automation.mouse_position.EvdevFallback")
+    
+    # Disable XdotoolBackend on Wayland because xdotool fails to get global coordinates outside XWayland windows
+    original_xdotool_available = wayland_automation.mouse_position.XdotoolBackend.available
+    def patched_xdotool_available():
+        if os.environ.get("WAYLAND_DISPLAY"):
+            return False
+        return original_xdotool_available()
+    wayland_automation.mouse_position.XdotoolBackend.available = patched_xdotool_available
+    
+    logger.info("Successfully monkey-patched wayland_automation.mouse_position.EvdevFallback and XdotoolBackend")
 except ImportError:
     logger.info("wayland-automation not available for patching")
 

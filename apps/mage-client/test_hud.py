@@ -288,9 +288,10 @@ def test_multi_device_tracker(monkeypatch):
     mock_selector = MagicMock()
     monkeypatch.setattr("selectors.DefaultSelector", lambda: mock_selector)
     
-    # Mock wayland-info call in get_resolution
-    mock_get_res = MagicMock(return_value=("1920", "1080"))
-    monkeypatch.setattr("wayland_automation.utils.screen_resolution.get_resolution", mock_get_res)
+    # Mock ScreenCapture virtual geometry
+    from PyQt6.QtCore import QRect
+    mock_geo = QRect(0, 0, 1920, 1080)
+    monkeypatch.setattr("mage.capture.screen.ScreenCapture.get_virtual_desktop_geometry", MagicMock(return_value=mock_geo))
     
     assert tracker.start() is True
     assert len(tracker.devices) == 1
