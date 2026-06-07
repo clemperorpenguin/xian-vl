@@ -242,3 +242,71 @@ def test_wayland_no_backend_deactivates(tmp_path, monkeypatch, q_app):
     app.settings.clear()
 
 
+def test_multi_device_tracker(monkeypatch):
+    from unittest.mock import MagicMock
+    import sys
+    
+    # Mock evdev module
+    mock_evdev = MagicMock()
+    mock_evdev.ecodes.EV_REL = 2
+    mock_evdev.ecodes.REL_X = 0
+    mock_evdev.ecodes.REL_Y = 1
+    mock_evdev.ecodes.EV_ABS = 3
+    mock_evdev.ecodes.ABS_X = 0
+    mock_evdev.ecodes.ABS_Y = 1
+    mock_evdev.ecodes.EV_KEY = 1
+    mock_evdev.ecodes.BTN_TOUCH = 330
+    
+    # Mock absinfo
+    mock_absinfo = MagicMock()
+    mock_absinfo.min = 0
+    mock_absinfo.max = 1000
+    
+    # Mock InputDevice
+    mock_device = MagicMock()
+    mock_device.fd = 10
+    mock_device.name = "Test Touchscreen"
+    mock_device.capabilities.return_value = {
+        3: [(0, mock_absinfo), (1, mock_absinfo)]
+    }
+    mock_device.absinfo.return_value = mock_absinfo
+    
+    mock_evdev.list_devices.return_value = ["/dev/input/event0"]
+    mock_evdev.InputDevice.return_value = mock_device
+    
+    # Overwrite evdev reference directly in the mage.ui.hud module to isolate the unit test
+    monkeypatch.setattr("mage.ui.hud.evdev", mock_evdev)
+    
+    from mage.ui.hud import MageMultiDeviceMouseTracker
+    
+    # Set EVDEV_AVAILABLE to True for the test
+    monkeypatch.setattr("mage.ui.hud.EVDEV_AVAILABLE", True)
+    
+    tracker = MageMultiDeviceMouseTracker(seed_x=100, seed_y=200, screen_width=1920, screen_height=1080)
+    
+    # Mock selectors
+    mock_selector = MagicMock()
+    monkeypatch.setattr(tracker, "selector", mock_selector)
+    
+    assert tracker.start() is True
+    assert len(tracker.devices) == 1
+    
+    # Verify device classification
+    dev_info = tracker.devices[10]
+    assert dev_info["type"] == "absolute"
+    assert dev_info["abs_x"] == mock_absinfo
+    
+    # Test absolute event processing
+    mock_event = MagicMock()
+    mock_event.type = 3  # EV_ABS
+    mock_event.code = 0  # ABS_X
+    mock_event.value = 500
+    
+    tracker._process_event(dev_info, mock_event)
+    assert tracker.x == 960  # 500 / 1000 * 1920 = 960
+    
+    # Clean up
+    tracker.stop()
+
+
+

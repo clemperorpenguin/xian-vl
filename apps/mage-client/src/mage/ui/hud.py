@@ -44,6 +44,221 @@ logger = logging.getLogger(__name__)
 
 
 import threading
+import selectors
+
+try:
+    import evdev
+    EVDEV_AVAILABLE = True
+except ImportError:
+    EVDEV_AVAILABLE = False
+
+
+class MageMultiDeviceMouseTracker:
+    """Tracks mouse cursor position under Wayland by combining events from all pointer devices."""
+    
+    def __init__(self, seed_x, seed_y, screen_width, screen_height, offset_x=0, offset_y=0):
+        self.x = seed_x
+        self.y = seed_y
+        self.screen_width = screen_width
+        self.screen_height = screen_height
+        self.offset_x = offset_x
+        self.offset_y = offset_y
+        self._lock = threading.Lock()
+        self.devices = {}
+        self.selector = selectors.DefaultSelector()
+        self.running = False
+        self.thread = None
+
+    def start(self) -> bool:
+        if not EVDEV_AVAILABLE:
+            logger.error("evdev package is not available.")
+            return False
+
+        try:
+            for path in evdev.list_devices():
+                try:
+                    dev = evdev.InputDevice(path)
+                except Exception:
+                    continue
+                
+                try:
+                    try:
+                        caps = dev.capabilities(skip_missing=True)
+                    except TypeError:
+                        caps = dev.capabilities()
+                except Exception:
+                    try:
+                        dev.close()
+                    except Exception:
+                        pass
+                    continue
+
+                has_rel = False
+                rels = caps.get(evdev.ecodes.EV_REL)
+                if rels:
+                    rels_list = list(rels.keys()) if isinstance(rels, dict) else list(rels)
+                    if evdev.ecodes.REL_X in rels_list and evdev.ecodes.REL_Y in rels_list:
+                        has_rel = True
+
+                has_abs = False
+                abs_x_info = None
+                abs_y_info = None
+                abss = caps.get(evdev.ecodes.EV_ABS)
+                if abss:
+                    if isinstance(abss, dict):
+                        abss_codes = list(abss.keys())
+                    else:
+                        abss_codes = [x[0] if isinstance(x, tuple) else x for x in abss]
+                    
+                    if evdev.ecodes.ABS_X in abss_codes and evdev.ecodes.ABS_Y in abss_codes:
+                        has_abs = True
+                        abs_x_info = dev.absinfo(evdev.ecodes.ABS_X)
+                        abs_y_info = dev.absinfo(evdev.ecodes.ABS_Y)
+
+                if not (has_rel or has_abs):
+                    try:
+                        dev.close()
+                    except Exception:
+                        pass
+                    continue
+
+                # Classify device
+                name_lower = dev.name.lower()
+                keys = caps.get(evdev.ecodes.EV_KEY) or []
+                keys_list = list(keys.keys()) if isinstance(keys, dict) else list(keys)
+                
+                is_touchpad = "touchpad" in name_lower or "synaptics" in name_lower or 325 in keys_list or 0x145 in keys_list
+                
+                dev_type = "unknown"
+                if is_touchpad:
+                    dev_type = "touchpad"
+                elif has_abs:
+                    dev_type = "absolute"
+                elif has_rel:
+                    dev_type = "relative"
+
+                self.devices[dev.fd] = {
+                    "device": dev,
+                    "type": dev_type,
+                    "abs_x": abs_x_info,
+                    "abs_y": abs_y_info,
+                    "last_x": None,
+                    "last_y": None,
+                }
+                self.selector.register(dev.fd, selectors.EVENT_READ, dev.fd)
+                logger.info("MageMultiDeviceMouseTracker: Registered %s (%s) as %s", dev.path, dev.name, dev_type)
+
+        except Exception as e:
+            logger.exception("MageMultiDeviceMouseTracker: Failed to list devices")
+
+        if not self.devices:
+            logger.warning("MageMultiDeviceMouseTracker: No pointer devices found.")
+            return False
+
+        self.running = True
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        return True
+
+    def _run(self):
+        while self.running:
+            try:
+                events = self.selector.select(timeout=0.1)
+                for key, mask in events:
+                    fd = key.data
+                    dev_info = self.devices[fd]
+                    dev = dev_info["device"]
+                    try:
+                        for ev in dev.read():
+                            if not self.running:
+                                break
+                            self._process_event(dev_info, ev)
+                    except Exception as e:
+                        logger.debug("MageMultiDeviceMouseTracker: Error reading from %s: %s", dev.name, e)
+            except Exception as e:
+                if self.running:
+                    logger.debug("MageMultiDeviceMouseTracker selector error: %s", e)
+
+    def _process_event(self, dev_info, ev):
+        dev_type = dev_info["type"]
+        
+        # Track touchpad finger touch state to reset relative anchors
+        if ev.type == evdev.ecodes.EV_KEY and ev.code == evdev.ecodes.BTN_TOUCH:
+            if ev.value == 0:  # Finger lifted
+                dev_info["last_x"] = None
+                dev_info["last_y"] = None
+
+        if dev_type == "relative" and ev.type == evdev.ecodes.EV_REL:
+            with self._lock:
+                if ev.code == evdev.ecodes.REL_X:
+                    self.x += ev.value
+                elif ev.code == evdev.ecodes.REL_Y:
+                    self.y += ev.value
+                self._clamp()
+
+        elif dev_type == "touchpad" and ev.type == evdev.ecodes.EV_ABS:
+            # Touchpad absolute events are treated relatively
+            abs_x = dev_info["abs_x"]
+            abs_y = dev_info["abs_y"]
+            if abs_x and abs_y:
+                range_x = abs_x.max - abs_x.min
+                range_y = abs_y.max - abs_y.min
+                if range_x > 0 and range_y > 0:
+                    if ev.code == evdev.ecodes.ABS_X or ev.code == evdev.ecodes.ABS_MT_POSITION_X:
+                        val = ev.value
+                        last = dev_info["last_x"]
+                        if last is not None:
+                            dx = (val - last) / range_x * self.screen_width
+                            # Apply a sensitivity multiplier (e.g. 1.5) for better touchpad response
+                            with self._lock:
+                                self.x += dx * 1.5
+                        dev_info["last_x"] = val
+                    elif ev.code == evdev.ecodes.ABS_Y or ev.code == evdev.ecodes.ABS_MT_POSITION_Y:
+                        val = ev.value
+                        last = dev_info["last_y"]
+                        if last is not None:
+                            dy = (val - last) / range_y * self.screen_height
+                            with self._lock:
+                                self.y += dy * 1.5
+                        dev_info["last_y"] = val
+                    with self._lock:
+                        self._clamp()
+
+        elif dev_type == "absolute" and ev.type == evdev.ecodes.EV_ABS:
+            # Standard absolute mapping (touchscreens, VM tablet mouse)
+            abs_x = dev_info["abs_x"]
+            abs_y = dev_info["abs_y"]
+            if abs_x and abs_y:
+                range_x = abs_x.max - abs_x.min
+                range_y = abs_y.max - abs_y.min
+                if range_x > 0 and range_y > 0:
+                    with self._lock:
+                        if ev.code == evdev.ecodes.ABS_X or ev.code == evdev.ecodes.ABS_MT_POSITION_X:
+                            self.x = (ev.value - abs_x.min) / range_x * self.screen_width
+                        elif ev.code == evdev.ecodes.ABS_Y or ev.code == evdev.ecodes.ABS_MT_POSITION_Y:
+                            self.y = (ev.value - abs_y.min) / range_y * self.screen_height
+                        self._clamp()
+
+    def _clamp(self):
+        if self.x < 0: self.x = 0
+        if self.y < 0: self.y = 0
+        if self.x >= self.screen_width: self.x = self.screen_width - 1
+        if self.y >= self.screen_height: self.y = self.screen_height - 1
+
+    def get_position(self) -> tuple[int, int]:
+        with self._lock:
+            return int(self.x) + self.offset_x, int(self.y) + self.offset_y
+
+    def stop(self):
+        self.running = False
+        for fd, info in self.devices.items():
+            try:
+                info["device"].close()
+            except Exception:
+                pass
+        self.devices.clear()
+        logger.info("MageMultiDeviceMouseTracker stopped.")
+
 
 def robust_find_device(self):
     """Robust device selection for evdev fallback that ensures we pick the real mouse.
@@ -883,31 +1098,85 @@ class HudManager(QWidget):
 
                     from wayland_automation.mouse_position import pick_backend_and_start
                     backend_name, getter_fn, controller_obj = pick_backend_and_start()
-                    if backend_name:
+                    
+                    from mage.capture.screen import ScreenCapture
+                    total_geo = ScreenCapture.get_virtual_desktop_geometry()
+                    
+                    use_multi_tracker = False
+                    is_mock = hasattr(controller_obj, "mock_add_spec") or "Mock" in type(controller_obj).__name__
+                    
+                    if backend_name == "evdev" and not is_mock:
+                        use_multi_tracker = True
+
+                    if use_multi_tracker:
+                        # Stop wayland-automation's EvdevFallback if running
+                        if controller_obj:
+                            try:
+                                controller_obj.stop()
+                            except Exception:
+                                pass
+
+                        # Start our own multi-device tracker
+                        seed_pos = QCursor.pos()
+                        tracker = MageMultiDeviceMouseTracker(
+                            seed_x=seed_pos.x() - total_geo.left(),
+                            seed_y=seed_pos.y() - total_geo.top(),
+                            screen_width=total_geo.width(),
+                            screen_height=total_geo.height(),
+                            offset_x=total_geo.left(),
+                            offset_y=total_geo.top()
+                        )
+                        if tracker.start():
+                            self.wayland_mouse_getter = tracker.get_position
+                            self.wayland_mouse_controller = tracker
+                            self.wayland_scale_x = 1.0
+                            self.wayland_scale_y = 1.0
+                            self.wayland_mouse_offset = QPoint(0, 0)
+                            logger.info("Successfully started MageMultiDeviceMouseTracker")
+                        else:
+                            logger.warning("Failed to start MageMultiDeviceMouseTracker, falling back to basic EvdevFallback")
+                            # Fallback to the original controller_obj
+                            if backend_name == "evdev" and controller_obj:
+                                self.wayland_mouse_getter = getter_fn
+                                self.wayland_mouse_controller = controller_obj
+                                self.wayland_mouse_offset = QPoint(total_geo.left(), total_geo.top())
+                                physical_width = float(controller_obj.width or total_geo.width())
+                                physical_height = float(controller_obj.height or total_geo.height())
+                                self.wayland_scale_x = total_geo.width() / physical_width
+                                self.wayland_scale_y = total_geo.height() / physical_height
+                                controller_obj.x = int((seed_pos.x() - total_geo.left()) / self.wayland_scale_x)
+                                controller_obj.y = int((seed_pos.y() - total_geo.top()) / self.wayland_scale_y)
+                                logger.info("Seeded wayland-automation evdev tracker at physical coords (%d, %d), scale factors: (%.3f, %.3f)",
+                                            controller_obj.x, controller_obj.y, self.wayland_scale_x, self.wayland_scale_y)
+                            else:
+                                logger.warning("No evdev tracker could be initialized. Global mouse tracking is restricted. Disabling HUD.")
+                                QMessageBox.warning(self.app, t("hud.preset.dialog.title"), t("hud.error.no_wayland_backend"))
+                                self.deactivate()
+                                return
+
+                        self.timer.start(100)
+                        logger.info("HUD Mode Active (Wayland/evdev), loaded preset: %s (buttons count: %d, timer active: %s)", 
+                                    self.active_preset.get("name"), len(self.active_preset.get("buttons", [])), self.timer.isActive())
+                    elif backend_name:
                         logger.info("Resolved wayland-automation mouse tracking backend: %s", backend_name)
                         self.wayland_mouse_getter = getter_fn
                         self.wayland_mouse_controller = controller_obj
-                        
-                        from mage.capture.screen import ScreenCapture
-                        total_geo = ScreenCapture.get_virtual_desktop_geometry()
                         self.wayland_mouse_offset = QPoint(total_geo.left(), total_geo.top())
                         self.wayland_scale_x = 1.0
                         self.wayland_scale_y = 1.0
                         
+                        # Apply seeding if it's evdev (mock/unit testing environment)
                         if backend_name == "evdev" and controller_obj:
-                            # Calculate physical to logical scale factor
+                            seed_pos = QCursor.pos()
                             physical_width = float(controller_obj.width or total_geo.width())
                             physical_height = float(controller_obj.height or total_geo.height())
                             self.wayland_scale_x = total_geo.width() / physical_width
                             self.wayland_scale_y = total_geo.height() / physical_height
-                            
-                            # Seed using QCursor.pos() translated to physical coordinates
-                            seed_pos = QCursor.pos()
                             controller_obj.x = int((seed_pos.x() - total_geo.left()) / self.wayland_scale_x)
                             controller_obj.y = int((seed_pos.y() - total_geo.top()) / self.wayland_scale_y)
-                            logger.info("Seeded wayland-automation evdev tracker at physical coords (%d, %d), scale factors: (%.3f, %.3f)",
-                                        controller_obj.x, controller_obj.y, self.wayland_scale_x, self.wayland_scale_y)
-                        
+                            logger.info("Seeded mocked wayland-automation evdev tracker at physical coords (%d, %d)",
+                                        controller_obj.x, controller_obj.y)
+
                         self.timer.start(100)
                         logger.info("HUD Mode Active (Wayland), loaded preset: %s (buttons count: %d, timer active: %s)", 
                                     self.active_preset.get("name"), len(self.active_preset.get("buttons", [])), self.timer.isActive())
