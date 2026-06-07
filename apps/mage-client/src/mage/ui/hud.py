@@ -22,7 +22,7 @@ import logging
 from PyQt6.QtWidgets import (
     QWidget, QDialog, QLabel, QVBoxLayout, QHBoxLayout,
     QPushButton, QComboBox, QLineEdit, QTextEdit, QMessageBox,
-    QSystemTrayIcon
+    QSystemTrayIcon, QInputDialog
 )
 from PyQt6.QtCore import (
     Qt, QRect, QPoint, QTimer, pyqtSignal, QStandardPaths,
@@ -737,7 +737,7 @@ class HudManager(QWidget):
     def _save_preset_prompt(self):
         # Save dialog prompt
         presets_dir = get_hud_presets_dir()
-        name, ok = QLineEdit.getText(
+        name, ok = QInputDialog.getText(
             self.control_dialog,
             t("hud.setup.dialog.save_prompt.title"),
             t("hud.setup.dialog.save_prompt.label")
