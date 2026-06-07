@@ -109,6 +109,41 @@ def robust_find_device(self):
     return fallback_path
 
 
+def robust_start(self):
+    """Robust startup for evdev fallback that fixes the library's swapped width/height bug.
+    """
+    import threading
+    if not self.evdev:
+        return False
+    self.device_path = self.find_device()
+    if not self.device_path:
+        return False
+    try:
+        self.dev = self.InputDevice(self.device_path)
+    except Exception:
+        return False
+
+    # get screen resolution and set it correctly (fixing the library's w/h swap)
+    try:
+        from wayland_automation.utils.screen_resolution import get_resolution
+        res_a, res_b = get_resolution()
+        # get_resolution returns (width, height)
+        self.width = int(res_a)
+        self.height = int(res_b)
+    except Exception:
+        self.width, self.height = 1920, 1080
+
+    # seed default if None
+    if self.x is None or self.y is None:
+        self.x = self.width // 2
+        self.y = self.height // 2
+
+    self._running = True
+    self._thr = threading.Thread(target=self._reader, daemon=True)
+    self._thr.start()
+    return True
+
+
 
 def get_hud_presets_dir() -> str:
     """Get path to the HUD presets folder in AppData, creating it if needed."""
@@ -837,13 +872,14 @@ class HudManager(QWidget):
             if is_wayland:
                 logger.info("Wayland session detected. Attempting wayland-automation mouse tracking...")
                 try:
-                    # Monkey-patch wayland_automation's EvdevFallback.find_device to be robust
+                    # Monkey-patch wayland_automation's EvdevFallback.find_device and start to be robust
                     try:
                         import wayland_automation.mouse_position
                         wayland_automation.mouse_position.EvdevFallback.find_device = robust_find_device
-                        logger.info("Successfully monkey-patched wayland_automation find_device")
+                        wayland_automation.mouse_position.EvdevFallback.start = robust_start
+                        logger.info("Successfully monkey-patched wayland_automation find_device and start")
                     except Exception as e:
-                        logger.error("Failed to monkey patch wayland-automation find_device: %s", e)
+                        logger.error("Failed to monkey patch wayland-automation: %s", e)
 
                     from wayland_automation.mouse_position import pick_backend_and_start
                     backend_name, getter_fn, controller_obj = pick_backend_and_start()

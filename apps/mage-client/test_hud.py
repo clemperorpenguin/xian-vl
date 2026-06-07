@@ -120,10 +120,10 @@ def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
     
     mock_getter = MagicMock(return_value=(200, 200))
     mock_controller = MagicMock()
-    mock_controller.width = 1080
-    mock_controller.height = 1920
-    mock_controller.x = 540
-    mock_controller.y = 960
+    mock_controller.width = 3840
+    mock_controller.height = 2160
+    mock_controller.x = 1920
+    mock_controller.y = 1080
     mock_controller._lock = threading.Lock()
     mock_pick = MagicMock(return_value=("evdev", mock_getter, mock_controller))
     
@@ -163,24 +163,24 @@ def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
         tracker = manager.wayland_mouse_controller
         assert tracker is not None
         # Verify bounds and scale factors were computed and tracker seeded
-        assert tracker.width == 1080
-        assert tracker.height == 1920
-        assert tracker.x == 540
-        assert tracker.y == 960
-        assert manager.wayland_scale_x == 1920.0 / 1080.0
-        assert manager.wayland_scale_y == 1080.0 / 1920.0
+        assert tracker.width == 3840
+        assert tracker.height == 2160
+        assert tracker.x == 1920
+        assert tracker.y == 1080
+        assert manager.wayland_scale_x == 0.5
+        assert manager.wayland_scale_y == 0.5
         assert manager.timer.isActive() is True
         
         # Test _check_hover outside hover_rect
         # Return physical coords that scale outside of hover_rect
-        mock_getter.return_value = (200, 200)
+        mock_getter.return_value = (500, 500)
         manager._check_hover()
         assert manager.hovered_button is None
         
         # Test _check_hover inside hover_rect
         # Return physical coords that scale inside hover_rect [10, 10, 100, 100]
-        # (8, 26) * (1.777, 0.5625) = (14, 14) which is inside
-        mock_getter.return_value = (8, 26)
+        # (30, 30) * 0.5 = (15, 15) which is inside
+        mock_getter.return_value = (30, 30)
         manager.show_single_tooltip = MagicMock()
         manager._check_hover()
         manager.show_single_tooltip.assert_called_once()
