@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import (
     Qt, QRect, QPoint, QTimer, pyqtSignal, QStandardPaths,
-    QBuffer, QIODevice
+    QBuffer, QIODevice, QThread
 )
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QMouseEvent, QPixmap, QImage,
@@ -43,290 +43,39 @@ from shared_types.state import t
 logger = logging.getLogger(__name__)
 
 
-import threading
-import selectors
-
-try:
-    import evdev
-    EVDEV_AVAILABLE = True
-except ImportError:
-    EVDEV_AVAILABLE = False
-
-
-def robust_start(self) -> bool:
-    """Patched start method for EvdevFallback to support multiple devices (mice, touchpads, touchscreens)."""
-    import threading
-    import selectors
+class WdotoolWorker(QThread):
+    position_updated = pyqtSignal(int, int)
     
-    if not self.evdev:
-        logger.error("evdev package is not available.")
-        return False
-
-    self.devices = {}
-    self.selector = selectors.DefaultSelector()
-    
-    # Get screen resolution from ScreenCapture virtual geometry (PyQt6-based)
-    try:
-        from mage.capture.screen import ScreenCapture
-        total_geo = ScreenCapture.get_virtual_desktop_geometry()
-        if total_geo.width() > 0 and total_geo.height() > 0:
-            self.width = total_geo.width()
-            self.height = total_geo.height()
-        else:
-            self.width, self.height = 1920, 1200
-    except Exception:
-        self.width, self.height = 1920, 1200
-
-    # Seed default coordinates if not already set
-    if self.x is None or self.y is None:
-        self.x = self.width // 2
-        self.y = self.height // 2
-
-    # Scan and register all pointer devices
-    try:
-        for path in self.list_devices():
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._running = True
+        
+    def stop(self):
+        self._running = False
+        
+    def run(self):
+        import subprocess
+        import time
+        import re
+        
+        while self._running:
             try:
-                dev = self.InputDevice(path)
-            except Exception:
-                continue
-            
-            try:
-                try:
-                    caps = dev.capabilities(skip_missing=True)
-                except TypeError:
-                    caps = dev.capabilities()
-            except Exception:
-                try:
-                    dev.close()
-                except Exception:
-                    pass
-                continue
-
-            has_rel = False
-            rels = caps.get(self.ecodes.EV_REL)
-            if rels:
-                rels_list = list(rels.keys()) if isinstance(rels, dict) else list(rels)
-                if self.ecodes.REL_X in rels_list and self.ecodes.REL_Y in rels_list:
-                    has_rel = True
-
-            has_abs = False
-            abs_x_info = None
-            abs_y_info = None
-            abss = caps.get(self.ecodes.EV_ABS)
-            if abss:
-                if isinstance(abss, dict):
-                    abss_codes = list(abss.keys())
-                else:
-                    abss_codes = [x[0] if isinstance(x, tuple) else x for x in abss]
-                
-                # Support ABS_X/Y or multi-touch ABS_MT_POSITION_X/Y (53/54)
-                has_abs_x = (self.ecodes.ABS_X in abss_codes) or (53 in abss_codes)
-                has_abs_y = (self.ecodes.ABS_Y in abss_codes) or (54 in abss_codes)
-                
-                if has_abs_x and has_abs_y:
-                    has_abs = True
-                    if self.ecodes.ABS_X in abss_codes:
-                        abs_x_info = dev.absinfo(self.ecodes.ABS_X)
-                    else:
-                        abs_x_info = dev.absinfo(53)
-                    
-                    if self.ecodes.ABS_Y in abss_codes:
-                        abs_y_info = dev.absinfo(self.ecodes.ABS_Y)
-                    else:
-                        abs_y_info = dev.absinfo(54)
-
-            if not (has_rel or has_abs):
-                try:
-                    dev.close()
-                except Exception:
-                    pass
-                continue
-
-            # Classify device
-            name_lower = dev.name.lower()
-            keys = caps.get(self.ecodes.EV_KEY) or []
-            keys_list = list(keys.keys()) if isinstance(keys, dict) else list(keys)
-            
-            # Touchpad has BTN_TOOL_FINGER (325) AND BTN_LEFT (0x110/272)
-            is_touchpad = ("touchpad" in name_lower or "synaptics" in name_lower) or (325 in keys_list and (0x110 in keys_list or 272 in keys_list))
-            
-            dev_type = "unknown"
-            if is_touchpad:
-                dev_type = "touchpad"
-            elif has_abs:
-                dev_type = "absolute"
-            elif has_rel:
-                dev_type = "relative"
-
-            self.devices[dev.fd] = {
-                "device": dev,
-                "type": dev_type,
-                "abs_x": abs_x_info,
-                "abs_y": abs_y_info,
-                "last_x": None,
-                "last_y": None,
-            }
-            self.selector.register(dev.fd, selectors.EVENT_READ, dev.fd)
-            logger.info("EvdevFallback (Patched): Registered %s (%s) as %s", dev.path, dev.name, dev_type)
-
-    except Exception as e:
-        logger.exception("EvdevFallback (Patched): Failed to list devices")
-
-    if not self.devices:
-        logger.warning("EvdevFallback (Patched): No pointer devices found.")
-        return False
-
-    self._running = True
-    self._thr = threading.Thread(target=self._reader, daemon=True)
-    self._thr.start()
-    return True
-
-
-def robust_reader(self):
-    """Patched reader loop for EvdevFallback that reads from all registered devices."""
-    while self._running:
-        try:
-            events = self.selector.select(timeout=0.1)
-            for key, mask in events:
-                fd = key.data
-                dev_info = self.devices[fd]
-                dev = dev_info["device"]
-                try:
-                    for ev in dev.read():
-                        if not self._running:
-                            break
-                        self._process_event(dev_info, ev)
-                except Exception as e:
-                    logger.debug("EvdevFallback (Patched): Error reading from %s: %s", dev.name, e)
-        except Exception as e:
-            if self._running:
-                logger.debug("EvdevFallback (Patched) selector error: %s", e)
-
-
-def robust_process_event(self, dev_info, ev):
-    dev_type = dev_info["type"]
-    
-    # Track touchpad/touchscreen finger touch state to reset relative anchors
-    if ev.type == self.ecodes.EV_KEY and ev.code in (self.ecodes.BTN_TOUCH, 330, 325):
-        if ev.value == 0:  # Finger lifted
-            dev_info["last_x"] = None
-            dev_info["last_y"] = None
-
-    if dev_type == "relative" and ev.type == self.ecodes.EV_REL:
-        with self._lock:
-            if ev.code == self.ecodes.REL_X:
-                self.x += ev.value
-            elif ev.code == self.ecodes.REL_Y:
-                self.y += ev.value
-            self._clamp()
-
-    elif dev_type == "touchpad" and ev.type == self.ecodes.EV_ABS:
-        abs_x = dev_info["abs_x"]
-        abs_y = dev_info["abs_y"]
-        if abs_x and abs_y:
-            range_x = abs_x.max - abs_x.min
-            range_y = abs_y.max - abs_y.min
-            if range_x > 0 and range_y > 0:
-                if ev.code in (self.ecodes.ABS_X, 53):  # ABS_X or ABS_MT_POSITION_X
-                    val = ev.value
-                    last = dev_info["last_x"]
-                    if last is not None:
-                        dx = (val - last) / range_x * self.width
-                        with self._lock:
-                            self.x += dx * 1.5
-                    dev_info["last_x"] = val
-                elif ev.code in (self.ecodes.ABS_Y, 54):  # ABS_Y or ABS_MT_POSITION_Y
-                    val = ev.value
-                    last = dev_info["last_y"]
-                    if last is not None:
-                        dy = (val - last) / range_y * self.height
-                        with self._lock:
-                            self.y += dy * 1.5
-                    dev_info["last_y"] = val
-                with self._lock:
-                    self._clamp()
-
-    elif dev_type == "absolute" and ev.type == self.ecodes.EV_ABS:
-        abs_x = dev_info["abs_x"]
-        abs_y = dev_info["abs_y"]
-        if abs_x and abs_y:
-            range_x = abs_x.max - abs_x.min
-            range_y = abs_y.max - abs_y.min
-            if range_x > 0 and range_y > 0:
-                with self._lock:
-                    if ev.code in (self.ecodes.ABS_X, 53):  # ABS_X or ABS_MT_POSITION_X
-                        self.x = (ev.value - abs_x.min) / range_x * self.width
-                    elif ev.code in (self.ecodes.ABS_Y, 54):  # ABS_Y or ABS_MT_POSITION_Y
-                        self.y = (ev.value - abs_y.min) / range_y * self.height
-                    self._clamp()
-
-
-def robust_clamp(self):
-    """Clamps x and y coordinates to screen bounds."""
-    if self.x < 0: self.x = 0
-    if self.y < 0: self.y = 0
-    if self.x >= self.width: self.x = self.width - 1
-    if self.y >= self.height: self.y = self.height - 1
-    
-    # Rate-limited debug log if coordinates changed
-    import time
-    curr_x, curr_y = int(self.x), int(self.y)
-    last_x = getattr(self, "_last_logged_x", None)
-    last_y = getattr(self, "_last_logged_y", None)
-    if curr_x != last_x or curr_y != last_y:
-        now = time.time()
-        if now - getattr(self, "_last_log_time", 0) > 0.2:
-            self._last_logged_x = curr_x
-            self._last_logged_y = curr_y
-            self._last_log_time = now
-            logger.debug("EvdevFallback (Patched): Cursor pos changed to (%d, %d)", curr_x, curr_y)
-
-
-def robust_get_position(self) -> tuple[int, int]:
-    """Returns the current accumulated mouse cursor coordinates."""
-    with self._lock:
-        return int(self.x), int(self.y)
-
-
-def robust_stop(self):
-    """Stops the patched EvdevFallback selector loop and releases input devices."""
-    self._running = False
-    if hasattr(self, "devices"):
-        for fd, info in self.devices.items():
-            try:
-                info["device"].close()
+                result = subprocess.run(
+                    ["wdotool", "getmouselocation"],
+                    capture_output=True,
+                    text=True,
+                    timeout=0.2
+                )
+                if result.returncode == 0:
+                    m_x = re.search(r"x:(\d+)", result.stdout)
+                    m_y = re.search(r"y:(\d+)", result.stdout)
+                    if m_x and m_y:
+                        x = int(m_x.group(1))
+                        y = int(m_y.group(1))
+                        self.position_updated.emit(x, y)
             except Exception:
                 pass
-        self.devices.clear()
-    if hasattr(self, "selector") and self.selector:
-        try:
-            self.selector.close()
-        except Exception:
-            pass
-    logger.info("EvdevFallback (Patched) stopped.")
-
-
-# Monkeypatch wayland_automation if it exists
-try:
-    import wayland_automation.mouse_position
-    wayland_automation.mouse_position.EvdevFallback.start = robust_start
-    wayland_automation.mouse_position.EvdevFallback._reader = robust_reader
-    wayland_automation.mouse_position.EvdevFallback._process_event = robust_process_event
-    wayland_automation.mouse_position.EvdevFallback._clamp = robust_clamp
-    wayland_automation.mouse_position.EvdevFallback.get_position = robust_get_position
-    wayland_automation.mouse_position.EvdevFallback.stop = robust_stop
-    
-    # Disable XdotoolBackend on Wayland because xdotool fails to get global coordinates outside XWayland windows
-    original_xdotool_available = wayland_automation.mouse_position.XdotoolBackend.available
-    def patched_xdotool_available():
-        if os.environ.get("WAYLAND_DISPLAY"):
-            return False
-        return original_xdotool_available()
-    wayland_automation.mouse_position.XdotoolBackend.available = patched_xdotool_available
-    
-    logger.info("Successfully monkey-patched wayland_automation.mouse_position.EvdevFallback and XdotoolBackend")
-except ImportError:
-    logger.info("wayland-automation not available for patching")
+            time.sleep(0.05)
 
 
 
@@ -1057,44 +806,24 @@ class HudManager(QWidget):
             is_wayland = (qt_platform == "wayland")
             
             if is_wayland:
-                logger.info("Wayland session detected. Attempting wayland-automation mouse tracking...")
+                logger.info("Wayland session detected. Attempting wdotool mouse tracking...")
                 try:
-                    from wayland_automation.mouse_position import pick_backend_and_start
-                    backend_name, getter_fn, controller_obj = pick_backend_and_start()
+                    import subprocess
+                    result = subprocess.run(["wdotool", "--help"], capture_output=True, text=True, timeout=1.0)
+                    if result.returncode != 0:
+                        raise RuntimeError("wdotool not available")
+                        
+                    self.wayland_mouse_pos = QCursor.pos()
+                    self.wdotool_worker = WdotoolWorker(self)
+                    self.wdotool_worker.position_updated.connect(self._on_wdotool_pos)
+                    self.wdotool_worker.start()
                     
-                    from mage.capture.screen import ScreenCapture
-                    total_geo = ScreenCapture.get_virtual_desktop_geometry()
-                    
-                    if backend_name and controller_obj:
-                        logger.info("Resolved wayland-automation mouse tracking backend: %s", backend_name)
-                        self.wayland_mouse_getter = getter_fn
-                        self.wayland_mouse_controller = controller_obj
-                        self.wayland_mouse_offset = QPoint(total_geo.left(), total_geo.top())
-                        
-                        seed_pos = QCursor.pos()
-                        physical_width = float(controller_obj.width or total_geo.width())
-                        physical_height = float(controller_obj.height or total_geo.height())
-                        self.wayland_scale_x = total_geo.width() / physical_width
-                        self.wayland_scale_y = total_geo.height() / physical_height
-                        
-                        # Seed coordinates
-                        controller_obj.x = int((seed_pos.x() - total_geo.left()) / self.wayland_scale_x)
-                        controller_obj.y = int((seed_pos.y() - total_geo.top()) / self.wayland_scale_y)
-                        
-                        logger.info("Seeded wayland-automation %s tracker at physical coords (%d, %d), scale factors: (%.3f, %.3f)",
-                                    backend_name, controller_obj.x, controller_obj.y, self.wayland_scale_x, self.wayland_scale_y)
-                        
-                        self.timer.start(100)
-                        logger.info("HUD Mode Active (Wayland), loaded preset: %s (buttons count: %d, timer active: %s)", 
-                                    self.active_preset.get("name"), len(self.active_preset.get("buttons", [])), self.timer.isActive())
-                    else:
-                        logger.warning("No wayland-automation backend could be resolved. Global mouse tracking is restricted. Disabling HUD.")
-                        QMessageBox.warning(self.app, t("hud.preset.dialog.title"), t("hud.error.no_wayland_backend"))
-                        self.deactivate()
-                        return
+                    self.timer.start(100)
+                    logger.info("HUD Mode Active (Wayland), loaded preset: %s (buttons count: %d, timer active: %s)", 
+                                self.active_preset.get("name"), len(self.active_preset.get("buttons", [])), self.timer.isActive())
                 except Exception as e:
-                    logger.exception("Failed to initialize wayland-automation mouse tracking. Disabling HUD.")
-                    QMessageBox.warning(self.app, t("hud.preset.dialog.title"), t("hud.error.no_wayland_backend"))
+                    logger.exception("Failed to initialize wdotool mouse tracking. Disabling HUD.")
+                    QMessageBox.warning(self.app, t("hud.preset.dialog.title"), "wdotool not available or failed to start. Global mouse tracking is restricted. Disabling HUD.")
                     self.deactivate()
                     return
             else:
@@ -1121,17 +850,15 @@ class HudManager(QWidget):
         self.clear_all_tooltips()
         self.hovered_button = None
         self.active_preset = None
-        # Stop wayland-automation controller if it exists
-        if self.wayland_mouse_controller:
+        # Stop wdotool worker if it exists
+        if hasattr(self, 'wdotool_worker') and self.wdotool_worker:
             try:
-                self.wayland_mouse_controller.stop()
+                self.wdotool_worker.stop()
+                self.wdotool_worker.wait()
             except Exception as e:
-                logger.error("Failed to stop wayland-automation mouse controller: %s", e)
-            self.wayland_mouse_controller = None
-        self.wayland_mouse_getter = None
-        self.wayland_mouse_offset = QPoint(0, 0)
-        self.wayland_scale_x = 1.0
-        self.wayland_scale_y = 1.0
+                logger.error("Failed to stop wdotool worker: %s", e)
+            self.wdotool_worker = None
+        self.wayland_mouse_pos = QPoint(0, 0)
         
         logger.info("HUD Mode Disabled")
         if hasattr(self.app, "tray") and self.app.tray:
@@ -1142,22 +869,15 @@ class HudManager(QWidget):
                 3000
             )
 
+    def _on_wdotool_pos(self, x: int, y: int):
+        self.wayland_mouse_pos = QPoint(x, y)
+
     def _check_hover(self):
         if not self.active_preset:
             return
             
-        if self.wayland_mouse_getter:
-            try:
-                coords = self.wayland_mouse_getter()
-                if coords:
-                    scaled_x = int(coords[0] * self.wayland_scale_x)
-                    scaled_y = int(coords[1] * self.wayland_scale_y)
-                    pos = QPoint(scaled_x, scaled_y) + self.wayland_mouse_offset
-                else:
-                    pos = QCursor.pos()
-            except Exception as e:
-                logger.error("Error calling wayland_mouse_getter: %s", e)
-                pos = QCursor.pos()
+        if hasattr(self, 'wdotool_worker') and self.wdotool_worker:
+            pos = getattr(self, 'wayland_mouse_pos', QCursor.pos())
         else:
             pos = QCursor.pos()
             

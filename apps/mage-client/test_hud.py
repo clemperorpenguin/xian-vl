@@ -113,87 +113,65 @@ def q_app():
 def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
     from unittest.mock import MagicMock, patch
     from mage.ui.hud import HudManager
-    import threading
 
     app = DummyApp()
     app.settings.clear()
     
-    mock_getter = MagicMock(return_value=(200, 200))
-    mock_controller = MagicMock()
-    mock_controller.width = 3840
-    mock_controller.height = 2160
-    mock_controller.x = 1920
-    mock_controller.y = 1080
-    mock_controller._lock = threading.Lock()
-    mock_pick = MagicMock(return_value=("evdev", mock_getter, mock_controller))
-    
     # Mock QGuiApplication.platformName to return "wayland"
     monkeypatch.setattr("PyQt6.QtGui.QGuiApplication.platformName", lambda: "wayland")
     
-    # Mock ScreenCapture.get_virtual_desktop_geometry
-    from PyQt6.QtCore import QRect, QPoint
-    monkeypatch.setattr("mage.capture.screen.ScreenCapture.get_virtual_desktop_geometry", lambda: QRect(0, 0, 1920, 1080))
+    # Mock subprocess.run for wdotool detection
+    mock_run = MagicMock()
+    mock_run.returncode = 0
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: mock_run)
     
-    # Mock QCursor.pos to return (960, 540)
-    monkeypatch.setattr("PyQt6.QtGui.QCursor.pos", lambda: QPoint(960, 540))
+    # Mock WdotoolWorker so we don't start a real thread during tests
+    mock_worker = MagicMock()
+    monkeypatch.setattr("mage.ui.hud.WdotoolWorker", lambda parent: mock_worker)
 
-    with patch("wayland_automation.mouse_position.pick_backend_and_start", mock_pick):
-        manager = HudManager(app)
+    manager = HudManager(app)
+    
+    # Create a dummy preset file
+    preset_file = tmp_path / "test_preset.json"
+    preset_data = {
+        "name": "test_preset",
+        "buttons": [
+            {
+                "hover_rect": [10, 10, 100, 100],
+                "display_rect": [20, 20, 50, 50],
+                "original_text": "攻击",
+                "translated_text": "Attack",
+                "pinyin": "gong1 ji1"
+            }
+        ]
+    }
+    with open(preset_file, "w", encoding="utf-8") as f:
+        json.dump(preset_data, f, indent=2)
         
-        # Create a dummy preset file
-        preset_file = tmp_path / "test_preset.json"
-        preset_data = {
-            "name": "test_preset",
-            "buttons": [
-                {
-                    "hover_rect": [10, 10, 100, 100],
-                    "display_rect": [20, 20, 50, 50],
-                    "original_text": "攻击",
-                    "translated_text": "Attack",
-                    "pinyin": "gong1 ji1"
-                }
-            ]
-        }
-        with open(preset_file, "w", encoding="utf-8") as f:
-            json.dump(preset_data, f, indent=2)
-            
-        manager.load_preset(str(preset_file))
-        
-        assert manager.wayland_mouse_getter == mock_getter
-        tracker = manager.wayland_mouse_controller
-        assert tracker is not None
-        # Verify bounds and scale factors were computed and tracker seeded
-        assert tracker.width == 3840
-        assert tracker.height == 2160
-        assert tracker.x == 1920
-        assert tracker.y == 1080
-        assert manager.wayland_scale_x == 0.5
-        assert manager.wayland_scale_y == 0.5
-        assert manager.timer.isActive() is True
-        
-        # Test _check_hover outside hover_rect
-        # Return physical coords that scale outside of hover_rect
-        mock_getter.return_value = (500, 500)
-        manager._check_hover()
-        assert manager.hovered_button is None
-        
-        # Test _check_hover inside hover_rect
-        # Return physical coords that scale inside hover_rect [10, 10, 100, 100]
-        # (30, 30) * 0.5 = (15, 15) which is inside
-        mock_getter.return_value = (30, 30)
-        manager.show_single_tooltip = MagicMock()
-        manager._check_hover()
-        manager.show_single_tooltip.assert_called_once()
-        
-        # Test deactivate stops controller
-        manager.deactivate()
-        mock_controller.stop.assert_called_once()
-        assert manager.wayland_mouse_getter is None
-        assert manager.wayland_mouse_controller is None
-        assert manager.timer.isActive() is False
+    manager.load_preset(str(preset_file))
+    
+    assert hasattr(manager, 'wdotool_worker')
+    assert manager.wdotool_worker == mock_worker
+    mock_worker.start.assert_called_once()
+    assert manager.timer.isActive() is True
+    
+    # Simulate WdotoolWorker emitting new position outside rect
+    manager._on_wdotool_pos(500, 500)
+    manager._check_hover()
+    assert manager.hovered_button is None
+    
+    # Simulate position inside rect
+    manager._on_wdotool_pos(30, 30)
+    manager.show_single_tooltip = MagicMock()
+    manager._check_hover()
+    manager.show_single_tooltip.assert_called_once()
+    
+    # Test deactivate stops controller
+    manager.deactivate()
+    mock_worker.stop.assert_called_once()
+    assert manager.timer.isActive() is False
         
     app.settings.clear()
-
 
 def test_wayland_no_backend_deactivates(tmp_path, monkeypatch, q_app):
     from unittest.mock import MagicMock, patch
@@ -202,116 +180,42 @@ def test_wayland_no_backend_deactivates(tmp_path, monkeypatch, q_app):
     app = DummyApp()
     app.settings.clear()
     
-    mock_pick = MagicMock(return_value=(None, None, None))
-    
     # Mock QGuiApplication.platformName to return "wayland"
     monkeypatch.setattr("PyQt6.QtGui.QGuiApplication.platformName", lambda: "wayland")
+    
+    # Mock subprocess.run to simulate wdotool not found
+    mock_run = MagicMock()
+    mock_run.returncode = 1
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: mock_run)
     
     # Mock QMessageBox.warning to prevent blocking popup
     mock_warn = MagicMock()
     monkeypatch.setattr("PyQt6.QtWidgets.QMessageBox.warning", mock_warn)
     
-    with patch("wayland_automation.mouse_position.pick_backend_and_start", mock_pick):
-        manager = HudManager(app)
+    manager = HudManager(app)
+    
+    # Create a dummy preset file
+    preset_file = tmp_path / "test_preset_no_backend.json"
+    preset_data = {
+        "name": "test_preset_no_backend",
+        "buttons": [
+            {
+                "hover_rect": [10, 10, 100, 100],
+                "display_rect": [20, 20, 50, 50],
+                "original_text": "攻击",
+                "translated_text": "Attack",
+                "pinyin": "gong1 ji1"
+            }
+        ]
+    }
+    with open(preset_file, "w", encoding="utf-8") as f:
+        json.dump(preset_data, f, indent=2)
         
-        # Create a dummy preset file
-        preset_file = tmp_path / "test_preset_no_backend.json"
-        preset_data = {
-            "name": "test_preset_no_backend",
-            "buttons": [
-                {
-                    "hover_rect": [10, 10, 100, 100],
-                    "display_rect": [20, 20, 50, 50],
-                    "original_text": "攻击",
-                    "translated_text": "Attack",
-                    "pinyin": "gong1 ji1"
-                }
-            ]
-        }
-        with open(preset_file, "w", encoding="utf-8") as f:
-            json.dump(preset_data, f, indent=2)
-            
-        manager.load_preset(str(preset_file))
-        
-        assert manager.wayland_mouse_getter is None
-        assert manager.wayland_mouse_controller is None
-        assert manager.timer.isActive() is False
-        assert manager.active_preset is None
-        mock_warn.assert_called_once()
+    manager.load_preset(str(preset_file))
+    
+    assert not hasattr(manager, 'wdotool_worker') or manager.wdotool_worker is None
+    assert manager.timer.isActive() is False
+    assert manager.active_preset is None
+    mock_warn.assert_called_once()
         
     app.settings.clear()
-
-
-def test_multi_device_tracker(monkeypatch):
-    from unittest.mock import MagicMock
-    import sys
-    
-    # Mock evdev module
-    mock_evdev = MagicMock()
-    mock_evdev.ecodes.EV_REL = 2
-    mock_evdev.ecodes.REL_X = 0
-    mock_evdev.ecodes.REL_Y = 1
-    mock_evdev.ecodes.EV_ABS = 3
-    mock_evdev.ecodes.ABS_X = 0
-    mock_evdev.ecodes.ABS_Y = 1
-    mock_evdev.ecodes.EV_KEY = 1
-    mock_evdev.ecodes.BTN_TOUCH = 330
-    
-    # Mock absinfo
-    mock_absinfo = MagicMock()
-    mock_absinfo.min = 0
-    mock_absinfo.max = 1000
-    
-    # Mock InputDevice
-    mock_device = MagicMock()
-    mock_device.fd = 10
-    mock_device.name = "Test Touchscreen"
-    mock_device.capabilities.return_value = {
-        3: [(0, mock_absinfo), (1, mock_absinfo)]
-    }
-    mock_device.absinfo.return_value = mock_absinfo
-    
-    mock_evdev.list_devices.return_value = ["/dev/input/event0"]
-    mock_evdev.InputDevice.return_value = mock_device
-    
-    # We test the patched EvdevFallback class
-    import wayland_automation.mouse_position
-    
-    # Set up evdev mock attributes on the tracker instance
-    tracker = wayland_automation.mouse_position.EvdevFallback(seed=(100, 200))
-    tracker.evdev = True
-    tracker.list_devices = mock_evdev.list_devices
-    tracker.InputDevice = mock_evdev.InputDevice
-    tracker.ecodes = mock_evdev.ecodes
-    
-    # Mock selectors
-    mock_selector = MagicMock()
-    monkeypatch.setattr("selectors.DefaultSelector", lambda: mock_selector)
-    
-    # Mock ScreenCapture virtual geometry
-    from PyQt6.QtCore import QRect
-    mock_geo = QRect(0, 0, 1920, 1080)
-    monkeypatch.setattr("mage.capture.screen.ScreenCapture.get_virtual_desktop_geometry", MagicMock(return_value=mock_geo))
-    
-    assert tracker.start() is True
-    assert len(tracker.devices) == 1
-    
-    # Verify device classification
-    dev_info = tracker.devices[10]
-    assert dev_info["type"] == "absolute"
-    assert dev_info["abs_x"] == mock_absinfo
-    
-    # Test absolute event processing
-    mock_event = MagicMock()
-    mock_event.type = 3  # EV_ABS
-    mock_event.code = 0  # ABS_X
-    mock_event.value = 500
-    
-    tracker._process_event(dev_info, mock_event)
-    assert tracker.x == 960  # 500 / 1000 * 1920 = 960
-    
-    # Clean up
-    tracker.stop()
-
-
-
