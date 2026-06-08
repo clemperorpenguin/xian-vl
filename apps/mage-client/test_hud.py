@@ -111,7 +111,7 @@ def q_app():
 
 
 def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
     from mage.ui.hud import HudManager
 
     app = DummyApp()
@@ -120,14 +120,16 @@ def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
     # Mock QGuiApplication.platformName to return "wayland"
     monkeypatch.setattr("PyQt6.QtGui.QGuiApplication.platformName", lambda: "wayland")
     
-    # Mock subprocess.run for wdotool detection
+    # Mock subprocess.run for wdotool seeding
     mock_run = MagicMock()
     mock_run.returncode = 0
+    mock_run.stdout = "x:10 y:10"
     monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: mock_run)
     
-    # Mock WdotoolWorker so we don't start a real thread during tests
-    mock_worker = MagicMock()
-    monkeypatch.setattr("mage.ui.hud.WdotoolWorker", lambda parent: mock_worker)
+    # Setup dummy hotkey listener
+    app.hotkey_listener = MagicMock()
+    app.hotkey_listener.seed_mouse_position = MagicMock()
+    app.hotkey_listener.mouse_position_updated = MagicMock()
 
     manager = HudManager(app)
     
@@ -145,36 +147,38 @@ def test_wayland_hover_resolution(tmp_path, monkeypatch, q_app):
             }
         ]
     }
+    import json
     with open(preset_file, "w", encoding="utf-8") as f:
         json.dump(preset_data, f, indent=2)
         
     manager.load_preset(str(preset_file))
     
-    assert hasattr(manager, 'wdotool_worker')
-    assert manager.wdotool_worker == mock_worker
-    mock_worker.start.assert_called_once()
+    assert getattr(manager, 'is_wayland_active', False) is True
+    app.hotkey_listener.seed_mouse_position.assert_called_once()
+    app.hotkey_listener.mouse_position_updated.connect.assert_called_once()
     assert manager.timer.isActive() is True
     
-    # Simulate WdotoolWorker emitting new position outside rect
-    manager._on_wdotool_pos(500, 500)
+    # Simulate signal
+    manager._on_mouse_pos(500, 500)
     manager._check_hover()
     assert manager.hovered_button is None
     
-    # Simulate position inside rect
-    manager._on_wdotool_pos(30, 30)
+    # Simulate inside rect
+    manager._on_mouse_pos(30, 30)
     manager.show_single_tooltip = MagicMock()
     manager._check_hover()
     manager.show_single_tooltip.assert_called_once()
     
-    # Test deactivate stops controller
+    # Test deactivate disconnects
     manager.deactivate()
-    mock_worker.stop.assert_called_once()
+    assert app.hotkey_listener.mouse_position_updated.disconnect.call_count >= 1
     assert manager.timer.isActive() is False
+    assert getattr(manager, 'is_wayland_active', False) is False
         
     app.settings.clear()
 
 def test_wayland_no_backend_deactivates(tmp_path, monkeypatch, q_app):
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
     from mage.ui.hud import HudManager
 
     app = DummyApp()
@@ -208,12 +212,13 @@ def test_wayland_no_backend_deactivates(tmp_path, monkeypatch, q_app):
             }
         ]
     }
+    import json
     with open(preset_file, "w", encoding="utf-8") as f:
         json.dump(preset_data, f, indent=2)
         
     manager.load_preset(str(preset_file))
     
-    assert not hasattr(manager, 'wdotool_worker') or manager.wdotool_worker is None
+    assert getattr(manager, 'is_wayland_active', False) is False
     assert manager.timer.isActive() is False
     assert manager.active_preset is None
     mock_warn.assert_called_once()

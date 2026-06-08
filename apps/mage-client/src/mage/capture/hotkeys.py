@@ -40,6 +40,7 @@ class HotkeyListener(QObject):
     trigger_raid_mode = pyqtSignal()
     trigger_hud = pyqtSignal()
     trigger_layout_edit = pyqtSignal()
+    mouse_position_updated = pyqtSignal(int, int)
 
     def start(self):
         pass
@@ -48,6 +49,9 @@ class HotkeyListener(QObject):
         pass
 
     def set_leader_key(self, leader_string: str):
+        pass
+
+    def seed_mouse_position(self, x: int, y: int, width: int, height: int):
         pass
         
     def cancel_command_mode(self):
@@ -81,13 +85,24 @@ if sys.platform == "linux":
             self.last_leader_press_time = {}
             
             # Setup devices
-            self._find_keyboards()
+            self.mouse_x = 0
+            self.mouse_y = 0
+            self.screen_width = 1920
+            self.screen_height = 1080
+            self._find_devices()
             
-        def _find_keyboards(self):
-            """Find all keyboard devices in /dev/input/ and initialize them."""
+
+        def seed_mouse_position(self, x: int, y: int, width: int, height: int):
+            with self._lock:
+                self.mouse_x = max(0, min(width, x))
+                self.mouse_y = max(0, min(height, y))
+                self.screen_width = width
+                self.screen_height = height
+
+        def _find_devices(self):
+            """Find all keyboard and pointer devices in /dev/input/ and initialize them."""
             try:
                 for path in evdev.list_devices():
-                    # Avoid opening devices we are already listening to
                     if any(d.path == path for d in self.devices):
                         continue
                     try:
@@ -95,15 +110,22 @@ if sys.platform == "linux":
                     except Exception:
                         continue
                     
-                    is_keyboard = False
-                    try:
-                        if evdev.ecodes.EV_KEY in device.capabilities():
-                            if evdev.ecodes.KEY_A in device.capabilities()[evdev.ecodes.EV_KEY]:
-                                is_keyboard = True
-                    except Exception:
-                        pass
-                        
-                    if is_keyboard:
+                    is_interesting = False
+                    caps = device.capabilities()
+                    
+                    if evdev.ecodes.EV_KEY in caps:
+                        if evdev.ecodes.KEY_A in caps[evdev.ecodes.EV_KEY]:
+                            is_interesting = True
+                            
+                    if evdev.ecodes.EV_REL in caps:
+                        if evdev.ecodes.REL_X in caps[evdev.ecodes.EV_REL] and evdev.ecodes.REL_Y in caps[evdev.ecodes.EV_REL]:
+                            is_interesting = True
+                            
+                    if evdev.ecodes.EV_ABS in caps:
+                        if evdev.ecodes.ABS_X in caps[evdev.ecodes.EV_ABS] and evdev.ecodes.ABS_Y in caps[evdev.ecodes.EV_ABS]:
+                            is_interesting = True
+                            
+                    if is_interesting:
                         self.devices.append(device)
                         with self._lock:
                             self.modifiers[device.path] = {
@@ -113,7 +135,7 @@ if sys.platform == "linux":
                                 'alt': False
                             }
                             self.mod_clean[device.path] = True
-                        logger.info("EvdevListener: Found keyboard - %s at %s", device.name, device.path)
+                        logger.info("EvdevListener: Found device - %s at %s", device.name, device.path)
                         if self.running:
                             thread = threading.Thread(target=self._listen_device, args=(device,), daemon=True)
                             thread.start()
@@ -124,7 +146,7 @@ if sys.platform == "linux":
                         except Exception:
                             pass
             except Exception as e:
-                logger.error("EvdevListener: Failed to find keyboards (are you in the 'input' group?): %s", e)
+                logger.error("EvdevListener: Failed to find devices (are you in the 'input' group?): %s", e)
 
         def set_leader_key(self, leader_string: str):
             with self._lock:
@@ -148,7 +170,11 @@ if sys.platform == "linux":
                     if not self.running:
                         return
                     time.sleep(0.1)
-                self._find_keyboards()
+                self.mouse_x = 0
+            self.mouse_y = 0
+            self.screen_width = 1920
+            self.screen_height = 1080
+            self._find_devices()
 
         def start(self):
             """Start listening threads for all keyboards."""
@@ -199,10 +225,9 @@ if sys.platform == "linux":
                     if not self.running:
                         break
                         
-                    if event.type == evdev.ecodes.EV_KEY:
-                        key_event = evdev.categorize(event)
+                    if event.type in (evdev.ecodes.EV_KEY, evdev.ecodes.EV_REL, evdev.ecodes.EV_ABS):
                         with self._lock:
-                            self._handle_key_event(device.path, key_event)
+                            self._handle_event(device.path, event)
             except Exception as e:
                 if self.running:
                     logger.warning("EvdevListener: Device disconnected or error on %s: %s", device.path, e)
@@ -221,11 +246,32 @@ if sys.platform == "linux":
                     if device.path in self.last_leader_press_time:
                         del self.last_leader_press_time[device.path]
 
-        def _handle_key_event(self, device_path: str, event):
-            """Process individual key events and detect hotkeys."""
-            keycode = event.scancode
-            
-            is_pressed = event.keystate in (1, 2)  # down or hold
+        def _handle_event(self, device_path: str, event):
+            """Process input events."""
+            if event.type == evdev.ecodes.EV_REL:
+                if event.code == evdev.ecodes.REL_X:
+                    self.mouse_x = max(0, min(self.screen_width, self.mouse_x + event.value))
+                    self.mouse_position_updated.emit(self.mouse_x, self.mouse_y)
+                elif event.code == evdev.ecodes.REL_Y:
+                    self.mouse_y = max(0, min(self.screen_height, self.mouse_y + event.value))
+                    self.mouse_position_updated.emit(self.mouse_x, self.mouse_y)
+                return
+            elif event.type == evdev.ecodes.EV_ABS:
+                # Provide a basic direct mapping for ABS if needed
+                if event.code == evdev.ecodes.ABS_X:
+                    self.mouse_x = max(0, min(self.screen_width, event.value))
+                    self.mouse_position_updated.emit(self.mouse_x, self.mouse_y)
+                elif event.code == evdev.ecodes.ABS_Y:
+                    self.mouse_y = max(0, min(self.screen_height, event.value))
+                    self.mouse_position_updated.emit(self.mouse_x, self.mouse_y)
+                return
+                
+            if event.type != evdev.ecodes.EV_KEY:
+                return
+                
+            key_event = evdev.categorize(event)
+            keycode = key_event.scancode
+            is_pressed = key_event.keystate in (1, 2)
             is_modifier = keycode in (125, 126, 42, 54, 29, 97, 56, 100)
             
             # Update modifier tracking on any state change
@@ -356,6 +402,9 @@ else:
             self.cinematic_mode_active = False
             self.mod_clean = True
             self.last_leader_press_time = 0.0
+
+        def seed_mouse_position(self, x: int, y: int, width: int, height: int):
+            pass
 
         def set_leader_key(self, leader_string: str):
             with self.lock:

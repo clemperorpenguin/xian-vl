@@ -43,39 +43,6 @@ from shared_types.state import t
 logger = logging.getLogger(__name__)
 
 
-class WdotoolWorker(QThread):
-    position_updated = pyqtSignal(int, int)
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._running = True
-        
-    def stop(self):
-        self._running = False
-        
-    def run(self):
-        import subprocess
-        import time
-        import re
-        
-        while self._running:
-            try:
-                result = subprocess.run(
-                    ["wdotool", "getmouselocation"],
-                    capture_output=True,
-                    text=True,
-                    timeout=0.2
-                )
-                if result.returncode == 0:
-                    m_x = re.search(r"x:(\d+)", result.stdout)
-                    m_y = re.search(r"y:(\d+)", result.stdout)
-                    if m_x and m_y:
-                        x = int(m_x.group(1))
-                        y = int(m_y.group(1))
-                        self.position_updated.emit(x, y)
-            except Exception:
-                pass
-            time.sleep(0.05)
 
 
 
@@ -806,24 +773,46 @@ class HudManager(QWidget):
             is_wayland = (qt_platform == "wayland")
             
             if is_wayland:
-                logger.info("Wayland session detected. Attempting wdotool mouse tracking...")
+                logger.info("Wayland session detected. Seeding mouse tracker...")
                 try:
                     import subprocess
-                    result = subprocess.run(["wdotool", "--help"], capture_output=True, text=True, timeout=1.0)
-                    if result.returncode != 0:
-                        raise RuntimeError("wdotool not available")
-                        
-                    self.wayland_mouse_pos = QCursor.pos()
-                    self.wdotool_worker = WdotoolWorker(self)
-                    self.wdotool_worker.position_updated.connect(self._on_wdotool_pos)
-                    self.wdotool_worker.start()
+                    import re
+                    from mage.capture.screen import ScreenCapture
                     
+                    total_geo = ScreenCapture.get_virtual_desktop_geometry()
+                    
+                    result = subprocess.run(["wdotool", "getmouselocation"], capture_output=True, text=True, timeout=1.0)
+                    if result.returncode != 0:
+                        raise RuntimeError("wdotool failed or not available for initial seeding")
+                        
+                    m_x = re.search(r"x:(\d+)", result.stdout)
+                    m_y = re.search(r"y:(\d+)", result.stdout)
+                    
+                    if m_x and m_y:
+                        seed_x = int(m_x.group(1))
+                        seed_y = int(m_y.group(1))
+                    else:
+                        seed_x, seed_y = 0, 0
+                        
+                    if hasattr(self.app, 'hotkey_listener') and self.app.hotkey_listener:
+                        self.app.hotkey_listener.seed_mouse_position(seed_x, seed_y, total_geo.width(), total_geo.height())
+                        
+                        # Disconnect just in case it was connected before
+                        try:
+                            self.app.hotkey_listener.mouse_position_updated.disconnect(self._on_mouse_pos)
+                        except TypeError:
+                            pass
+                        
+                        self.app.hotkey_listener.mouse_position_updated.connect(self._on_mouse_pos)
+                    
+                    self.wayland_mouse_pos = QPoint(seed_x, seed_y)
+                    self.is_wayland_active = True
                     self.timer.start(100)
                     logger.info("HUD Mode Active (Wayland), loaded preset: %s (buttons count: %d, timer active: %s)", 
                                 self.active_preset.get("name"), len(self.active_preset.get("buttons", [])), self.timer.isActive())
                 except Exception as e:
-                    logger.exception("Failed to initialize wdotool mouse tracking. Disabling HUD.")
-                    QMessageBox.warning(self.app, t("hud.preset.dialog.title"), "wdotool not available or failed to start. Global mouse tracking is restricted. Disabling HUD.")
+                    logger.exception("Failed to initialize Wayland mouse tracking. Disabling HUD.")
+                    QMessageBox.warning(self.app, t("hud.preset.dialog.title"), "wdotool failed to seed initial mouse position. Global mouse tracking restricted. Disabling HUD.")
                     self.deactivate()
                     return
             else:
@@ -850,14 +839,13 @@ class HudManager(QWidget):
         self.clear_all_tooltips()
         self.hovered_button = None
         self.active_preset = None
-        # Stop wdotool worker if it exists
-        if hasattr(self, 'wdotool_worker') and self.wdotool_worker:
-            try:
-                self.wdotool_worker.stop()
-                self.wdotool_worker.wait()
-            except Exception as e:
-                logger.error("Failed to stop wdotool worker: %s", e)
-            self.wdotool_worker = None
+        if getattr(self, 'is_wayland_active', False):
+            if hasattr(self.app, 'hotkey_listener') and self.app.hotkey_listener:
+                try:
+                    self.app.hotkey_listener.mouse_position_updated.disconnect(self._on_mouse_pos)
+                except TypeError:
+                    pass
+        self.is_wayland_active = False
         self.wayland_mouse_pos = QPoint(0, 0)
         
         logger.info("HUD Mode Disabled")
@@ -869,14 +857,14 @@ class HudManager(QWidget):
                 3000
             )
 
-    def _on_wdotool_pos(self, x: int, y: int):
+    def _on_mouse_pos(self, x: int, y: int):
         self.wayland_mouse_pos = QPoint(x, y)
 
     def _check_hover(self):
         if not self.active_preset:
             return
             
-        if hasattr(self, 'wdotool_worker') and self.wdotool_worker:
+        if getattr(self, 'is_wayland_active', False):
             pos = getattr(self, 'wayland_mouse_pos', QCursor.pos())
         else:
             pos = QCursor.pos()
