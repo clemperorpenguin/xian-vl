@@ -303,11 +303,10 @@ _install_lemonade_from_dir() {
     mkdir -p "${log_dir}"
     
     # Launch lemond using absolute path and its resources from the repo root
-    (
-        cd "${REPO_DIR}"
-        ./lemond --port 13305 > "${log_dir}/install_lemond.log" 2>&1 &
-    )
+    pushd "${REPO_DIR}" >/dev/null
+    ./lemond --port 13305 > "${log_dir}/install_lemond.log" 2>&1 &
     local lemond_pid=$!
+    popd >/dev/null
     
     # Wait for lemond to be ready
     echo "Waiting for lemond to respond on port 13305…"
@@ -392,8 +391,8 @@ DESKTOP
     # Build and install lemonade if requested
     if [[ "${BUILD_LEMONADE}" == "true" ]]; then
         install_build_deps
-        build_lemonade
         build_whisper
+        build_lemonade
     fi
 }
 
