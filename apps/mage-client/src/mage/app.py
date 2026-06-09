@@ -452,7 +452,6 @@ class XianApp(QWidget):
         self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
         if hasattr(self.hotkey_listener, "command_mode_cancelled"):
             self.hotkey_listener.command_mode_cancelled.connect(self.hide_osd)
-        self.hotkey_listener.trigger_layout_edit.connect(self.toggle_layout_edit_mode)
 
         # --- HUD Manager ---
         self.hud_manager = HudManager(self)
