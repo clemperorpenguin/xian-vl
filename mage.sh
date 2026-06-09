@@ -192,9 +192,10 @@ build_lemonade() {
 
 build_whisper() {
     echo "── Building whisper.cpp locally to fix SIGILL issues… ──"
-    local build_dir="${REPO_DIR}/lemonade/build/whispercpp-src"
+    local build_dir="${REPO_DIR}/build/whispercpp-src"
     
     if [[ ! -d "${build_dir}" ]]; then
+        mkdir -p "${REPO_DIR}/build"
         git clone -b v1.8.4 https://github.com/ggerganov/whisper.cpp "${build_dir}"
     fi
     
