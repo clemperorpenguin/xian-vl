@@ -104,9 +104,18 @@ class HudPresetSelectionDialog(QDialog):
         layout.addWidget(prompt)
         
         # Preset selection row
+        preset_layout = QHBoxLayout()
         self.preset_combo = QComboBox()
         self._populate_presets()
-        layout.addWidget(self.preset_combo)
+        preset_layout.addWidget(self.preset_combo, stretch=1)
+        
+        self.delete_btn = QPushButton(t("hud.preset.dialog.button.delete"))
+        self.delete_btn.setObjectName("DeleteBtn")
+        self.delete_btn.clicked.connect(self._on_delete)
+        self.delete_btn.setEnabled(self.preset_combo.count() > 0)
+        preset_layout.addWidget(self.delete_btn)
+        
+        layout.addLayout(preset_layout)
         
         # Action Buttons
         btn_layout = QHBoxLayout()
@@ -145,6 +154,12 @@ class HudPresetSelectionDialog(QDialog):
             QPushButton#LoadBtn:hover {{
                 background: {accent_hover_hex()};
             }}
+            QPushButton#DeleteBtn {{
+                background: #c62828;
+            }}
+            QPushButton#DeleteBtn:hover {{
+                background: #d32f2f;
+            }}
         """)
         self.load_btn.setObjectName("LoadBtn")
         self.selected_preset_path = None
@@ -166,6 +181,29 @@ class HudPresetSelectionDialog(QDialog):
     def _on_create(self):
         self.action = "create"
         self.accept()
+
+    def _on_delete(self):
+        preset_path = self.preset_combo.currentData()
+        preset_name = self.preset_combo.currentText()
+        if not preset_path:
+            return
+            
+        reply = QMessageBox.question(
+            self,
+            "Delete Preset",
+            f"Are you sure you want to delete the HUD preset '{preset_name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                os.remove(preset_path)
+                self._populate_presets()
+                has_presets = self.preset_combo.count() > 0
+                self.load_btn.setEnabled(has_presets)
+                self.delete_btn.setEnabled(has_presets)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to delete preset:\n{e}")
 
 
 class HudSetupOverlay(QWidget):

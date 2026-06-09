@@ -123,5 +123,6 @@
   "hud.countdown.label": "Di chuột vào nút ngay bây giờ!\nĐang chụp màn hình trong {secs}s...",
   "settings.checkbox.hud_show_original": "Hiển thị văn bản gốc trong thông báo HUD",
   "settings.checkbox.hud_show_pinyin": "Bật hiển thị Pinyin trong các tooltip HUD",
-  "hud.error.no_wayland_backend": "Theo dõi chuột toàn cục bị hạn chế trong phiên Wayland này. Vui lòng đảm bảo đã cấu hình truy cập evdev hoặc sử dụng một bộ hợp thành được hỗ trợ."
+  "hud.error.no_wayland_backend": "Theo dõi chuột toàn cục bị hạn chế trong phiên Wayland này. Vui lòng đảm bảo đã cấu hình truy cập evdev hoặc sử dụng một bộ hợp thành được hỗ trợ.",
+  "hud.preset.dialog.button.delete": "Xóa"
 }

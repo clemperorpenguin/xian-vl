@@ -123,5 +123,6 @@
   "hud.countdown.label": "¡Pase el ratón sobre el botón ahora!\nCapturando pantalla en {secs}s...",
   "settings.checkbox.hud_show_original": "Mostrar texto original en las herramientas del HUD",
   "settings.checkbox.hud_show_pinyin": "Activar pinyin en las herramientas de interfaz",
-  "hud.error.no_wayland_backend": "El seguimiento del ratón global está restringido en esta sesión Wayland. Asegúrese de que esté configurado el acceso evdev o utilice un compositor compatible."
+  "hud.error.no_wayland_backend": "El seguimiento del ratón global está restringido en esta sesión Wayland. Asegúrese de que esté configurado el acceso evdev o utilice un compositor compatible.",
+  "hud.preset.dialog.button.delete": "Eliminar"
 }

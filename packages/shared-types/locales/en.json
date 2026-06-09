@@ -498,5 +498,9 @@
   "hud.error.no_wayland_backend": {
     "value": "Global mouse tracking is restricted on this Wayland session. Please ensure evdev access is configured or use a supported compositor.",
     "context": "Error message shown when HUD cannot start on Wayland because no tracking backend was resolved"
+  },
+  "hud.preset.dialog.button.delete": {
+    "value": "Delete",
+    "context": "Button label to delete a selected preset"
   }
 }
