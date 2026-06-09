@@ -84,9 +84,8 @@ class LensOverlayWindow(QWidget):
     # Persists across instances so the next overlay can recall it
     _last_rect: ClassVar[QRect | None] = None
     
-    def __init__(self, previous_rect: QRect | None = None, dialogue_mode: bool = False):
+    def __init__(self, previous_rect: QRect | None = None):
         super().__init__()
-        self.dialogue_mode = dialogue_mode
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
@@ -171,10 +170,7 @@ class LensOverlayWindow(QWidget):
             self.selected_rect = QRect(self.start_pos, self.current_pos).normalized()
             
             if self.selected_rect.width() > 10 and self.selected_rect.height() > 10:
-                if self.dialogue_mode:
-                    self._handle_action("dialogue", self.selected_rect)
-                else:
-                    self._show_action_bar()
+                self._show_action_bar()
             else:
                 self.selected_rect = QRect()
             self.update()

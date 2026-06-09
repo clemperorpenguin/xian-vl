@@ -31,7 +31,7 @@ class HotkeyListener(QObject):
     trigger_lens = pyqtSignal()
     trigger_chat = pyqtSignal()
     trigger_settings = pyqtSignal()
-    trigger_dialogue_mode = pyqtSignal()
+
     trigger_cinematic_mode = pyqtSignal()
     trigger_how_to_say = pyqtSignal()
     cinematic_capture = pyqtSignal()
@@ -347,11 +347,7 @@ if sys.platform == "linux":
                         self.trigger_settings.emit()
                         self.command_mode_active = False
 
-                    # KEY_O is 24
-                    elif keycode == evdev.ecodes.KEY_O:
-                        logger.info("EvdevListener: Triggered Dialogue Mode")
-                        self.trigger_dialogue_mode.emit()
-                        self.command_mode_active = False
+
 
                     # KEY_M is 50
                     elif keycode == evdev.ecodes.KEY_M:
@@ -482,10 +478,7 @@ else:
                                 logger.info("PynputListener: Triggered Settings")
                                 self.trigger_settings.emit()
                                 self.command_mode_active = False
-                            elif char == 'o':
-                                logger.info("PynputListener: Triggered Dialogue Mode")
-                                self.trigger_dialogue_mode.emit()
-                                self.command_mode_active = False
+
                             elif char == 'm':
                                 logger.info("PynputListener: Triggered Cinematic Mode")
                                 self.trigger_cinematic_mode.emit()

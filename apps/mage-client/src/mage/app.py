@@ -432,7 +432,7 @@ class XianApp(QWidget):
         self.hotkey_listener.trigger_lens.connect(self.show_lens)
         self.hotkey_listener.trigger_chat.connect(self.toggle_chat)
         self.hotkey_listener.trigger_settings.connect(self._open_settings)
-        self.hotkey_listener.trigger_dialogue_mode.connect(self.toggle_dialogue_mode)
+
         self.hotkey_listener.trigger_cinematic_mode.connect(self.toggle_cinematic_mode)
         self.hotkey_listener.trigger_how_to_say.connect(self.show_how_to_say)
         self.hotkey_listener.trigger_raid_mode.connect(self.start_raid_mode)
@@ -633,8 +633,7 @@ class XianApp(QWidget):
             self.show_lens()
         elif key == "A":
             self.toggle_chat()
-        elif key == "O":
-            self.toggle_dialogue_mode()
+
         elif key == "M":
             self.toggle_cinematic_mode()
         elif key == "T":
@@ -660,7 +659,7 @@ class XianApp(QWidget):
             return
         self.hud_manager.show_hud_presets()
 
-    def show_lens(self, dialogue_mode: bool = False):
+    def show_lens(self):
         """Capture the screen and open the Lens overlay."""
         self.hide_osd()
         logger.info("Opening Lens overlay")
@@ -672,8 +671,7 @@ class XianApp(QWidget):
                 logger.debug("Error closing previous lens overlay", exc_info=True)
 
         self._lens = LensOverlayWindow(
-            previous_rect=None if dialogue_mode else LensOverlayWindow._last_rect,
-            dialogue_mode=dialogue_mode,
+            previous_rect=LensOverlayWindow._last_rect
         )
         self._lens.action_requested.connect(self._on_lens_action)
         self._lens.closed.connect(self._on_lens_closed)
@@ -1010,7 +1008,16 @@ class XianApp(QWidget):
 
     def disable_dialogue_mode(self):
         if self.dialogue_mode_active:
-            self.toggle_dialogue_mode()
+            self.dialogue_mode_active = False
+            self.mouse_listener.stop()
+            self.dialogue_timer.stop()
+            if getattr(self, "dialogue_bubble", None):
+                self.dialogue_bubble.close()
+                self.dialogue_bubble = None
+            
+            bubble = ResultBubble(t("dialogue.status.deactivated"), auto_close_ms=3000)
+            self._add_bubble(bubble)
+            logger.info("Dialogue Mode Deactivated")
 
     def _on_speak_requested(self, bubble, source: bool):
         text = bubble._original if source else bubble._text
@@ -1206,26 +1213,7 @@ class XianApp(QWidget):
     def _on_how_to_say_error(self, msg: str):
         self.how_to_say_dialog.set_error(msg)
 
-    # ------------------------------------------------------------------
-    # Dialogue Mode
-    # ------------------------------------------------------------------
-    def toggle_dialogue_mode(self):
-        self.hide_osd()
 
-        if self.dialogue_mode_active:
-            self.dialogue_mode_active = False
-            self.mouse_listener.stop()
-            self.dialogue_timer.stop()
-            if self.dialogue_bubble:
-                self.dialogue_bubble.close()
-                self.dialogue_bubble = None
-            
-            bubble = ResultBubble(t("dialogue.status.deactivated"), auto_close_ms=3000)
-            self._add_bubble(bubble)
-            logger.info("Dialogue Mode Deactivated")
-        else:
-            logger.info("Opening Lens in dialogue mode.")
-            self.show_lens(dialogue_mode=True)
 
     def clear_active_bubbles(self):
         """Close and clear all translation bubbles to avoid capture and layering issues."""

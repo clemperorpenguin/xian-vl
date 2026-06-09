@@ -114,7 +114,7 @@ class CommandOSD(MageOverlayWindow):
         # We create a helper to build the options
         options_layout.addWidget(self._create_option("C", t("osd.option.capture")))
         options_layout.addWidget(self._create_option("A", t("osd.option.chat")))
-        options_layout.addWidget(self._create_option("O", t("osd.option.dialogue")))
+
         self.cinematic_option = self._create_option("M", t("osd.option.cinematic"))
         options_layout.addWidget(self.cinematic_option)
         options_layout.addWidget(self._create_option("T", t("osd.option.translate")))
