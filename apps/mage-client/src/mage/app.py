@@ -1638,7 +1638,7 @@ class XianApp(QWidget):
             # Re-run health check
             self._run_health_check()
             
-                self._safe_stop_worker("_prewarm_worker")
+            self._safe_stop_worker("_prewarm_worker")
             self._prewarm_worker = PrewarmWorker(self.processor)
             self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
             self._prewarm_worker.start()
