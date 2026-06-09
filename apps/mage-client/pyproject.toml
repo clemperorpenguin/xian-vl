@@ -26,3 +26,9 @@ packages = ["src/mage"]
 [tool.uv.sources]
 xian-vl = { workspace = true }
 shared-types = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.10",
+]

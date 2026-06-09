@@ -29,9 +29,9 @@ import os
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QDialog, QFormLayout,
     QLineEdit, QComboBox, QSpinBox, QPushButton, QLabel, QVBoxLayout,
-    QHBoxLayout, QWidget, QCheckBox, QMessageBox
+    QHBoxLayout, QWidget, QCheckBox, QMessageBox, QInputDialog, QTabWidget
 )
-from PyQt6.QtCore import Qt, QSettings, QRect, QTimer
+from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap, QCursor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
@@ -41,6 +41,7 @@ from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, Cinemat
 from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
 from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.how_to_say import HowToSayDialog
+from mage.ui.raid_window import RaidWindow
 from mage.ui.result_bubble import ResultBubble
 from mage.capture.hotkeys import create_hotkey_listener
 from mage.capture.mouse import create_mouse_listener
@@ -49,6 +50,7 @@ from mage.capture.audio import play_audio_async
 from xian.dictionary import LocalDictionary
 from xian.lemonade_url import normalize_lemonade_api_base_url, should_warn_http_to_non_loopback
 from mage.ui.command_osd import CommandOSD
+from mage.ui.hud import HudManager
 from shared_types import constants
 from shared_types.enums import SourceLanguage, TargetLanguage, TranslationMode, TranslationStyle
 from mage.settings_keys import (
@@ -81,121 +83,28 @@ def _parse_styles(settings: QSettings) -> list[str]:
 
 class SettingsDialog(QDialog):
     """Small modal dialog for configuring the Lemonade backend."""
+    
+    layout_edit_requested = pyqtSignal()
 
     def __init__(self, settings: QSettings, models: list, parent=None):
         super().__init__(parent)
         self.setWindowTitle(t("settings.dialog.title"))
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(450)
         self.settings = settings
 
-        layout = QFormLayout(self)
+        main_layout = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
 
-        # Server URL
-        self.url_edit = QLineEdit()
-        self.url_edit.setText(_normalized_api_url_from_settings(settings))
-        layout.addRow(t("settings.label.server_url"), self.url_edit)
+        # Tab: General
+        general_tab = QWidget()
+        general_layout = QFormLayout(general_tab)
 
-        # Model
-        self.model_combo = QComboBox()
-        self.model_combo.setEditable(True)
-        if models:
-            self.model_combo.addItems(models)
-        self.model_combo.setCurrentText(settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL))
-        layout.addRow(t("settings.label.model"), self.model_combo)
-
-        # Source language
-        self.source_lang_combo = QComboBox()
-        self.source_lang_combo.addItems([e.value for e in SourceLanguage])
-        self.source_lang_combo.setCurrentText(settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG))
-        layout.addRow(t("settings.label.source_language"), self.source_lang_combo)
-
-        # Target language
-        self.lang_combo = QComboBox()
-        self.lang_combo.addItems([e.value for e in TargetLanguage])
-        self.lang_combo.setCurrentText(settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG))
-        layout.addRow(t("settings.label.target_language"), self.lang_combo)
-
-        # Mode
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems([e.value for e in TranslationMode])
-        self.mode_combo.setCurrentText(settings.value(KEY_MODE, constants.DEFAULT_MODE))
-        layout.addRow(t("settings.label.mode"), self.mode_combo)
-
-        # Leader Key
-        self.leader_combo = QComboBox()
-        self.leader_combo.addItem(t("leader.double_shift"), "Double-Tap Shift")
-        self.leader_combo.addItem(t("leader.double_ctrl"), "Double-Tap Ctrl")
-        self.leader_combo.addItem(t("leader.double_alt"), "Double-Tap Alt")
-        self.leader_combo.addItem(t("leader.double_super"), "Double-Tap Super")
-        leader_val = settings.value(KEY_LEADER_KEY, constants.DEFAULT_LEADER_KEY)
-        if leader_val == "Shift+Space": leader_val = "Double-Tap Shift"
-        idx = self.leader_combo.findData(leader_val)
-        if idx >= 0:
-            self.leader_combo.setCurrentIndex(idx)
-        layout.addRow(t("settings.label.leader_key"), self.leader_combo)
-
-        # UI Language
         self.ui_lang_combo = QComboBox()
         self.ui_lang_combo.addItems(["en", "zh", "ja", "ko", "ru", "es", "ar", "hi", "vi"])
         self.ui_lang_combo.setCurrentText(settings.value(KEY_UI_LANG, "en"))
-        layout.addRow(t("settings.label.ui_language"), self.ui_lang_combo)
+        general_layout.addRow(t("settings.label.ui_language"), self.ui_lang_combo)
 
-        # Styles
-        style_layout = QVBoxLayout()
-        self.style_checkboxes = {}
-        saved_styles = _parse_styles(settings)
-        for style in TranslationStyle:
-            cb = QCheckBox(style.value)
-            if style.value in saved_styles:
-                cb.setChecked(True)
-            self.style_checkboxes[style.value] = cb
-            style_layout.addWidget(cb)
-        layout.addRow(t("settings.label.styles"), style_layout)
-
-        # Max tokens
-        self.tokens_spin = QSpinBox()
-        self.tokens_spin.setRange(256, 32768)
-        self.tokens_spin.setValue(int(settings.value(KEY_MAX_TOKENS, constants.DEFAULT_MAX_TOKENS)))
-        layout.addRow(t("settings.label.max_tokens"), self.tokens_spin)
-
-        # GPU Memory Utilization
-        self.gpu_combo = QComboBox()
-        self.gpu_combo.addItems(["Default", "0.5", "0.75"])
-        self.gpu_combo.setCurrentText(settings.value(KEY_GPU_UTIL, constants.DEFAULT_GPU_MEMORY_UTILIZATION))
-        layout.addRow(t("settings.label.gpu_memory_utilization"), self.gpu_combo)
-
-        # Dialogue Delay
-        self.delay_spin = QSpinBox()
-        self.delay_spin.setRange(100, 10000)
-        self.delay_spin.setSingleStep(100)
-        self.delay_spin.setValue(int(settings.value(KEY_DIALOGUE_DELAY, 1000)))
-        layout.addRow(t("settings.label.dialogue_delay"), self.delay_spin)
-
-        # Auto-continue truncated translations
-        self.auto_continue_cb = QCheckBox(t("settings.checkbox.auto_continue"))
-        auto_val = settings.value(KEY_AUTO_CONTINUE, "false")
-        self.auto_continue_cb.setChecked(auto_val == "true" or auto_val is True)
-        layout.addRow(self.auto_continue_cb)
-
-        # Auto-speak translations
-        self.auto_speak_cb = QCheckBox(t("settings.checkbox.auto_speak"))
-        speak_val = settings.value(KEY_AUTO_SPEAK, "false")
-        self.auto_speak_cb.setChecked(speak_val == "true" or speak_val is True)
-        layout.addRow(self.auto_speak_cb)
-
-        # Live Voice Translation (Raid Mode)
-        self.live_voice_raid_cb = QCheckBox(t("settings.checkbox.live_voice_raid"))
-        lv_raid_val = settings.value("live_voice_raid", "false")
-        self.live_voice_raid_cb.setChecked(lv_raid_val == "true" or lv_raid_val is True)
-        layout.addRow(self.live_voice_raid_cb)
-        
-        # Save Raid Notes to LORE
-        self.live_raid_lore_save_cb = QCheckBox(t("settings.checkbox.live_raid_lore_save"))
-        lr_lore_val = settings.value("live_raid_lore_save", "false")
-        self.live_raid_lore_save_cb.setChecked(lr_lore_val == "true" or lr_lore_val is True)
-        layout.addRow(self.live_raid_lore_save_cb)
-
-        # Target Window Title
         self.target_window_combo = QComboBox()
         self.target_window_combo.setEditable(True)
         self.target_window_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
@@ -217,13 +126,157 @@ class SettingsDialog(QDialog):
                 self.target_window_combo.setCurrentText(current_title)
         else:
             self.target_window_combo.setCurrentIndex(0)
-        layout.addRow(t("settings.label.target_window_title"), self.target_window_combo)
+        general_layout.addRow(t("settings.label.target_window_title"), self.target_window_combo)
 
-        # Developer Options Checkbox
+        preset_layout = QHBoxLayout()
+        self.preset_combo = QComboBox()
+        presets = self.settings.value("layout_presets_list", ["Default"])
+        if not isinstance(presets, list):
+            presets = ["Default"]
+        self.preset_combo.addItems(presets)
+        current_preset = self.settings.value("layout_preset", "Default")
+        idx = self.preset_combo.findText(current_preset)
+        if idx >= 0:
+            self.preset_combo.setCurrentIndex(idx)
+            
+        self.add_preset_btn = QPushButton("+")
+        self.add_preset_btn.setFixedWidth(30)
+        self.add_preset_btn.clicked.connect(self._add_preset)
+        
+        self.del_preset_btn = QPushButton("-")
+        self.del_preset_btn.setFixedWidth(30)
+        self.del_preset_btn.clicked.connect(self._del_preset)
+        
+        self.edit_layout_btn = QPushButton(t("settings.button.edit_layout"))
+        self.edit_layout_btn.clicked.connect(self._on_edit_layout)
+        
+        preset_layout.addWidget(self.preset_combo)
+        preset_layout.addWidget(self.add_preset_btn)
+        preset_layout.addWidget(self.del_preset_btn)
+        preset_layout.addWidget(self.edit_layout_btn)
+        general_layout.addRow(t("settings.label.layout_preset"), preset_layout)
+
+        self.tabs.addTab(general_tab, "General")
+
+        # Tab: Backend
+        backend_tab = QWidget()
+        backend_layout = QFormLayout(backend_tab)
+
+        self.url_edit = QLineEdit()
+        self.url_edit.setText(_normalized_api_url_from_settings(settings))
+        backend_layout.addRow(t("settings.label.server_url"), self.url_edit)
+
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        if models:
+            self.model_combo.addItems(models)
+        self.model_combo.setCurrentText(settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL))
+        backend_layout.addRow(t("settings.label.model"), self.model_combo)
+
+        self.tokens_spin = QSpinBox()
+        self.tokens_spin.setRange(256, 32768)
+        self.tokens_spin.setValue(int(settings.value(KEY_MAX_TOKENS, constants.DEFAULT_MAX_TOKENS)))
+        backend_layout.addRow(t("settings.label.max_tokens"), self.tokens_spin)
+
+        self.gpu_combo = QComboBox()
+        self.gpu_combo.addItems(["Default", "0.5", "0.75"])
+        self.gpu_combo.setCurrentText(settings.value(KEY_GPU_UTIL, constants.DEFAULT_GPU_MEMORY_UTILIZATION))
+        backend_layout.addRow(t("settings.label.gpu_memory_utilization"), self.gpu_combo)
+
+        self.tabs.addTab(backend_tab, "Backend")
+
+        # Tab: Translation
+        trans_tab = QWidget()
+        trans_layout = QFormLayout(trans_tab)
+
+        self.source_lang_combo = QComboBox()
+        self.source_lang_combo.addItems([e.value for e in SourceLanguage])
+        self.source_lang_combo.setCurrentText(settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG))
+        trans_layout.addRow(t("settings.label.source_language"), self.source_lang_combo)
+
+        self.lang_combo = QComboBox()
+        self.lang_combo.addItems([e.value for e in TargetLanguage])
+        self.lang_combo.setCurrentText(settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG))
+        trans_layout.addRow(t("settings.label.target_language"), self.lang_combo)
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems([e.value for e in TranslationMode])
+        self.mode_combo.setCurrentText(settings.value(KEY_MODE, constants.DEFAULT_MODE))
+        trans_layout.addRow(t("settings.label.mode"), self.mode_combo)
+
+        style_layout = QVBoxLayout()
+        self.style_checkboxes = {}
+        saved_styles = _parse_styles(settings)
+        for style in TranslationStyle:
+            cb = QCheckBox(style.value)
+            if style.value in saved_styles:
+                cb.setChecked(True)
+            self.style_checkboxes[style.value] = cb
+            style_layout.addWidget(cb)
+        trans_layout.addRow(t("settings.label.styles"), style_layout)
+
+        self.delay_spin = QSpinBox()
+        self.delay_spin.setRange(100, 10000)
+        self.delay_spin.setSingleStep(100)
+        self.delay_spin.setValue(int(settings.value(KEY_DIALOGUE_DELAY, 1000)))
+        trans_layout.addRow(t("settings.label.dialogue_delay"), self.delay_spin)
+
+        self.tabs.addTab(trans_tab, "Translation")
+
+        # Tab: Features
+        features_tab = QWidget()
+        features_layout = QFormLayout(features_tab)
+
+        self.leader_combo = QComboBox()
+        self.leader_combo.addItem(t("leader.double_shift"), "Double-Tap Shift")
+        self.leader_combo.addItem(t("leader.double_ctrl"), "Double-Tap Ctrl")
+        self.leader_combo.addItem(t("leader.double_alt"), "Double-Tap Alt")
+        self.leader_combo.addItem(t("leader.double_super"), "Double-Tap Super")
+        leader_val = settings.value(KEY_LEADER_KEY, constants.DEFAULT_LEADER_KEY)
+        if leader_val == "Shift+Space": leader_val = "Double-Tap Shift"
+        idx = self.leader_combo.findData(leader_val)
+        if idx >= 0:
+            self.leader_combo.setCurrentIndex(idx)
+        features_layout.addRow(t("settings.label.leader_key"), self.leader_combo)
+
+        self.auto_continue_cb = QCheckBox(t("settings.checkbox.auto_continue"))
+        auto_val = settings.value(KEY_AUTO_CONTINUE, "false")
+        self.auto_continue_cb.setChecked(auto_val == "true" or auto_val is True)
+        features_layout.addRow(self.auto_continue_cb)
+
+        self.auto_speak_cb = QCheckBox(t("settings.checkbox.auto_speak"))
+        speak_val = settings.value(KEY_AUTO_SPEAK, "false")
+        self.auto_speak_cb.setChecked(speak_val == "true" or speak_val is True)
+        features_layout.addRow(self.auto_speak_cb)
+
+        self.live_voice_raid_cb = QCheckBox(t("settings.checkbox.live_voice_raid"))
+        lv_raid_val = settings.value("live_voice_raid", "false")
+        self.live_voice_raid_cb.setChecked(lv_raid_val == "true" or lv_raid_val is True)
+        features_layout.addRow(self.live_voice_raid_cb)
+        
+        self.live_raid_lore_save_cb = QCheckBox(t("settings.checkbox.live_raid_lore_save"))
+        lr_lore_val = settings.value("live_raid_lore_save", "false")
+        self.live_raid_lore_save_cb.setChecked(lr_lore_val == "true" or lr_lore_val is True)
+        features_layout.addRow(self.live_raid_lore_save_cb)
+
+        self.hud_show_original_cb = QCheckBox(t("settings.checkbox.hud_show_original"))
+        hud_orig_val = settings.value("hud_show_original", "true")
+        self.hud_show_original_cb.setChecked(hud_orig_val == "true" or hud_orig_val is True)
+        features_layout.addRow(self.hud_show_original_cb)
+
+        self.hud_show_pinyin_cb = QCheckBox(t("settings.checkbox.hud_show_pinyin"))
+        hud_pin_val = settings.value("hud_show_pinyin", "false")
+        self.hud_show_pinyin_cb.setChecked(hud_pin_val == "true" or hud_pin_val is True)
+        features_layout.addRow(self.hud_show_pinyin_cb)
+
         self.dev_options_cb = QCheckBox(t("settings.checkbox.dev_options"))
         dev_options_val = settings.value("developer_options", "false")
         self.dev_options_cb.setChecked(dev_options_val == "true" or dev_options_val is True)
-        layout.addRow(self.dev_options_cb)
+        features_layout.addRow(self.dev_options_cb)
+        self.dev_options_cb.toggled.connect(self._update_dev_visibility)
+        self._update_dev_visibility(self.dev_options_cb.isChecked())
+
+        self.tabs.addTab(features_tab, "Features")
 
         # Buttons
         btn_row = QHBoxLayout()
@@ -234,21 +287,70 @@ class SettingsDialog(QDialog):
         btn_row.addStretch()
         btn_row.addWidget(save_btn)
         btn_row.addWidget(cancel_btn)
-        layout.addRow(btn_row)
+        main_layout.addLayout(btn_row)
 
-        self.setStyleSheet(f"""
-            QDialog {{ background: #1e1e1e; color: #eee; }}
-            QLabel, QCheckBox {{ color: #ccc; }}
-            QLineEdit, QComboBox, QSpinBox {{
+        self.setStyleSheet("""
+            QDialog { background: #1e1e1e; color: #eee; }
+            QLabel, QCheckBox { color: #ccc; }
+            QLineEdit, QComboBox, QSpinBox {
                 background: #2a2a2a; color: #eee; border: 1px solid #555;
                 border-radius: 4px; padding: 4px;
-            }}
-            QPushButton {{
-                background: {accent_hex()}; color: white; border: none;
+            }
+            QPushButton {
+                background: %s; color: white; border: none;
                 padding: 6px 16px; border-radius: 4px; font-weight: bold;
-            }}
-            QPushButton:hover {{ background: {accent_hover_hex()}; }}
-        """)
+            }
+            QPushButton:hover { background: %s; }
+            QTabWidget::pane { border: 1px solid #555; background: #1e1e1e; }
+            QTabBar::tab { background: #2a2a2a; color: #ccc; padding: 8px 16px; border: 1px solid #555; }
+            QTabBar::tab:selected { background: %s; color: white; }
+        """ % (accent_hex(), accent_hover_hex(), accent_hex()))
+
+    def _add_preset(self):
+        name, ok = QInputDialog.getText(
+            self,
+            t("settings.prompt.layout_preset.new"),
+            t("settings.prompt.layout_preset.new")
+        )
+        if ok:
+            name = name.strip()
+            if not name:
+                QMessageBox.critical(self, "Error", t("settings.error.layout_preset.invalid"))
+                return
+            presets = [self.preset_combo.itemText(i) for i in range(self.preset_combo.count())]
+            if name in presets:
+                QMessageBox.critical(self, "Error", t("settings.error.layout_preset.exists"))
+                return
+            
+            presets.append(name)
+            self.settings.setValue("layout_presets_list", presets)
+            self.preset_combo.addItem(name)
+            self.preset_combo.setCurrentText(name)
+
+    def _del_preset(self):
+        current = self.preset_combo.currentText()
+        if current == "Default":
+            QMessageBox.critical(self, "Error", "The Default preset cannot be deleted.")
+            return
+            
+        choice = QMessageBox.question(
+            self,
+            "Delete Preset",
+            f"Are you sure you want to delete the layout preset '{current}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if choice == QMessageBox.StandardButton.Yes:
+            presets = [self.preset_combo.itemText(i) for i in range(self.preset_combo.count())]
+            presets.remove(current)
+            self.settings.setValue("layout_presets_list", presets)
+            
+            self.settings.remove(f"layout/{current}")
+            
+            idx = self.preset_combo.findText(current)
+            if idx >= 0:
+                self.preset_combo.removeItem(idx)
+            self.preset_combo.setCurrentText("Default")
 
     def _save(self):
         normalized = normalize_lemonade_api_base_url(self.url_edit.text().strip())
@@ -265,6 +367,7 @@ class SettingsDialog(QDialog):
         self.url_edit.setText(normalized)
         self.settings.setValue(KEY_API_URL, normalized)
         self.settings.setValue(KEY_API_MODEL, self.model_combo.currentText())
+        self.settings.setValue("layout_preset", self.preset_combo.currentText())
         self.settings.setValue(KEY_SOURCE_LANG, self.source_lang_combo.currentText())
         self.settings.setValue(KEY_TARGET_LANG, self.lang_combo.currentText())
         self.settings.setValue(KEY_MODE, self.mode_combo.currentText())
@@ -281,12 +384,24 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
         self.settings.setValue("live_voice_raid", "true" if self.live_voice_raid_cb.isChecked() else "false")
         self.settings.setValue("live_raid_lore_save", "true" if self.live_raid_lore_save_cb.isChecked() else "false")
+        self.settings.setValue("hud_show_original", "true" if self.hud_show_original_cb.isChecked() else "false")
+        self.settings.setValue("hud_show_pinyin", "true" if self.hud_show_pinyin_cb.isChecked() else "false")
         target_val = self.target_window_combo.currentText().strip()
         if self.target_window_combo.currentIndex() == 0 or target_val == t("settings.option.none_overlay") or target_val == "None (Standard Overlay Mode)":
             target_val = ""
         self.settings.setValue(KEY_TARGET_WINDOW_TITLE, target_val)
         self.settings.setValue("developer_options", "true" if self.dev_options_cb.isChecked() else "false")
         self.accept()
+
+    def _on_edit_layout(self):
+        self.layout_edit_requested.emit()
+        self.accept()
+
+    def _update_dev_visibility(self, checked):
+        self.live_voice_raid_cb.setVisible(checked)
+        self.live_raid_lore_save_cb.setVisible(checked)
+        self.hud_show_original_cb.setVisible(checked)
+        self.hud_show_pinyin_cb.setVisible(checked)
 
 
 class XianApp(QWidget):
@@ -301,15 +416,12 @@ class XianApp(QWidget):
         self.hide()  # never shown
 
         self.settings = QSettings(ORGANIZATION, APP_NAME)
-        # Initialize translation state
         state.load_locale(self.settings.value(KEY_UI_LANG, "en"))
 
-        # Migrate deprecated MAGE model setting
         if self.settings.value(KEY_API_MODEL) == "MAGE":
             self.settings.setValue(KEY_API_MODEL, constants.DEFAULT_MODEL)
         self._available_models: list = []
 
-        # --- Core objects ---
         self.processor = VLProcessor(VLConfig(
             model_name=self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL),
             api_url=_normalized_api_url_from_settings(self.settings),
@@ -317,15 +429,14 @@ class XianApp(QWidget):
         ))
         self.dictionary = LocalDictionary()
 
-        # Pre-warm target model in VRAM
         self._prewarm_worker = PrewarmWorker(self.processor)
         self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
         self._prewarm_worker.start()
 
-        # --- Hotkeys ---
+        self.layout_edit_mode_active = False
+
         self.hotkey_listener = create_hotkey_listener()
         
-        # Load and set initial leader key
         initial_leader = self.settings.value(KEY_LEADER_KEY, constants.DEFAULT_LEADER_KEY)
         if hasattr(self.hotkey_listener, "set_leader_key"):
             self.hotkey_listener.set_leader_key(initial_leader)
@@ -333,7 +444,7 @@ class XianApp(QWidget):
         self.hotkey_listener.trigger_lens.connect(self.show_lens)
         self.hotkey_listener.trigger_chat.connect(self.toggle_chat)
         self.hotkey_listener.trigger_settings.connect(self._open_settings)
-        self.hotkey_listener.trigger_dialogue_mode.connect(self.toggle_dialogue_mode)
+
         self.hotkey_listener.trigger_cinematic_mode.connect(self.toggle_cinematic_mode)
         self.hotkey_listener.trigger_how_to_say.connect(self.show_how_to_say)
         self.hotkey_listener.trigger_raid_mode.connect(self.start_raid_mode)
@@ -341,16 +452,19 @@ class XianApp(QWidget):
         self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
         if hasattr(self.hotkey_listener, "command_mode_cancelled"):
             self.hotkey_listener.command_mode_cancelled.connect(self.hide_osd)
+
+        self.hud_manager = HudManager(self)
+        self.hotkey_listener.trigger_hud.connect(self.show_hud_presets)
+
         self.hotkey_listener.start()
 
-        # --- Cinematic Mode ---
         self.cinematic_mode_active = False
         self.cinematic_bubble = None
 
-        # --- Raid Mode ---
         self.raid_bubble = None
+        self.raid_window = None
+        self._raid_worker = None
 
-        # --- Dialogue Mode ---
         self.dialogue_mode_active = False
         self.dialogue_timer = QTimer(self)
         self.dialogue_timer.setSingleShot(True)
@@ -359,8 +473,7 @@ class XianApp(QWidget):
         self.mouse_listener.left_click.connect(self.on_dialogue_click)
         self.dialogue_bubble = None
 
-        # --- Command OSD ---
-        self.osd = CommandOSD()
+        self.osd = CommandOSD(self)
         self.osd.initialize_settings(
             source=self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG),
             target=self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG),
@@ -376,34 +489,24 @@ class XianApp(QWidget):
         self.osd_timer.setSingleShot(True)
         self.osd_timer.timeout.connect(self.hide_osd)
 
-        # --- Chat sidebar (created once, toggled) ---
-        self.chat_sidebar = ChatSidebar(self.processor)
+        self.chat_sidebar = ChatSidebar(self.processor, parent=self)
 
-        # --- How to Say Dialog ---
-        self.how_to_say_dialog = HowToSayDialog()
+        self.how_to_say_dialog = HowToSayDialog(self)
         self.how_to_say_dialog.translation_requested.connect(self._on_how_to_say_submit)
         self.how_to_say_dialog.dialog_hidden.connect(self._on_osd_hidden)
 
-        # Lens window reference (created on demand)
         self._lens: LensOverlayWindow | None = None
-        # Active inference workers (prevent GC)
         self._workers: list = []
         self._status_worker = None
         self._pull_worker = None
-        # Active result bubbles (prevent GC)
         self._bubbles: list = []
-        # Map active InferenceWorker to its temporary/loading ResultBubble
         self._active_bubbles: dict[InferenceWorker, ResultBubble] = {}
-        # Guard against repeated pull attempts
         self._model_pull_attempted: bool = False
 
-        # --- System tray ---
         self._setup_tray()
 
-        # --- Initial health check ---
         self._run_health_check()
 
-        # --- Target Window Binding ---
         self.target_binder = None
         self._target_last_geometry = None
         self._target_was_active = False
@@ -413,9 +516,6 @@ class XianApp(QWidget):
         self.window_tracking_timer.start(100) # Check every 100ms
         self._setup_window_binder()
 
-    # ------------------------------------------------------------------
-    # System tray
-    # ------------------------------------------------------------------
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(self)
         # Try to load icon, fall back to a theme icon
@@ -526,21 +626,29 @@ class XianApp(QWidget):
             self.show_lens()
         elif key == "A":
             self.toggle_chat()
-        elif key == "O":
-            self.toggle_dialogue_mode()
+
         elif key == "M":
             self.toggle_cinematic_mode()
         elif key == "T":
             self.show_how_to_say()
         elif key == "R":
             self.start_raid_mode()
+        elif key == "H":
+            self.show_hud_presets()
+
         elif key == "S":
             self._open_settings()
 
-    # ------------------------------------------------------------------
-    # Lens
-    # ------------------------------------------------------------------
-    def show_lens(self, dialogue_mode: bool = False):
+    def show_hud_presets(self):
+        """Close OSD and open the HUD preset dialog."""
+        self.hide_osd()
+        dev_val = self.settings.value("developer_options", "false")
+        if not (dev_val == "true" or dev_val is True):
+            logger.info("HUD mode bypassed: developer options disabled")
+            return
+        self.hud_manager.show_hud_presets()
+
+    def show_lens(self):
         """Capture the screen and open the Lens overlay."""
         self.hide_osd()
         logger.info("Opening Lens overlay")
@@ -552,8 +660,7 @@ class XianApp(QWidget):
                 logger.debug("Error closing previous lens overlay", exc_info=True)
 
         self._lens = LensOverlayWindow(
-            previous_rect=None if dialogue_mode else LensOverlayWindow._last_rect,
-            dialogue_mode=dialogue_mode,
+            previous_rect=LensOverlayWindow._last_rect
         )
         self._lens.action_requested.connect(self._on_lens_action)
         self._lens.closed.connect(self._on_lens_closed)
@@ -609,9 +716,6 @@ class XianApp(QWidget):
 
         logger.warning("Unknown lens action: %s", action)
 
-    # ------------------------------------------------------------------
-    # Inference
-    # ------------------------------------------------------------------
     def _run_inference(self, image_data: bytes, action: str, anchor_rect: QRect):
         """Spawn an InferenceWorker for the given image crop."""
         source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
@@ -658,6 +762,8 @@ class XianApp(QWidget):
             self._bubbles = self._bubbles[-19:]
         self._bubbles.append(bubble)
         self._setup_bubble_connections(bubble)
+        if hasattr(self, "layout_edit_mode_active") and self.layout_edit_mode_active:
+            bubble.set_edit_mode(True)
 
     def _replace_persistent_bubble(self, attr_name: str, text: str, original_text: str = "", anchor: QRect = QRect(), border_color: str | None = None, truncated: bool = False, auto_close_ms: int = 0, show_stop: bool = False) -> ResultBubble:
         """Helper to close and recreate a persistent dialogue or cinematic bubble."""
@@ -683,6 +789,8 @@ class XianApp(QWidget):
                 lambda b=bubble: self._on_continue_requested(b)
             )
         self._setup_bubble_connections(bubble)
+        if hasattr(self, "layout_edit_mode_active") and self.layout_edit_mode_active:
+            bubble.set_edit_mode(True)
         return bubble
 
     def _on_inference_thinking(self, worker):
@@ -886,7 +994,16 @@ class XianApp(QWidget):
 
     def disable_dialogue_mode(self):
         if self.dialogue_mode_active:
-            self.toggle_dialogue_mode()
+            self.dialogue_mode_active = False
+            self.mouse_listener.stop()
+            self.dialogue_timer.stop()
+            if getattr(self, "dialogue_bubble", None):
+                self.dialogue_bubble.close()
+                self.dialogue_bubble = None
+            
+            bubble = ResultBubble(t("dialogue.status.deactivated"), auto_close_ms=3000)
+            self._add_bubble(bubble)
+            logger.info("Dialogue Mode Deactivated")
 
     def _on_speak_requested(self, bubble, source: bool):
         text = bubble._original if source else bubble._text
@@ -1023,9 +1140,7 @@ class XianApp(QWidget):
                 else:
                     logger.warning("Max auto-continue limit reached")
 
-    # ------------------------------------------------------------------
     # Chat
-    # ------------------------------------------------------------------
     def toggle_chat(self):
         """Toggle the chat sidebar visibility."""
         self.hide_osd()
@@ -1046,9 +1161,7 @@ class XianApp(QWidget):
                     )
             self.chat_sidebar.raise_()
 
-    # ------------------------------------------------------------------
     # How to say
-    # ------------------------------------------------------------------
     def show_how_to_say(self):
         self.hide_osd()
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
@@ -1082,26 +1195,7 @@ class XianApp(QWidget):
     def _on_how_to_say_error(self, msg: str):
         self.how_to_say_dialog.set_error(msg)
 
-    # ------------------------------------------------------------------
-    # Dialogue Mode
-    # ------------------------------------------------------------------
-    def toggle_dialogue_mode(self):
-        self.hide_osd()
 
-        if self.dialogue_mode_active:
-            self.dialogue_mode_active = False
-            self.mouse_listener.stop()
-            self.dialogue_timer.stop()
-            if self.dialogue_bubble:
-                self.dialogue_bubble.close()
-                self.dialogue_bubble = None
-            
-            bubble = ResultBubble(t("dialogue.status.deactivated"), auto_close_ms=3000)
-            self._add_bubble(bubble)
-            logger.info("Dialogue Mode Deactivated")
-        else:
-            logger.info("Opening Lens in dialogue mode.")
-            self.show_lens(dialogue_mode=True)
 
     def clear_active_bubbles(self):
         """Close and clear all translation bubbles to avoid capture and layering issues."""
@@ -1142,6 +1236,13 @@ class XianApp(QWidget):
                 pass
             self.raid_bubble = None
 
+        if hasattr(self, "raid_window") and self.raid_window:
+            try:
+                self.raid_window.close()
+            except Exception:
+                pass
+            self.raid_window = None
+
     def on_dialogue_click(self):
         if self.dialogue_mode_active:
             if self._is_click_inside_mage(QCursor.pos()):
@@ -1174,9 +1275,9 @@ class XianApp(QWidget):
                     return True
             except Exception:
                 pass
-        if hasattr(self, "raid_bubble") and self.raid_bubble:
+        if hasattr(self, "raid_window") and self.raid_window:
             try:
-                if self.raid_bubble.isVisible() and self.raid_bubble.geometry().contains(pos):
+                if self.raid_window.isVisible() and self.raid_window.geometry().contains(pos):
                     return True
             except Exception:
                 pass
@@ -1234,9 +1335,7 @@ class XianApp(QWidget):
         self._workers.append(self._dialogue_capture_worker)
         self._dialogue_capture_worker.start()
 
-    # ------------------------------------------------------------------
     # Cinematic Mode
-    # ------------------------------------------------------------------
     def toggle_cinematic_mode(self):
         self.hide_osd()
         dev_val = self.settings.value("developer_options", "false")
@@ -1337,9 +1436,7 @@ class XianApp(QWidget):
         self._workers.append(self._cinematic_capture_worker)
         self._cinematic_capture_worker.start()
 
-    # ------------------------------------------------------------------
     # Raid Mode
-    # ------------------------------------------------------------------
     def start_raid_mode(self):
         self.hide_osd()
         dev_val = self.settings.value("developer_options", "false")
@@ -1347,23 +1444,40 @@ class XianApp(QWidget):
             logger.info("Raid mode bypassed: developer options disabled")
             return
             
+        # If already running, toggle OFF
+        if hasattr(self, "_raid_worker") and self._raid_worker is not None:
+            self.stop_raid_mode()
+            return
+
         logger.info("Triggered Raid Mode")
-        self.raid_bubble = self._replace_persistent_bubble("raid_bubble", t("raid.status.recording"))
+        
+        # Instantiate/show the RaidWindow
+        if not hasattr(self, "raid_window") or not self.raid_window:
+            self.raid_window = RaidWindow(self.settings, parent=self)
+            self.raid_window.audio_toggled.connect(self._on_raid_audio_toggled)
+            self.raid_window.stop_requested.connect(self.stop_raid_mode)
+            self._apply_transient_parent(self.raid_window)
+
+        self.raid_window.clear_log()
+        self.raid_window.set_status(t("raid.window.status.listening"), "listening")
+        self.raid_window.show()
+        self.raid_window.raise_()
 
         source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
-
         save_lore = self.settings.value("live_raid_lore_save", "false")
+        live_voice_raid = self.settings.value("live_voice_raid", "false")
 
         worker = RaidWorker(
             self.processor,
             target_lang=target_lang,
             source_lang=source_lang,
-            save_lore=(save_lore == "true" or save_lore is True)
+            save_lore=(save_lore == "true" or save_lore is True),
+            audio_enabled=(live_voice_raid == "true" or live_voice_raid is True)
         )
 
         worker.chunk_translated.connect(
-            lambda transcript, translation, w=worker: self._on_chunk_translated(transcript, translation, w)
+            lambda transcript, translation, audio_bytes, w=worker: self._on_chunk_translated(transcript, translation, audio_bytes, w)
         )
         worker.error.connect(
             lambda msg, w=worker: self._on_raid_error(msg, w)
@@ -1371,44 +1485,66 @@ class XianApp(QWidget):
         worker.progress.connect(
             lambda text, w=worker: self._on_raid_progress(text, w)
         )
-        worker.finished.connect(lambda w=worker: self._cleanup_worker(w))
+        worker.finished.connect(lambda w=worker: self._cleanup_raid_worker(w))
 
+        self._raid_worker = worker
         self._workers.append(worker)
         worker.start()
         logger.info("RaidWorker started")
 
-    def _on_raid_progress(self, text, worker):
-        if hasattr(self, "raid_bubble") and self.raid_bubble and self.raid_bubble.isVisible():
-            self.raid_bubble.update_text(text)
+    def stop_raid_mode(self):
+        if hasattr(self, "_raid_worker") and self._raid_worker is not None:
+            logger.info("Stopping Raid Mode")
+            self._raid_worker.stop()
+            self._raid_worker = None
+        if hasattr(self, "raid_window") and self.raid_window:
+            self.raid_window.close()
 
-    def _on_chunk_translated(self, transcript, translation, worker):
+    def _cleanup_raid_worker(self, worker):
+        self._cleanup_worker(worker)
+        if hasattr(self, "_raid_worker") and self._raid_worker == worker:
+            self._raid_worker = None
+        if hasattr(self, "raid_window") and self.raid_window:
+            self.raid_window.set_status(t("raid.window.status.idle"), "idle")
+
+    def _on_raid_audio_toggled(self, checked):
+        if hasattr(self, "_raid_worker") and self._raid_worker is not None:
+            self._raid_worker.set_audio_enabled(checked)
+
+    def _on_raid_progress(self, text, worker):
+        if hasattr(self, "raid_window") and self.raid_window and self.raid_window.isVisible():
+            state = "listening"
+            if "transcrib" in text.lower():
+                state = "processing"
+                text = t("raid.window.status.processing")
+            elif "translat" in text.lower():
+                state = "processing"
+                text = t("raid.window.status.processing")
+            elif "speech" in text.lower():
+                state = "listening"
+                text = t("raid.window.status.listening")
+            elif "synthesiz" in text.lower():
+                state = "processing"
+                text = t("raid.window.status.processing")
+            self.raid_window.set_status(text, state)
+
+    def _on_chunk_translated(self, transcript, translation, audio_bytes, worker):
         logger.info("Raid chunk translated: %s -> %s", transcript, translation)
         
-        if hasattr(self, "raid_bubble") and self.raid_bubble and self.raid_bubble.isVisible():
-            current_text = getattr(self.raid_bubble, "_raid_text_buffer", [])
-            current_text.append(translation)
-            if len(current_text) > 5:
-                current_text = current_text[-5:]
-            self.raid_bubble._raid_text_buffer = current_text
-            
-            display_text = " ".join(current_text)
-            self.raid_bubble.update_text(display_text)
-            # Update original text dynamically too
-            if hasattr(self.raid_bubble, "original_text"):
-                self.raid_bubble.original_text = transcript
-        else:
-            self.raid_bubble = self._replace_persistent_bubble("raid_bubble", translation, original_text=transcript)
-            self.raid_bubble._raid_text_buffer = [translation]
+        if hasattr(self, "raid_window") and self.raid_window and self.raid_window.isVisible():
+            self.raid_window.append_translation(transcript, translation)
 
-        # Raid Mode optionally plays audio (translating and cloning voices)
+        # Sequential background TTS synthesis was executed inside RaidWorker.
+        # Play the received WAV bytes directly in the background thread.
         live_voice_raid = self.settings.value("live_voice_raid", "false")
-        if live_voice_raid == "true" or live_voice_raid is True:
-            self._speak_text(translation, source=False)
+        if (live_voice_raid == "true" or live_voice_raid is True) and audio_bytes:
+            from mage.capture.audio import play_audio_async
+            play_audio_async(audio_bytes)
 
     def _on_raid_error(self, msg, worker):
         logger.error("Raid Mode error: %s", msg)
-        if hasattr(self, "raid_bubble") and self.raid_bubble and self.raid_bubble.isVisible():
-            self.raid_bubble.update_text(f"⚠ Error: {msg}")
+        if hasattr(self, "raid_window") and self.raid_window and self.raid_window.isVisible():
+            self.raid_window.set_status(f"⚠ Error: {msg}", "error")
         else:
             bubble = ResultBubble(
                 f"⚠ Raid Mode Error: {msg}",
@@ -1416,9 +1552,7 @@ class XianApp(QWidget):
             )
             self._add_bubble(bubble)
 
-    # ------------------------------------------------------------------
     # Health check
-    # ------------------------------------------------------------------
     def _run_health_check(self):
         self._safe_stop_worker("_status_worker")
         api_url = _normalized_api_url_from_settings(self.settings)
@@ -1481,12 +1615,16 @@ class XianApp(QWidget):
         else:
             logger.warning("Model pull failed: %s", message)
 
-    # ------------------------------------------------------------------
     # Settings
-    # ------------------------------------------------------------------
     def _open_settings(self):
         self.hide_osd()
         dlg = SettingsDialog(self.settings, self._available_models)
+        
+        def _handle_layout_edit():
+            self.toggle_layout_edit_mode()
+            
+        dlg.layout_edit_requested.connect(_handle_layout_edit)
+        
         if dlg.exec():
             # Apply changed settings to processor
             self.processor.config.api_url = _normalized_api_url_from_settings(self.settings)
@@ -1500,7 +1638,6 @@ class XianApp(QWidget):
             # Re-run health check
             self._run_health_check()
             
-            # Pre-warm target model in VRAM
             self._safe_stop_worker("_prewarm_worker")
             self._prewarm_worker = PrewarmWorker(self.processor)
             self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
@@ -1514,7 +1651,55 @@ class XianApp(QWidget):
             self._setup_window_binder()
             dev_val = self.settings.value("developer_options", "false")
             self.osd.set_developer_options_visible(dev_val == "true" or dev_val is True)
+            
+            # Restore geometries according to layout preset
+            self.osd.restore_geometry()
+            self.chat_sidebar.restore_geometry()
+            self.how_to_say_dialog.restore_geometry()
+            if hasattr(self, "raid_window") and self.raid_window:
+                self.raid_window.restore_geometry()
+                
             logger.info("Settings updated and applied")
+
+    def toggle_layout_edit_mode(self):
+        """Toggle UI Layout Edit Mode for all overlays."""
+        if not hasattr(self, "layout_edit_mode_active"):
+            self.layout_edit_mode_active = False
+            
+        self.layout_edit_mode_active = not self.layout_edit_mode_active
+        active = self.layout_edit_mode_active
+        logger.info("Layout Edit Mode toggled: %s", active)
+        
+        # OSD: Make sure it's visible so it can be moved
+        if active:
+            if not self.osd.isVisible():
+                self.osd.show_centered()
+        else:
+            self.osd.hide()
+            
+        self.osd.set_edit_mode(active)
+        self.chat_sidebar.set_edit_mode(active)
+        self.how_to_say_dialog.set_edit_mode(active)
+        
+        if hasattr(self, "raid_window") and self.raid_window:
+            self.raid_window.set_edit_mode(active)
+            
+        # Dialogue bubble and cinematic bubble
+        if hasattr(self, "dialogue_bubble") and self.dialogue_bubble:
+            self.dialogue_bubble.set_edit_mode(active)
+        if hasattr(self, "cinematic_bubble") and self.cinematic_bubble:
+            self.cinematic_bubble.set_edit_mode(active)
+            
+        # All active bubbles
+        for bubble in self._bubbles:
+            if bubble.isVisible():
+                bubble.set_edit_mode(active)
+                
+        # All active HUD tooltips
+        if hasattr(self, "hud_manager") and self.hud_manager:
+            for widget in self.hud_manager.tooltip_widgets:
+                if widget.isVisible():
+                    widget.set_edit_mode(active)
 
     def _is_valid_widget(self, w):
         if w is None:
@@ -1597,7 +1782,7 @@ class XianApp(QWidget):
                     any(active_win == b for b in self._bubbles if self._is_valid_widget(b)) or
                     any(active_win == b for b in self._active_bubbles.values() if self._is_valid_widget(b)) or
                     active_win == self.cinematic_bubble or
-                    active_win == self.raid_bubble or
+                    active_win == self.raid_window or
                     active_win == self.dialogue_bubble
                 )
 
@@ -1617,8 +1802,8 @@ class XianApp(QWidget):
 
             if self.cinematic_bubble:
                 raw_overlays.append(self.cinematic_bubble)
-            if self.raid_bubble:
-                raw_overlays.append(self.raid_bubble)
+            if self.raid_window:
+                raw_overlays.append(self.raid_window)
             if self.dialogue_bubble:
                 raw_overlays.append(self.dialogue_bubble)
 
@@ -1693,7 +1878,7 @@ class XianApp(QWidget):
         for b in self._active_bubbles.values():
             if self._is_valid_widget(b):
                 bubbles.append(b)
-        for b in [self.cinematic_bubble, self.raid_bubble, self.dialogue_bubble]:
+        for b in [self.cinematic_bubble, self.raid_bubble, self.dialogue_bubble, self.raid_window]:
             if self._is_valid_widget(b):
                 bubbles.append(b)
 

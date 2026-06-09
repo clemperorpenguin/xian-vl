@@ -62,75 +62,87 @@ def temp_wiki_dir():
     shutil.rmtree(tmpdir)
 
 def test_load_glossary_from_wiki(temp_wiki_dir):
-    config = VLConfig()
-    processor = VLProcessor(config)
-    processor.wiki_dir = temp_wiki_dir
-    
-    glossary = processor.load_glossary_from_wiki()
-    assert glossary["李逍遥"] == "Li Xiaoyao"
-    assert glossary["门派"] == "Sect"
-    assert glossary["宗门"] == "Sect"
-    # Ensure invalid one was safely skipped
-    assert "Broken" not in glossary.values()
+    async def _test():
+        config = VLConfig()
+        processor = VLProcessor(config)
+        processor.wiki_dir = temp_wiki_dir
+        
+        glossary = await processor.load_glossary_from_wiki()
+        assert glossary["李逍遥"] == "Li Xiaoyao"
+        assert glossary["门派"] == "Sect"
+        assert glossary["宗门"] == "Sect"
+        # Ensure invalid one was safely skipped
+        assert "Broken" not in glossary.values()
+    import asyncio
+    asyncio.run(_test())
 
 def test_create_prompt_glossary_injection(temp_wiki_dir):
-    config = VLConfig()
-    processor = VLProcessor(config)
-    processor.wiki_dir = temp_wiki_dir
-    
-    system_prompt, user_prompt = processor.create_prompt(
-        source_lang="Chinese",
-        target_lang="English",
-        mode="Game",
-        styles=[]
-    )
-    
-    assert "GLOSSARY" in system_prompt or "glossary" in system_prompt
-    assert "李逍遥" in system_prompt
-    assert "Li Xiaoyao" in system_prompt
-    assert "门派" in system_prompt
-    assert "Sect" in system_prompt
+    async def _test():
+        config = VLConfig()
+        processor = VLProcessor(config)
+        processor.wiki_dir = temp_wiki_dir
+        
+        system_prompt, user_prompt = await processor.create_prompt(
+            source_lang="Chinese",
+            target_lang="English",
+            mode="Game",
+            styles=[]
+        )
+        
+        assert "GLOSSARY" in system_prompt or "glossary" in system_prompt
+        assert "李逍遥" in system_prompt
+        assert "Li Xiaoyao" in system_prompt
+        assert "门派" in system_prompt
+        assert "Sect" in system_prompt
+    import asyncio
+    asyncio.run(_test())
 
 def test_create_prompt_rag_injection(temp_wiki_dir):
-    config = VLConfig()
-    processor = VLProcessor(config)
-    processor.wiki_dir = temp_wiki_dir
-    
-    # Mock context manager frame to simulate recently translated text
-    from PIL import Image
-    img = Image.new("RGB", (100, 100))
-    processor.context_manager.add_frame(img)
-    processor.context_manager.update_last_frame_data(
-        extracted_text="ORIGINAL:\n我的李逍遥在这里。\n\nTRANSLATED:\nMy Li Xiaoyao is here.",
-        translations=[]
-    )
-    
-    recent_text = processor.get_recent_text_for_search()
-    assert recent_text == "我的李逍遥在这里。"
-    
-    system_prompt, _ = processor.create_prompt(
-        source_lang="Chinese",
-        target_lang="English",
-        mode="Game",
-        styles=[]
-    )
-    
-    assert "LORE REFERENCE ARTICLES:" in system_prompt
-    assert "Li Xiaoyao" in system_prompt
-    assert "A famous character" in system_prompt
+    async def _test():
+        config = VLConfig()
+        processor = VLProcessor(config)
+        processor.wiki_dir = temp_wiki_dir
+        
+        # Mock context manager frame to simulate recently translated text
+        from PIL import Image
+        img = Image.new("RGB", (100, 100))
+        processor.context_manager.add_frame(img)
+        processor.context_manager.update_last_frame_data(
+            extracted_text="ORIGINAL:\n我的李逍遥在这里。\n\nTRANSLATED:\nMy Li Xiaoyao is here.",
+            translations=[]
+        )
+        
+        recent_text = processor.get_recent_text_for_search()
+        assert recent_text == "我的李逍遥在这里。"
+        
+        system_prompt, _ = await processor.create_prompt(
+            source_lang="Chinese",
+            target_lang="English",
+            mode="Game",
+            styles=[]
+        )
+        
+        assert "LORE REFERENCE ARTICLES:" in system_prompt
+        assert "Li Xiaoyao" in system_prompt
+        assert "A famous character" in system_prompt
+    import asyncio
+    asyncio.run(_test())
 
 def test_create_cinematic_prompt_rag_injection(temp_wiki_dir):
-    config = VLConfig()
-    processor = VLProcessor(config)
-    processor.wiki_dir = temp_wiki_dir
-    
-    system_prompt = processor.create_cinematic_prompt(
-        transcript="这里有一个神秘的门派",
-        target_lang="English",
-        styles=[]
-    )
-    
-    assert "GLOSSARY" in system_prompt or "glossary" in system_prompt
-    assert "LORE REFERENCE ARTICLES:" in system_prompt
-    assert "Sect" in system_prompt
-    assert "A cultivation organization" in system_prompt
+    async def _test():
+        config = VLConfig()
+        processor = VLProcessor(config)
+        processor.wiki_dir = temp_wiki_dir
+        
+        system_prompt = await processor.create_cinematic_prompt(
+            transcript="这里有一个神秘的门派",
+            target_lang="English",
+            styles=[]
+        )
+        
+        assert "GLOSSARY" in system_prompt or "glossary" in system_prompt
+        assert "LORE REFERENCE ARTICLES:" in system_prompt
+        assert "Sect" in system_prompt
+        assert "A cultivation organization" in system_prompt
+    import asyncio
+    asyncio.run(_test())

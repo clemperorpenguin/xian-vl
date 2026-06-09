@@ -31,7 +31,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QThread, QRect, QSettings, QBuffer, QIO
 from PyQt6.QtGui import QGuiApplication
 from mage.ui.grounding import GroundingHighlight
 from mage.ui.theme import accent_hex, accent_hover_hex
-from mage.utils.window_binder import set_bypass_compositor_hint_x11
+from mage.ui.overlay_base import MageOverlayWindow
 from shared_types import constants
 from shared_types.state import t
 
@@ -178,30 +178,26 @@ class SearchWorker(QThread):
             self.result_ready.emit(f"Search Error: {e}")
 
 
-class ChatSidebar(QWidget):
+class ChatSidebar(MageOverlayWindow):
     def __init__(self, processor, parent=None):
-        super().__init__(parent)
         self.processor = processor
         self._highlight = None  # reference to active GroundingHighlight
         self.worker = None  # reference to active ChatWorker
-        self._drag_position = QPoint()
         
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        super().__init__(window_id="chat_sidebar", app=parent, parent=parent)
         
         self.setFixedWidth(350)
         
-        # Position on the right side of the screen
-        primary = QGuiApplication.primaryScreen()
-        if primary is None:
-            self.setGeometry(0, 0, 350, 600)
-        else:
-            screen = primary.geometry()
-            self.setGeometry(screen.right() - 350, screen.top(), 350, screen.height())
+        # Position on the right side of the screen if not restored
+        preset = self.app.settings.value("layout_preset", "Default")
+        key = f"layout/{preset}/chat_sidebar"
+        if not self.app.settings.contains(key):
+            primary = QGuiApplication.primaryScreen()
+            if primary is None:
+                self.setGeometry(0, 0, 350, 600)
+            else:
+                screen = primary.geometry()
+                self.setGeometry(screen.right() - 350, screen.top(), 350, screen.height())
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -445,18 +441,3 @@ class ChatSidebar(QWidget):
         self.activateWindow()
         self.raise_()
         self.input_field.setFocus()
-        set_bypass_compositor_hint_x11(self.winId())
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
-        else:
-            super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_position)
-            event.accept()
-        else:
-            super().mouseMoveEvent(event)

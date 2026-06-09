@@ -249,50 +249,53 @@ class VLProcessor:
         # 3. Default fallback
         return os.path.abspath(os.path.join(os.getcwd(), "wiki"))
 
-    def load_glossary_from_wiki(self) -> dict[str, str]:
-        if not os.path.exists(self.wiki_dir):
-            return {}
-        
-        try:
-            current_mtime = os.path.getmtime(self.wiki_dir)
-        except Exception:
-            current_mtime = 0.0
+    async def load_glossary_from_wiki(self) -> dict[str, str]:
+        def _do_load():
+            if not os.path.exists(self.wiki_dir):
+                return {}
+            
+            try:
+                current_mtime = os.path.getmtime(self.wiki_dir)
+            except Exception:
+                current_mtime = 0.0
 
-        current_time = time.time()
-        # Cache glossary for 60 seconds unless directory mtime changes
-        if (current_time - self._glossary_last_loaded < 60.0) and (current_mtime == self._glossary_mtime):
-            return self._glossary_cache
+            current_time = time.time()
+            # Cache glossary for 60 seconds unless directory mtime changes
+            if (current_time - self._glossary_last_loaded < 60.0) and (current_mtime == self._glossary_mtime):
+                return self._glossary_cache
 
-        glossary = {}
-        try:
-            for filename in os.listdir(self.wiki_dir):
-                if not filename.endswith(".md"):
-                    continue
-                filepath = os.path.join(self.wiki_dir, filename)
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    if content.startswith("---"):
-                        parts = content.split("---", 2)
-                        if len(parts) >= 3:
-                            frontmatter = yaml.safe_load(parts[1])
-                            if isinstance(frontmatter, dict):
-                                title = frontmatter.get("title")
-                                original_names = frontmatter.get("original_names")
-                                if title and original_names:
-                                    if isinstance(original_names, list):
-                                        for name in original_names:
-                                            glossary[str(name).strip()] = str(title).strip()
-                                    elif isinstance(original_names, str):
-                                        glossary[original_names.strip()] = str(title).strip()
-                except Exception as e:
-                    logger.warning("Failed to parse frontmatter from %s: %s", filepath, e)
-            self._glossary_cache = glossary
-            self._glossary_last_loaded = current_time
-            self._glossary_mtime = current_mtime
-        except Exception as e:
-            logger.warning("Failed to read glossary from wiki directory: %s", e)
-        return glossary
+            glossary = {}
+            try:
+                for filename in os.listdir(self.wiki_dir):
+                    if not filename.endswith(".md"):
+                        continue
+                    filepath = os.path.join(self.wiki_dir, filename)
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        if content.startswith("---"):
+                            parts = content.split("---", 2)
+                            if len(parts) >= 3:
+                                frontmatter = yaml.safe_load(parts[1])
+                                if isinstance(frontmatter, dict):
+                                    title = frontmatter.get("title")
+                                    original_names = frontmatter.get("original_names")
+                                    if title and original_names:
+                                        if isinstance(original_names, list):
+                                            for name in original_names:
+                                                glossary[str(name).strip()] = str(title).strip()
+                                        elif isinstance(original_names, str):
+                                            glossary[original_names.strip()] = str(title).strip()
+                    except Exception as e:
+                        logger.warning("Failed to parse frontmatter from %s: %s", filepath, e)
+                self._glossary_cache = glossary
+                self._glossary_last_loaded = current_time
+                self._glossary_mtime = current_mtime
+            except Exception as e:
+                logger.warning("Failed to read glossary from wiki directory: %s", e)
+            return glossary
+            
+        return await asyncio.to_thread(_do_load)
 
     def get_recent_text_for_search(self) -> str:
         if not hasattr(self, "context_manager") or not self.context_manager:
@@ -367,7 +370,7 @@ class VLProcessor:
         image.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-    def create_prompt(self, source_lang: str, target_lang: str, mode: str, styles: list[str]) -> tuple[str, str]:
+    async def create_prompt(self, source_lang: str, target_lang: str, mode: str, styles: list[str]) -> tuple[str, str]:
         """Create a terse OCR+Translation prompt tailored by user settings.
         Returns a tuple of (system_prompt, user_prompt).
         """
@@ -391,7 +394,7 @@ class VLProcessor:
         )
 
         # 1. Load Glossary from Wiki
-        glossary = self.load_glossary_from_wiki()
+        glossary = await self.load_glossary_from_wiki()
         if glossary:
             glossary_lines = ["\nUse the following game terminology glossary for translation mapping:"]
             for ch, en in glossary.items():
@@ -402,7 +405,7 @@ class VLProcessor:
         query = self.get_recent_text_for_search()
         if query:
             try:
-                results = self.local_searcher.search(query, num_results=2)
+                results = await self.local_searcher.search(query, num_results=2)
                 if results:
                     context_parts = ["\nLORE REFERENCE ARTICLES:\nUse the following background lore articles for context and translation accuracy:"]
                     for i, res in enumerate(results, 1):
@@ -567,7 +570,7 @@ class VLProcessor:
 
         image = self.preprocess_image(image_data)
         self.context_manager.add_frame(image)
-        system_prompt, user_prompt = self.create_prompt(source_lang, target_lang, mode, styles)
+        system_prompt, user_prompt = await self.create_prompt(source_lang, target_lang, mode, styles)
 
         # Check cache
         b64_image, was_cached = self._get_or_encode_image(image)
@@ -802,7 +805,7 @@ class VLProcessor:
             logger.error("Error during continuation: %s", e, exc_info=True)
             raise
 
-    def create_cinematic_prompt(self, transcript: str, target_lang: str, styles: list[str], source_lang: str = "Chinese") -> str:
+    async def create_cinematic_prompt(self, transcript: str, target_lang: str, styles: list[str], source_lang: str = "Chinese") -> str:
         """Create a prompt combining audio transcript and visual OCR for cinematic mode."""
         style_context = f" (Optionally use {', '.join(styles)} terms if it does not compromise accuracy)" if styles else ""
         system_prompt = (
@@ -822,7 +825,7 @@ class VLProcessor:
         )
 
         # 1. Load Glossary from Wiki
-        glossary = self.load_glossary_from_wiki()
+        glossary = await self.load_glossary_from_wiki()
         if glossary:
             glossary_lines = ["\nUse the following game terminology glossary for translation mapping:"]
             for ch, en in glossary.items():
@@ -832,7 +835,7 @@ class VLProcessor:
         # 2. Perform RAG Search (using transcript as query)
         if transcript:
             try:
-                results = self.local_searcher.search(transcript, num_results=2)
+                results = await self.local_searcher.search(transcript, num_results=2)
                 if results:
                     context_parts = ["\nLORE REFERENCE ARTICLES:\nUse the following background lore articles for context and translation accuracy:"]
                     for i, res in enumerate(results, 1):
@@ -856,7 +859,7 @@ class VLProcessor:
             image = self.preprocess_image(image_data)
         self.context_manager.add_frame(image)
 
-        prompt = self.create_cinematic_prompt(transcript, target_lang, styles, source_lang=source_lang)
+        prompt = await self.create_cinematic_prompt(transcript, target_lang, styles, source_lang=source_lang)
         if b64_image is None:
             b64_image = self.encode_image(image)
 

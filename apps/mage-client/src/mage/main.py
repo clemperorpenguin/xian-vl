@@ -38,6 +38,19 @@ from PyQt6.QtCore import QTimer
 def main() -> None:
     """Launch the MAGE Gaming HUD."""
     setup_logger(level=logging.DEBUG)
+    
+    # Configure logging for the 'mage' namespace so logs print to console
+    mage_logger = logging.getLogger("mage")
+    mage_logger.setLevel(logging.DEBUG)
+    if not mage_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setLevel(logging.DEBUG)
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%H:%M:%S'
+        )
+        handler.setFormatter(formatter)
+        mage_logger.addHandler(handler)
 
     from mage.resources import get_resource_path
 

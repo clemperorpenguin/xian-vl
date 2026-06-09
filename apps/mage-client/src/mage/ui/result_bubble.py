@@ -23,13 +23,13 @@ from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QPushButton, QHBoxLayo
 from PyQt6.QtCore import Qt, QTimer, QRect, QPoint, pyqtSignal
 from PyQt6.QtGui import QFont, QGuiApplication, QCursor
 from mage.ui.theme import accent_hex
-from mage.utils.window_binder import set_bypass_compositor_hint_x11
+from mage.ui.overlay_base import MageOverlayWindow
 from shared_types.state import t
 
 logger = logging.getLogger(__name__)
 
 
-class ResultBubble(QWidget):
+class ResultBubble(MageOverlayWindow):
     """Semi-transparent floating panel that shows translated text.
 
     Positioned just below *anchor_rect* (in global screen coordinates).
@@ -48,21 +48,17 @@ class ResultBubble(QWidget):
                  truncated: bool = False,
                  show_stop: bool = False,
                  parent=None):
-        super().__init__(parent)
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.WindowDoesNotAcceptFocus |
-            Qt.WindowType.Tool
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        if parent is None:
+            for widget in QApplication.topLevelWidgets():
+                if widget.__class__.__name__ == "XianApp" or hasattr(widget, "settings"):
+                    parent = widget
+                    break
+        super().__init__(window_id="result_bubble", app=parent, parent=parent)
 
         self._text = text
         self._original = original_text
         self._anchor_rect = anchor_rect
         self._orig_label = None
-        self._drag_position = QPoint()
         self._continue_count = 0
         self.continuation_messages = None
 
@@ -177,7 +173,15 @@ class ResultBubble(QWidget):
             self.setFixedWidth(max_w)
             self.adjustSize()
 
-        if anchor_rect and not anchor_rect.isEmpty():
+        preset = self.app.settings.value("layout_preset", "Default") if (self.app and hasattr(self.app, "settings") and self.app.settings) else "Default"
+        key = f"layout/{preset}/result_bubble"
+        has_saved = False
+        if self.app and hasattr(self.app, "settings") and self.app.settings:
+            has_saved = self.app.settings.contains(key)
+            
+        if has_saved:
+            self.restore_geometry()
+        elif anchor_rect and not anchor_rect.isEmpty():
             self._position_near(anchor_rect)
 
         # Auto-close timer
@@ -296,7 +300,13 @@ class ResultBubble(QWidget):
         if self.width() > max_w:
             self.setFixedWidth(max_w)
             self.adjustSize()
-        if self._anchor_rect and not self._anchor_rect.isEmpty():
+        preset = self.app.settings.value("layout_preset", "Default") if (self.app and hasattr(self.app, "settings") and self.app.settings) else "Default"
+        key = f"layout/{preset}/result_bubble"
+        has_saved = False
+        if self.app and hasattr(self.app, "settings") and self.app.settings:
+            has_saved = self.app.settings.contains(key)
+            
+        if not has_saved and self._anchor_rect and not self._anchor_rect.isEmpty():
             self._position_near(self._anchor_rect)
             
         self.raise_()
@@ -319,20 +329,4 @@ class ResultBubble(QWidget):
     def _on_speak_tgt_clicked(self):
         self.speak_target_requested.emit()
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
-        else:
-            super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_position)
-            event.accept()
-        else:
-            super().mouseMoveEvent(event)
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        set_bypass_compositor_hint_x11(self.winId())

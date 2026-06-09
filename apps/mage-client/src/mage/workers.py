@@ -70,6 +70,11 @@ def extract_translation_json(raw_output: str) -> str:
     return ""
 
 
+
+def sanitize_markdown(text: str) -> str:
+    """Escape backticks and HTML tags to prevent markdown injection."""
+    return text.replace("`", "'").replace("<", "&lt;").replace(">", "&gt;")
+
 class InferenceWorker(QThread):
     """Run a single VLM inference off the main thread.
 
@@ -78,13 +83,9 @@ class InferenceWorker(QThread):
     it calls VLProcessor.process_chat() and emits the response string.
     """
 
-    # (list_of_TranslationResult, action_string)
     translation_done = pyqtSignal(list, str)
-    # (partial_translation_text, action_string)
     translation_partial = pyqtSignal(str, str)
-    # emitted as soon as run() starts
     thinking = pyqtSignal()
-    # (chat_response_text,)
     chat_done = pyqtSignal(str)
     error = pyqtSignal(str)
 
@@ -198,9 +199,7 @@ class InferenceWorker(QThread):
 class ContinueWorker(QThread):
     """Continue a truncated VLM generation by replaying partial output."""
 
-    # (accumulated_text,)
     continuation_partial = pyqtSignal(str)
-    # (final_text, still_truncated: bool)
     continuation_done = pyqtSignal(str, bool)
     error = pyqtSignal(str)
 
@@ -403,21 +402,25 @@ class RaidWorker(QThread):
     No screen/image processing is involved.
     """
 
-    # (original_text, translated_text)
-    chunk_translated = pyqtSignal(str, str)
+    chunk_translated = pyqtSignal(str, str, bytes)
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, processor, *, target_lang: str = "English", source_lang: str = "Chinese", save_lore: bool = False):
+    def __init__(self, processor, *, target_lang: str = "English", source_lang: str = "Chinese", save_lore: bool = False, audio_enabled: bool = False):
         super().__init__()
         self.processor = processor
         self.target_lang = target_lang
         self.source_lang = source_lang
         self.save_lore = save_lore
+        self._audio_enabled = audio_enabled
         self._running = True
 
     def stop(self):
         self._running = False
+
+    def set_audio_enabled(self, enabled: bool):
+        self._audio_enabled = enabled
+        logger.info("RaidWorker: Audio output set to %s", enabled)
 
     async def _run_async(self):
         from mage.capture.audio import ContinuousAudioStreamer
@@ -436,8 +439,12 @@ class RaidWorker(QThread):
                 lore_dir = pathlib.Path.home() / ".local" / "share" / "xian-vl" / "lore"
                 lore_dir.mkdir(parents=True, exist_ok=True)
                 self.lore_filepath = lore_dir / f"Raid_Log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-                with open(self.lore_filepath, "w", encoding="utf-8") as f:
-                    f.write(f"# Raid Log ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n\n")
+                
+                def _init_lore():
+                    with open(self.lore_filepath, "w", encoding="utf-8") as f:
+                        f.write(f"# Raid Log ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n\n")
+                
+                await asyncio.to_thread(_init_lore)
             except Exception as e:
                 logger.error("Failed to initialize Raid Log file: %s", e)
                 self.save_lore = False
@@ -469,8 +476,19 @@ class RaidWorker(QThread):
                         )
                     except (asyncio.TimeoutError, Exception) as e:
                         logger.warning("Raid Mode transcription failed or timed out: %s", e)
-                        self.progress.emit(f"Transcription failed ({e}), listening...")
-                        continue
+                        err_msg = str(e).lower()
+                        if "500" in err_msg or "internal server error" in err_msg or "model_load_error" in err_msg:
+                            self.chunk_translated.emit(
+                                "[ASR Server Error]",
+                                "⚠️ ASR Server Error (500): Lemonade failed to load/start the speech-to-text model on the server. Live speech translation is disabled due to server-side backend limitations. (Ref: https://github.com/lemonade-sdk/lemonade/issues/2083)",
+                                b""
+                            )
+                            self._running = False
+                            self.progress.emit("ASR server error (500). Raid mode stopped.")
+                            break
+                        else:
+                            self.progress.emit(f"Transcription failed ({e}), listening...")
+                            continue
 
                     if not transcript or not transcript.strip():
                         self.progress.emit("Listening for speech...")
@@ -509,12 +527,34 @@ class RaidWorker(QThread):
                     if not translation:
                         logger.warning("Failed to parse translation from model output.")
                         translation = "[Translation Failed]"
+
+                    # Sequential background TTS synthesis if audio is enabled
+                    audio_bytes = b""
+                    if getattr(self, "_audio_enabled", False):
+                        try:
+                            self.progress.emit("Synthesizing audio...")
+                            tts_model = self.processor.router.tts(active_model)
+                            if tts_model:
+                                voice_param = "af_heart"
+                                if self.target_lang == "Chinese":
+                                    voice_param = "zf_xiaoxiao"
+                                elif self.target_lang == "Japanese":
+                                    voice_param = "jf_alpha"
+                                
+                                audio_bytes = await asyncio.wait_for(
+                                    client.tts(translation, voice=voice_param, model=tts_model),
+                                    timeout=15.0
+                                )
+                        except Exception as tts_err:
+                            logger.error("Raid Mode sequential TTS synthesis failed: %s", tts_err)
                             
-                    self.chunk_translated.emit(transcript, translation)
+                    self.chunk_translated.emit(transcript, translation, audio_bytes)
                     if self.save_lore and hasattr(self, "lore_filepath"):
                         try:
-                            with open(self.lore_filepath, "a", encoding="utf-8") as f:
-                                f.write(f"**Source**: {transcript}\n\n**Translation**: {translation}\n\n---\n")
+                            def _append_lore():
+                                with open(self.lore_filepath, "a", encoding="utf-8") as f:
+                                    f.write(f"**Source**: {sanitize_markdown(transcript)}\n\n**Translation**: {sanitize_markdown(translation)}\n\n---\n")
+                            await asyncio.to_thread(_append_lore)
                         except Exception as e:
                             logger.error("Failed to append to Raid Log file: %s", e)
 
@@ -535,7 +575,6 @@ class RaidWorker(QThread):
 class StatusWorker(QThread):
     """Check Lemonade server availability via HTTP GET /models."""
 
-    # (is_available, list_of_model_ids, raw_models_data)
     status_changed = pyqtSignal(bool, list, list)
 
     def __init__(self, api_url: str = "http://localhost:13305/v1"):
@@ -565,7 +604,7 @@ class StatusWorker(QThread):
 class ModelPullWorker(QThread):
     """Pull (download) a model via the Lemonade POST /v1/pull endpoint."""
 
-    pull_done = pyqtSignal(bool, str)  # (success, message)
+    pull_done = pyqtSignal(bool, str)
 
     def __init__(self, api_url: str, model_name: str, gpu_memory_utilization: str = "Default"):
         super().__init__()

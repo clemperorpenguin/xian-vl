@@ -44,7 +44,7 @@ async def test_raid_worker_resilience(qapp):
         
     from mage.workers import RaidWorker
     
-    worker = RaidWorker(processor, target_lang="English", source_lang="Chinese", save_lore=False)
+    worker = RaidWorker(processor, target_lang="English", source_lang="Chinese", save_lore=False, audio_enabled=True)
     
     # Mock ContinuousAudioStreamer
     mock_streamer = MagicMock()
@@ -68,6 +68,10 @@ async def test_raid_worker_resilience(qapp):
         "hello world"
     ]
     mock_lemonade_client.transcribe = mock_transcribe
+    
+    mock_tts = AsyncMock()
+    mock_tts.return_value = b"tts_audio_payload"
+    mock_lemonade_client.tts = mock_tts
     mock_lemonade_client.close = AsyncMock()
     
     # Mock completions create
@@ -79,6 +83,7 @@ async def test_raid_worker_resilience(qapp):
     mock_create.return_value = mock_response
     
     processor.client.chat.completions.create = mock_create
+    processor.router.tts.return_value = "kokoro-v1"
     
     # Patch streamer and client
     with patch("mage.capture.audio.ContinuousAudioStreamer", return_value=mock_streamer), \
@@ -89,7 +94,7 @@ async def test_raid_worker_resilience(qapp):
          translations = []
          
          worker.progress.connect(progress_messages.append)
-         worker.chunk_translated.connect(lambda orig, trans: translations.append((orig, trans)))
+         worker.chunk_translated.connect(lambda orig, trans, audio: translations.append((orig, trans, audio)))
          
          # Run _run_async directly so we can await it
          await worker._run_async()
@@ -97,8 +102,11 @@ async def test_raid_worker_resilience(qapp):
          # Verify that the first chunk's failure didn't crash the loop
          # and the second chunk was successfully processed.
          assert len(translations) == 1
-         assert translations[0] == ("hello world", "Hello World")
+         assert translations[0] == ("hello world", "Hello World", b"tts_audio_payload")
          
          # Verify we had "Transcription failed" progress message
          any_fail_msg = any("Transcription failed" in msg for msg in progress_messages)
          assert any_fail_msg
+         
+         # Verify TTS was called
+         mock_tts.assert_called_once_with("Hello World", voice="af_heart", model="kokoro-v1")

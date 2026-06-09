@@ -23,26 +23,19 @@ from PyQt6.QtCore import Qt, pyqtSignal, QPoint
 from PyQt6.QtGui import QGuiApplication, QFont, QKeyEvent, QCursor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
-from mage.utils.window_binder import set_bypass_compositor_hint_x11
+from mage.ui.overlay_base import MageOverlayWindow
 from shared_types.state import t
 
 logger = logging.getLogger(__name__)
 
-class HowToSayDialog(QWidget):
+class HowToSayDialog(MageOverlayWindow):
     """An interactive dialog for translating text, modifying it, and saving it."""
     
     translation_requested = pyqtSignal(str)
     dialog_hidden = pyqtSignal()
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._drag_position = QPoint()
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    def __init__(self, app, parent=None):
+        super().__init__(window_id="how_to_say", app=app, parent=parent)
         
         self.target_lang = "English"
         self.source_lang = "Chinese"
@@ -234,15 +227,20 @@ class HowToSayDialog(QWidget):
         self.adjustSize()
         self.setFixedSize(self.size())
         
-        screen = QGuiApplication.screenAt(QCursor.pos())
-        if not screen:
-            screen = QGuiApplication.primaryScreen()
-            
-        if screen:
-            geo = screen.geometry()
-            x = geo.center().x() - self.width() // 2
-            y = geo.center().y() - self.height() // 2
-            self.move(x, y)
+        preset = self.app.settings.value("layout_preset", "Default")
+        key = f"layout/{preset}/how_to_say"
+        if self.app.settings.contains(key):
+            self.restore_geometry()
+        else:
+            screen = QGuiApplication.screenAt(QCursor.pos())
+            if not screen:
+                screen = QGuiApplication.primaryScreen()
+                
+            if screen:
+                geo = screen.geometry()
+                x = geo.center().x() - self.width() // 2
+                y = geo.center().y() - self.height() // 2
+                self.move(x, y)
         
         self.show()
         self.activateWindow()
@@ -268,20 +266,4 @@ class HowToSayDialog(QWidget):
         super().hideEvent(event)
         self.dialog_hidden.emit()
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        set_bypass_compositor_hint_x11(self.winId())
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
-        else:
-            super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_position)
-            event.accept()
-        else:
-            super().mouseMoveEvent(event)

@@ -247,6 +247,26 @@
     "value": "Settings",
     "context": "OSD option label for settings menu"
   },
+  "osd.option.layout": {
+    "value": "Layout",
+    "context": "OSD option label for UI layout edit mode"
+  },
+  "settings.label.layout_preset": {
+    "value": "Layout Preset:",
+    "context": "Label for layout preset dropdown in settings"
+  },
+  "settings.prompt.layout_preset.new": {
+    "value": "Enter name for the new layout preset:",
+    "context": "Dialog prompt asking user to name new layout preset"
+  },
+  "settings.error.layout_preset.exists": {
+    "value": "A layout preset with this name already exists.",
+    "context": "Error message when trying to create a preset that exists"
+  },
+  "settings.error.layout_preset.invalid": {
+    "value": "Preset name cannot be empty.",
+    "context": "Error message when layout preset name is empty"
+  },
   "osd.label.src": {
     "value": "Src:",
     "context": "Abbreviated label for source language selection in OSD"
@@ -346,6 +366,145 @@
   "cinematic.status.requires_region": {
     "value": "Cinematic Mode requires at least one region.",
     "context": "System feedback bubble text shown when user attempts cinematic mode without defining region"
+  },
+  "raid.window.title": {
+    "value": "Xian — Raid Mode Log",
+    "context": "Title of the raid mode window"
+  },
+  "raid.window.audio_switch": {
+    "value": "Translated Audio",
+    "context": "Label next to the translated audio toggle switch"
+  },
+  "raid.window.clear": {
+    "value": "Clear Log",
+    "context": "Button label to clear translation log"
+  },
+  "raid.window.status.idle": {
+    "value": "Idle",
+    "context": "Status text when raid mode is inactive"
+  },
+  "raid.window.status.listening": {
+    "value": "Listening...",
+    "context": "Status text when raid mode is listening for speech"
+  },
+  "raid.window.status.processing": {
+    "value": "Translating...",
+    "context": "Status text when raid mode is translating speech"
+  },
+  "osd.option.hud": {
+    "value": "HUD",
+    "context": "OSD option label for static translation HUD mode"
+  },
+  "hud.preset.dialog.title": {
+    "value": "Static Translation HUD",
+    "context": "Title of the HUD preset selection dialog"
+  },
+  "hud.preset.dialog.prompt": {
+    "value": "Choose to load an existing HUD configuration or create a new one:",
+    "context": "Prompt label inside HUD preset selection dialog"
+  },
+  "hud.preset.dialog.button.load": {
+    "value": "Load Selected Preset",
+    "context": "Button label to load an existing preset"
+  },
+  "hud.preset.dialog.button.create": {
+    "value": "Create New Preset",
+    "context": "Button label to create a new preset"
+  },
+  "hud.preset.dialog.button.cancel": {
+    "value": "Cancel",
+    "context": "Cancel button inside preset dialog"
+  },
+  "hud.setup.overlay.step1": {
+    "value": "Step 1/2: Click and drag to select the Hover Trigger area (invisible button region). Right-click to cancel.",
+    "context": "Instruction label shown during HUD setup step 1"
+  },
+  "hud.setup.overlay.step2": {
+    "value": "Step 2/2: Click and drag to select the original text Box to be translated (the tooltip). Right-click to cancel.",
+    "context": "Instruction label shown during HUD setup step 2"
+  },
+  "hud.confirm.dialog.title": {
+    "value": "Confirm HUD Button Translation",
+    "context": "Title of the HUD button translation confirmation dialog"
+  },
+  "hud.confirm.dialog.label.original": {
+    "value": "Detected Original Text:",
+    "context": "Label for original text in confirmation dialog"
+  },
+  "hud.confirm.dialog.label.translated": {
+    "value": "Translated Text:",
+    "context": "Label for translated text input in confirmation dialog"
+  },
+  "hud.confirm.dialog.button.confirm": {
+    "value": "Confirm & Save Button",
+    "context": "Button label to confirm and save the translation mapping"
+  },
+  "hud.confirm.dialog.button.recapture": {
+    "value": "Re-capture Translation Region",
+    "context": "Button label to re-select the translation region"
+  },
+  "hud.confirm.dialog.button.cancel": {
+    "value": "Cancel",
+    "context": "Cancel button text"
+  },
+  "hud.setup.status.saved": {
+    "value": "Added button to current preset config.",
+    "context": "Status feedback when a button is added to HUD preset"
+  },
+  "hud.setup.dialog.title": {
+    "value": "HUD Configuration Setup",
+    "context": "Title of the HUD setup control dialog"
+  },
+  "hud.setup.dialog.prompt": {
+    "value": "Configured Buttons: {count}",
+    "context": "Label showing the count of buttons currently configured in the preset"
+  },
+  "hud.setup.dialog.button.add": {
+    "value": "Add Another Button",
+    "context": "Button label to add another hover translation zone"
+  },
+  "hud.setup.dialog.button.save": {
+    "value": "Save Configuration",
+    "context": "Button label to save the HUD preset"
+  },
+  "hud.setup.dialog.save_prompt.title": {
+    "value": "Save HUD Preset",
+    "context": "Title of the preset save name prompt"
+  },
+  "hud.setup.dialog.save_prompt.label": {
+    "value": "Enter a name for the preset configuration:",
+    "context": "Label text asking for a preset name"
+  },
+  "hud.status.activated": {
+    "value": "HUD Mode Active (Preset: {name})",
+    "context": "Tray message when HUD mode is activated"
+  },
+  "hud.status.deactivated": {
+    "value": "HUD Mode Disabled",
+    "context": "Tray message when HUD mode is deactivated"
+  },
+  "hud.countdown.label": {
+    "value": "Hover mouse over the button now!\nCapturing screen in {secs}s...",
+    "context": "Countdown notification label shown to user before screen capture"
+  },
+  "settings.checkbox.hud_show_original": {
+    "value": "Show original text in HUD tooltips",
+    "context": "Checkbox label to show original text in HUD tooltips"
+  },
+  "settings.checkbox.hud_show_pinyin": {
+    "value": "Enable Pinyin in HUD tooltips",
+    "context": "Checkbox label to show Pinyin in HUD tooltips"
+  },
+  "hud.error.no_wayland_backend": {
+    "value": "Global mouse tracking is restricted on this Wayland session. Please ensure evdev access is configured or use a supported compositor.",
+    "context": "Error message shown when HUD cannot start on Wayland because no tracking backend was resolved"
+  },
+  "hud.preset.dialog.button.delete": {
+    "value": "Delete",
+    "context": "Button label to delete a selected preset"
+  },
+  "settings.button.edit_layout": {
+    "value": "Edit UI Layout",
+    "context": "Button in settings to edit UI layout"
   }
 }
-
