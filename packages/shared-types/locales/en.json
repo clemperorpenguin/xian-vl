@@ -502,5 +502,9 @@
   "hud.preset.dialog.button.delete": {
     "value": "Delete",
     "context": "Button label to delete a selected preset"
+  },
+  "settings.button.edit_layout": {
+    "value": "Edit UI Layout",
+    "context": "Button in settings to edit UI layout"
   }
 }

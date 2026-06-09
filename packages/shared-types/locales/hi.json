@@ -124,5 +124,6 @@
   "settings.checkbox.hud_show_original": "HUD टू-टिप्स में मूल टेक्स्ट दिखाएं",
   "settings.checkbox.hud_show_pinyin": "HUD टूलटिप्स में पिनयिन सक्षम करें",
   "hud.error.no_wayland_backend": "Wayलैंड सेशन पर ग्लोबल माउस ट्रैकिंग सीमित है। कृपया सुनिश्चित करें कि evdev एक्सेस कॉन्फ़िगर किया गया है या एक समर्थित कंपोज़िटर का उपयोग करें।",
-  "hud.preset.dialog.button.delete": "हटाएं"
+  "hud.preset.dialog.button.delete": "हटाएं",
+  "settings.button.edit_layout": "UI लेआउट संपादित करें"
 }

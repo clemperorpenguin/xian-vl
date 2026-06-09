@@ -124,5 +124,6 @@
   "settings.checkbox.hud_show_original": "HUD 툴팁에 원본 텍스트 표시",
   "settings.checkbox.hud_show_pinyin": "HUD 툴팁에 병음 활성화",
   "hud.error.no_wayland_backend": "Wayland 세션에서 전역 마우스 추적 기능이 제한되었습니다. evdev 액세스가 설정되었는지 확인하거나 지원되는 컴포지터를 사용하세요.",
-  "hud.preset.dialog.button.delete": "삭제"
+  "hud.preset.dialog.button.delete": "삭제",
+  "settings.button.edit_layout": "UI 레이아웃 편집"
 }

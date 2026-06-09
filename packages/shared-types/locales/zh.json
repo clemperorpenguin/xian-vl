@@ -124,5 +124,6 @@
   "settings.checkbox.hud_show_original": "在 HUD 提示框中显示原始文本",
   "settings.checkbox.hud_show_pinyin": "在 HUD 提示中启用拼音",
   "hud.error.no_wayland_backend": "此 Wayland 会话限制了全局鼠标跟踪。请确保已配置 evdev 访问权限，或使用受支持的合成器。",
-  "hud.preset.dialog.button.delete": "删除"
+  "hud.preset.dialog.button.delete": "删除",
+  "settings.button.edit_layout": "编辑界面布局"
 }

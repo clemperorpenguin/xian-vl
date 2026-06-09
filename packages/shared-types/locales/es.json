@@ -124,5 +124,6 @@
   "settings.checkbox.hud_show_original": "Mostrar texto original en las herramientas del HUD",
   "settings.checkbox.hud_show_pinyin": "Activar pinyin en las herramientas de interfaz",
   "hud.error.no_wayland_backend": "El seguimiento del ratón global está restringido en esta sesión Wayland. Asegúrese de que esté configurado el acceso evdev o utilice un compositor compatible.",
-  "hud.preset.dialog.button.delete": "Eliminar"
+  "hud.preset.dialog.button.delete": "Eliminar",
+  "settings.button.edit_layout": "Editar diseño de la interfaz"
 }

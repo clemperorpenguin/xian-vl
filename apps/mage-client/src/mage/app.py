@@ -83,6 +83,8 @@ def _parse_styles(settings: QSettings) -> list[str]:
 
 class SettingsDialog(QDialog):
     """Small modal dialog for configuring the Lemonade backend."""
+    
+    layout_edit_requested = pyqtSignal()
 
     def __init__(self, settings: QSettings, models: list, parent=None):
         super().__init__(parent)
@@ -244,6 +246,8 @@ class SettingsDialog(QDialog):
         idx = self.preset_combo.findText(current_preset)
         if idx >= 0:
             self.preset_combo.setCurrentIndex(idx)
+
+
             
         self.add_preset_btn = QPushButton("+")
         self.add_preset_btn.setFixedWidth(30)
@@ -253,9 +257,13 @@ class SettingsDialog(QDialog):
         self.del_preset_btn.setFixedWidth(30)
         self.del_preset_btn.clicked.connect(self._del_preset)
         
+        self.edit_layout_btn = QPushButton(t("settings.button.edit_layout"))
+        self.edit_layout_btn.clicked.connect(self._on_edit_layout)
+        
         preset_layout.addWidget(self.preset_combo)
         preset_layout.addWidget(self.add_preset_btn)
         preset_layout.addWidget(self.del_preset_btn)
+        preset_layout.addWidget(self.edit_layout_btn)
         layout.addRow(t("settings.label.layout_preset"), preset_layout)
 
         # Developer Options Checkbox
@@ -376,6 +384,10 @@ class SettingsDialog(QDialog):
             target_val = ""
         self.settings.setValue(KEY_TARGET_WINDOW_TITLE, target_val)
         self.settings.setValue("developer_options", "true" if self.dev_options_cb.isChecked() else "false")
+        self.accept()
+
+    def _on_edit_layout(self):
+        self.layout_edit_requested.emit()
         self.accept()
 
     def _update_dev_visibility(self, checked):
@@ -642,8 +654,7 @@ class XianApp(QWidget):
             self.start_raid_mode()
         elif key == "H":
             self.show_hud_presets()
-        elif key == "L":
-            self.toggle_layout_edit_mode()
+
         elif key == "S":
             self._open_settings()
 
@@ -1645,6 +1656,12 @@ class XianApp(QWidget):
     def _open_settings(self):
         self.hide_osd()
         dlg = SettingsDialog(self.settings, self._available_models)
+        
+        def _handle_layout_edit():
+            self.toggle_layout_edit_mode()
+            
+        dlg.layout_edit_requested.connect(_handle_layout_edit)
+        
         if dlg.exec():
             # Apply changed settings to processor
             self.processor.config.api_url = _normalized_api_url_from_settings(self.settings)

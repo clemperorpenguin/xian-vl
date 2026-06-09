@@ -122,7 +122,6 @@ class CommandOSD(MageOverlayWindow):
         options_layout.addWidget(self.raid_option)
         self.hud_option = self._create_option("H", t("osd.option.hud"))
         options_layout.addWidget(self.hud_option)
-        options_layout.addWidget(self._create_option("L", t("osd.option.layout")))
         options_layout.addWidget(self._create_option("S", t("osd.option.settings")))
 
         inner_layout.addLayout(options_layout)

@@ -39,7 +39,7 @@ class HotkeyListener(QObject):
     command_mode_cancelled = pyqtSignal()
     trigger_raid_mode = pyqtSignal()
     trigger_hud = pyqtSignal()
-    trigger_layout_edit = pyqtSignal()
+
     mouse_position_updated = pyqtSignal(int, int)
 
     def start(self):
@@ -373,11 +373,7 @@ if sys.platform == "linux":
                         self.trigger_hud.emit()
                         self.command_mode_active = False
 
-                    # KEY_L is 38
-                    elif keycode == evdev.ecodes.KEY_L:
-                        logger.info("EvdevListener: Triggered Layout Edit")
-                        self.trigger_layout_edit.emit()
-                        self.command_mode_active = False
+
 
 else:
     from pynput import keyboard
@@ -495,10 +491,7 @@ else:
                                 logger.info("PynputListener: Triggered HUD")
                                 self.trigger_hud.emit()
                                 self.command_mode_active = False
-                            elif char == 'l':
-                                logger.info("PynputListener: Triggered Layout Edit")
-                                self.trigger_layout_edit.emit()
-                                self.command_mode_active = False
+
                     except Exception as e:
                         logger.debug("PynputListener error: %s", e)
                 
