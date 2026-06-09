@@ -221,6 +221,9 @@ build_whisper() {
     cp -f "${build_dir}/build/bin/libggml*.so" "${out_dir}/" 2>/dev/null || true
     cp -f "${build_dir}/build/src/libwhisper*.so" "${out_dir}/" 2>/dev/null || true
     
+    # Write version.txt so lemond doesn't think the installation is corrupt and overwrite it
+    echo "v1.8.4" > "${out_dir}/version.txt"
+    
     echo "✓ whisper.cpp locally built and installed to backend directory."
 }
 
