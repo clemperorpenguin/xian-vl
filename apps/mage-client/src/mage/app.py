@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QComboBox, QSpinBox, QPushButton, QLabel, QVBoxLayout,
     QHBoxLayout, QWidget, QCheckBox, QMessageBox, QInputDialog
 )
-from PyQt6.QtCore import Qt, QSettings, QRect, QTimer
+from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap, QCursor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
