@@ -70,6 +70,11 @@ def extract_translation_json(raw_output: str) -> str:
     return ""
 
 
+
+def sanitize_markdown(text: str) -> str:
+    """Escape backticks and HTML tags to prevent markdown injection."""
+    return text.replace("`", "'").replace("<", "&lt;").replace(">", "&gt;")
+
 class InferenceWorker(QThread):
     """Run a single VLM inference off the main thread.
 
@@ -78,13 +83,9 @@ class InferenceWorker(QThread):
     it calls VLProcessor.process_chat() and emits the response string.
     """
 
-    # (list_of_TranslationResult, action_string)
     translation_done = pyqtSignal(list, str)
-    # (partial_translation_text, action_string)
     translation_partial = pyqtSignal(str, str)
-    # emitted as soon as run() starts
     thinking = pyqtSignal()
-    # (chat_response_text,)
     chat_done = pyqtSignal(str)
     error = pyqtSignal(str)
 
@@ -198,9 +199,7 @@ class InferenceWorker(QThread):
 class ContinueWorker(QThread):
     """Continue a truncated VLM generation by replaying partial output."""
 
-    # (accumulated_text,)
     continuation_partial = pyqtSignal(str)
-    # (final_text, still_truncated: bool)
     continuation_done = pyqtSignal(str, bool)
     error = pyqtSignal(str)
 
@@ -403,7 +402,6 @@ class RaidWorker(QThread):
     No screen/image processing is involved.
     """
 
-    # (original_text, translated_text, audio_bytes)
     chunk_translated = pyqtSignal(str, str, bytes)
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
@@ -555,7 +553,7 @@ class RaidWorker(QThread):
                         try:
                             def _append_lore():
                                 with open(self.lore_filepath, "a", encoding="utf-8") as f:
-                                    f.write(f"**Source**: {transcript}\n\n**Translation**: {translation}\n\n---\n")
+                                    f.write(f"**Source**: {sanitize_markdown(transcript)}\n\n**Translation**: {sanitize_markdown(translation)}\n\n---\n")
                             await asyncio.to_thread(_append_lore)
                         except Exception as e:
                             logger.error("Failed to append to Raid Log file: %s", e)
@@ -577,7 +575,6 @@ class RaidWorker(QThread):
 class StatusWorker(QThread):
     """Check Lemonade server availability via HTTP GET /models."""
 
-    # (is_available, list_of_model_ids, raw_models_data)
     status_changed = pyqtSignal(bool, list, list)
 
     def __init__(self, api_url: str = "http://localhost:13305/v1"):
@@ -607,7 +604,7 @@ class StatusWorker(QThread):
 class ModelPullWorker(QThread):
     """Pull (download) a model via the Lemonade POST /v1/pull endpoint."""
 
-    pull_done = pyqtSignal(bool, str)  # (success, message)
+    pull_done = pyqtSignal(bool, str)
 
     def __init__(self, api_url: str, model_name: str, gpu_memory_utilization: str = "Default"):
         super().__init__()
