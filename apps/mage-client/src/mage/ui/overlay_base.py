@@ -62,7 +62,7 @@ class MageOverlayWindow(QWidget):
                 if isinstance(geo_val, QRect):
                     self.setGeometry(geo_val)
                 elif isinstance(geo_val, (list, tuple)) and len(geo_val) == 4:
-                    self.setGeometry(QRect(geo_val[0], geo_val[1], geo_val[2], geo_val[3]))
+                    self.setGeometry(QRect(int(geo_val[0]), int(geo_val[1]), int(geo_val[2]), int(geo_val[3])))
             except Exception as e:
                 logger.error("Failed to restore geometry for %s under preset %s: %s", self.window_id, preset, e)
 
