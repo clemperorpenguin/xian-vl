@@ -292,7 +292,7 @@ if sys.platform == "linux":
                 self.command_mode_active = False
                 
             # Check hotkeys only on key down (1)
-            if event.keystate == 1:
+            if key_event.keystate == 1:
                 if not is_modifier:
                     self.mod_clean[device_path] = False
 
