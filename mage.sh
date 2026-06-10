@@ -636,6 +636,8 @@ case "${ACTION}" in
         ;;
     build)
         install_build_deps
+        build_whisper
+        build_llama
         build_lemonade
         ;;
     *)
