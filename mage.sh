@@ -227,6 +227,45 @@ build_whisper() {
     echo "✓ whisper.cpp locally built and installed to backend directory."
 }
 
+# ── Linux: build llama.cpp from source ───────────────────────────────────────
+
+build_llama() {
+    echo "── Building llama.cpp locally to fix SIGILL issues… ──"
+    local build_dir="${REPO_DIR}/build/llamacpp-src"
+    
+    if [[ ! -d "${build_dir}" ]]; then
+        mkdir -p "${REPO_DIR}/build"
+        git clone -b b9585 https://github.com/ggerganov/llama.cpp "${build_dir}"
+    fi
+    
+    (
+        cd "${build_dir}"
+        echo "Configuring CMake for llama.cpp (Vulkan)…"
+        cmake -B build -DGGML_VULKAN=1 -DBUILD_SHARED_LIBS=ON
+        echo "Building llama-server…"
+        cmake --build build --config Release -j --target llama-server
+    )
+    
+    # lemonade expects the backend binary here
+    local out_dir="${HOME}/.cache/lemonade/bin/llamacpp/vulkan"
+    mkdir -p "${out_dir}"
+    
+    echo "Copying locally compiled llama-server to ${out_dir}…"
+    # llama.cpp executable output is usually in bin/
+    cp -f "${build_dir}/build/bin/llama-server" "${out_dir}/" 2>/dev/null || \
+        cp -f "${build_dir}/build/examples/server/llama-server" "${out_dir}/"
+    
+    # Copy shared libraries
+    cp -f "${build_dir}/build/bin/libggml*.so*" "${out_dir}/" 2>/dev/null || true
+    cp -f "${build_dir}/build/src/libllama*.so*" "${out_dir}/" 2>/dev/null || true
+    cp -f "${build_dir}/build/bin/libllama*.so*" "${out_dir}/" 2>/dev/null || true
+    
+    # Write version.txt so lemond doesn't think the installation is corrupt and overwrite it
+    echo "b9585" > "${out_dir}/version.txt"
+    
+    echo "✓ llama.cpp locally built and installed to backend directory."
+}
+
 # ── macOS: download pre-built Lemonade from GitHub releases ──────────────────
 
 download_lemonade() {
@@ -396,6 +435,7 @@ DESKTOP
     if [[ "${BUILD_LEMONADE}" == "true" ]]; then
         install_build_deps
         build_whisper
+        build_llama
         build_lemonade
     fi
 }
