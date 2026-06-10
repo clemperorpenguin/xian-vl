@@ -94,4 +94,15 @@ def clean_subprocess_env() -> dict[str, str]:
             if is_bundled:
                 env.pop(py_var, None)
 
+    # 6. Ensure UTF-8 environment for subprocesses to avoid '??????' encoding spam
+    # macOS and Linux desktop launchers sometimes omit LANG/LC_ALL, causing C locale fallback.
+    if not env.get("LANG", "").upper().endswith("UTF-8"):
+        env["LANG"] = "en_US.UTF-8"
+    
+    # If LC_ALL is explicitly set but not UTF-8, fix it. If missing, also set it just to be safe.
+    if "LC_ALL" in env and not env["LC_ALL"].upper().endswith("UTF-8"):
+        env["LC_ALL"] = "en_US.UTF-8"
+    elif "LC_ALL" not in env:
+        env["LC_ALL"] = "en_US.UTF-8"
+
     return env
