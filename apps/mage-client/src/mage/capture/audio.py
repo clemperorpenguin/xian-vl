@@ -31,17 +31,33 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import queue
 import shutil
 import struct
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from mage.utils.env import clean_subprocess_env
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["capture_system_audio", "ContinuousAudioStreamer", "play_audio", "play_audio_async"]
+__all__ = [
+    "capture_system_audio",
+    "ContinuousAudioStreamer",
+    "play_audio",
+    "play_audio_async",
+    "SerialAudioPlayer",
+]
+
+
+def _find_player() -> str | None:
+    """Return the path to a working WAV player, or *None*."""
+    for cmd in ("pw-play", "paplay", "aplay"):
+        if shutil.which(cmd):
+            return cmd
+    return None
 
 
 def _find_recorder() -> str | None:
@@ -260,20 +276,15 @@ class ContinuousAudioStreamer:
 
 def play_audio(audio_bytes: bytes):
     """Play WAV audio bytes using pw-play, paplay, or aplay."""
-    player = None
-    for cmd in ("pw-play", "paplay", "aplay"):
-        if shutil.which(cmd):
-            player = cmd
-            break
-            
+    player = _find_player()
     if not player:
         logger.warning("No audio player found (pw-play, paplay, aplay). Cannot play audio.")
         return
-        
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(audio_bytes)
         tmp_path = tmp.name
-        
+
     try:
         subprocess.run([player, tmp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=clean_subprocess_env(), timeout=30.0)
     except subprocess.TimeoutExpired:
@@ -286,6 +297,92 @@ def play_audio(audio_bytes: bytes):
 
 def play_audio_async(audio_bytes: bytes):
     """Play WAV audio bytes in a background thread."""
-    import threading
     t = threading.Thread(target=play_audio, args=(audio_bytes,), daemon=True)
     t.start()
+
+
+class SerialAudioPlayer:
+    """Plays WAV clips one at a time on a single background thread.
+
+    Used for Raid Mode speech so utterances never overlap. ``flush()`` clears
+    pending clips and stops the one currently playing (e.g. when the user turns
+    Translated Audio off mid-session).
+    """
+
+    def __init__(self):
+        self._queue: "queue.Queue[bytes | None]" = queue.Queue()
+        self._thread: threading.Thread | None = None
+        self._proc: subprocess.Popen | None = None
+        self._lock = threading.Lock()
+        self._running = False
+
+    def start(self):
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def enqueue(self, audio_bytes: bytes):
+        if self._running and audio_bytes:
+            self._queue.put(audio_bytes)
+
+    def flush(self):
+        """Drop everything pending and stop the clip currently playing."""
+        try:
+            while True:
+                self._queue.get_nowait()
+        except queue.Empty:
+            pass
+        with self._lock:
+            if self._proc and self._proc.poll() is None:
+                try:
+                    self._proc.terminate()
+                except Exception:
+                    pass
+
+    def stop(self):
+        """Flush and shut down the playback thread."""
+        if not self._running:
+            return
+        self._running = False
+        self.flush()
+        self._queue.put(None)  # wake the thread so it can exit
+
+    def _run(self):
+        player = _find_player()
+        if not player:
+            logger.warning("No audio player found (pw-play, paplay, aplay). Raid speech disabled.")
+            self._running = False
+            return
+        while self._running:
+            item = self._queue.get()
+            if item is None:
+                break
+            self._play_one(player, item)
+
+    def _play_one(self, player: str, audio_bytes: bytes):
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+        try:
+            with self._lock:
+                if not self._running:
+                    return
+                self._proc = subprocess.Popen(
+                    [player, tmp_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=clean_subprocess_env(),
+                )
+            try:
+                self._proc.wait(timeout=30.0)
+            except subprocess.TimeoutExpired:
+                logger.error("Raid speech playback timed out after 30 seconds")
+                self._proc.kill()
+        except Exception as e:
+            logger.error("Failed to play raid speech with %s: %s", player, e)
+        finally:
+            with self._lock:
+                self._proc = None
+            Path(tmp_path).unlink(missing_ok=True)

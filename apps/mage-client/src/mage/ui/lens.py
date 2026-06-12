@@ -43,7 +43,7 @@ class ActionBarWidget(QWidget):
         self.setStyleSheet(f"""
             QWidget {{
                 background-color: rgba(30, 30, 30, 220);
-                border-radius: 8px;
+                border-radius: 0px;
                 border: 1px solid {accent_hex()};
             }}
             QPushButton {{
@@ -51,7 +51,7 @@ class ActionBarWidget(QWidget):
                 color: white;
                 border: none;
                 padding: 6px 12px;
-                border-radius: 4px;
+                border-radius: 0px;
                 font-weight: bold;
             }}
             QPushButton:hover {{
@@ -271,8 +271,8 @@ class CinematicLensOverlay(QWidget):
         self.action_bar.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         layout = QHBoxLayout(self.action_bar)
         self.action_bar.setStyleSheet(f"""
-            QWidget {{ background-color: rgba(30, 30, 30, 220); border-radius: 8px; border: 1px solid {accent_hex()}; }}
-            QPushButton {{ background-color: #333; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-weight: bold; }}
+            QWidget {{ background-color: rgba(30, 30, 30, 220); border-radius: 0px; border: 1px solid {accent_hex()}; }}
+            QPushButton {{ background-color: #333; color: white; border: none; padding: 6px 12px; border-radius: 0px; font-weight: bold; }}
             QPushButton:hover {{ background-color: {accent_hex()}; }}
         """)
         btn_confirm = QPushButton(t("lens.button.confirm"))

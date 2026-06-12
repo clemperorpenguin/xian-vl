@@ -43,7 +43,7 @@ class ClickableKeyLabel(QLabel):
         self.base_style = f"""
             QLabel {{
                 background-color: rgba(255, 255, 255, 10);
-                border-radius: 12px;
+                border-radius: 0px;
                 border: 1px solid rgba(255, 255, 255, 30);
                 color: {accent_hex()};
             }}
@@ -51,7 +51,7 @@ class ClickableKeyLabel(QLabel):
         self.hover_style = f"""
             QLabel {{
                 background-color: rgba(255, 255, 255, 30);
-                border-radius: 12px;
+                border-radius: 0px;
                 border: 1px solid {accent_hex()};
                 color: {accent_hex()};
             }}
@@ -89,7 +89,7 @@ class CommandOSD(MageOverlayWindow):
             #OsdBg {{
                 background-color: rgba(20, 20, 20, 230);
                 border: 1px solid {accent_hex()};
-                border-radius: 12px;
+                border-radius: 0px;
             }}
         """)
         layout.addWidget(self.bg_frame)
@@ -120,8 +120,7 @@ class CommandOSD(MageOverlayWindow):
         options_layout.addWidget(self._create_option("T", t("osd.option.translate")))
         self.raid_option = self._create_option("R", t("osd.option.raid"))
         options_layout.addWidget(self.raid_option)
-        self.hud_option = self._create_option("H", t("osd.option.hud"))
-        options_layout.addWidget(self.hud_option)
+        options_layout.addWidget(self._create_option("N", t("osd.option.notes")))
         options_layout.addWidget(self._create_option("S", t("osd.option.settings")))
 
         inner_layout.addLayout(options_layout)
@@ -155,7 +154,7 @@ class CommandOSD(MageOverlayWindow):
                     background-color: #2A2A2A;
                     color: #DDD;
                     border: 1px solid #444;
-                    border-radius: 4px;
+                    border-radius: 0px;
                     padding: 4px 8px;
                     font-size: 12px;
                 }}
@@ -251,9 +250,11 @@ class CommandOSD(MageOverlayWindow):
         super().hideEvent(event)
         self.osd_hidden.emit()
 
+    def set_opacity(self, value: int):
+        self.setWindowOpacity(value / 100)
+
     def set_developer_options_visible(self, visible: bool):
         self.cinematic_option.setVisible(visible)
         self.raid_option.setVisible(visible)
-        self.hud_option.setVisible(visible)
         self.adjustSize()
         self.setFixedSize(self.size())

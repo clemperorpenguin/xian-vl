@@ -23,13 +23,14 @@ the Lens overlay and Chat sidebar.  No main window is shown — the tray
 icon is the primary entry point.
 """
 
+import datetime
 import logging
 import os
 
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QDialog, QFormLayout,
     QLineEdit, QComboBox, QSpinBox, QPushButton, QLabel, QVBoxLayout,
-    QHBoxLayout, QWidget, QCheckBox, QMessageBox, QInputDialog, QTabWidget
+    QHBoxLayout, QWidget, QCheckBox, QMessageBox, QInputDialog, QTabWidget, QSlider
 )
 from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap, QCursor
@@ -46,11 +47,11 @@ from mage.ui.result_bubble import ResultBubble
 from mage.capture.hotkeys import create_hotkey_listener
 from mage.capture.mouse import create_mouse_listener
 from mage.capture.screen import ScreenCapture
-from mage.capture.audio import play_audio_async
+from mage.capture.audio import play_audio_async, SerialAudioPlayer
 from xian.dictionary import LocalDictionary
 from xian.lemonade_url import normalize_lemonade_api_base_url, should_warn_http_to_non_loopback
 from mage.ui.command_osd import CommandOSD
-from mage.ui.hud import HudManager
+from mage.ui.notes_sidebar import NotesSidebar
 from shared_types import constants
 from shared_types.enums import SourceLanguage, TargetLanguage, TranslationMode, TranslationStyle
 from mage.settings_keys import (
@@ -259,22 +260,33 @@ class SettingsDialog(QDialog):
         self.live_raid_lore_save_cb.setChecked(lr_lore_val == "true" or lr_lore_val is True)
         features_layout.addRow(self.live_raid_lore_save_cb)
 
-        self.hud_show_original_cb = QCheckBox(t("settings.checkbox.hud_show_original"))
-        hud_orig_val = settings.value("hud_show_original", "true")
-        self.hud_show_original_cb.setChecked(hud_orig_val == "true" or hud_orig_val is True)
-        features_layout.addRow(self.hud_show_original_cb)
-
-        self.hud_show_pinyin_cb = QCheckBox(t("settings.checkbox.hud_show_pinyin"))
-        hud_pin_val = settings.value("hud_show_pinyin", "false")
-        self.hud_show_pinyin_cb.setChecked(hud_pin_val == "true" or hud_pin_val is True)
-        features_layout.addRow(self.hud_show_pinyin_cb)
-
         self.dev_options_cb = QCheckBox(t("settings.checkbox.dev_options"))
         dev_options_val = settings.value("developer_options", "false")
         self.dev_options_cb.setChecked(dev_options_val == "true" or dev_options_val is True)
         features_layout.addRow(self.dev_options_cb)
         self.dev_options_cb.toggled.connect(self._update_dev_visibility)
         self._update_dev_visibility(self.dev_options_cb.isChecked())
+
+        # Overlay Opacity
+        opacity_row = QHBoxLayout()
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setRange(20, 100)
+        self.opacity_slider.setSingleStep(5)
+        self.opacity_slider.setPageStep(10)
+        opacity_val = int(settings.value("overlay_opacity", 85))
+        self.opacity_slider.setValue(opacity_val)
+        self.opacity_value_label = QLabel(f"{opacity_val}%")
+        self.opacity_value_label.setFixedWidth(36)
+        self.opacity_slider.valueChanged.connect(lambda v: self.opacity_value_label.setText(f"{v}%"))
+        opacity_row.addWidget(self.opacity_slider)
+        opacity_row.addWidget(self.opacity_value_label)
+        features_layout.addRow(t("settings.label.overlay_opacity"), opacity_row)
+
+        # Text Size
+        self.text_size_spin = QSpinBox()
+        self.text_size_spin.setRange(8, 24)
+        self.text_size_spin.setValue(int(settings.value("overlay_text_size", 13)))
+        features_layout.addRow(t("settings.label.text_size"), self.text_size_spin)
 
         self.tabs.addTab(features_tab, "Features")
 
@@ -384,8 +396,8 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
         self.settings.setValue("live_voice_raid", "true" if self.live_voice_raid_cb.isChecked() else "false")
         self.settings.setValue("live_raid_lore_save", "true" if self.live_raid_lore_save_cb.isChecked() else "false")
-        self.settings.setValue("hud_show_original", "true" if self.hud_show_original_cb.isChecked() else "false")
-        self.settings.setValue("hud_show_pinyin", "true" if self.hud_show_pinyin_cb.isChecked() else "false")
+        self.settings.setValue("overlay_opacity", self.opacity_slider.value())
+        self.settings.setValue("overlay_text_size", self.text_size_spin.value())
         target_val = self.target_window_combo.currentText().strip()
         if self.target_window_combo.currentIndex() == 0 or target_val == t("settings.option.none_overlay") or target_val == "None (Standard Overlay Mode)":
             target_val = ""
@@ -400,8 +412,6 @@ class SettingsDialog(QDialog):
     def _update_dev_visibility(self, checked):
         self.live_voice_raid_cb.setVisible(checked)
         self.live_raid_lore_save_cb.setVisible(checked)
-        self.hud_show_original_cb.setVisible(checked)
-        self.hud_show_pinyin_cb.setVisible(checked)
 
 
 class XianApp(QWidget):
@@ -429,9 +439,9 @@ class XianApp(QWidget):
         ))
         self.dictionary = LocalDictionary()
 
-        self._prewarm_worker = PrewarmWorker(self.processor)
-        self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
-        self._prewarm_worker.start()
+        # Translation operations are blocked until the model finishes pre-warming.
+        self._model_warmup_complete = False
+        self._start_prewarm()
 
         self.layout_edit_mode_active = False
 
@@ -448,13 +458,11 @@ class XianApp(QWidget):
         self.hotkey_listener.trigger_cinematic_mode.connect(self.toggle_cinematic_mode)
         self.hotkey_listener.trigger_how_to_say.connect(self.show_how_to_say)
         self.hotkey_listener.trigger_raid_mode.connect(self.start_raid_mode)
+        self.hotkey_listener.trigger_notes.connect(self.toggle_notes)
         self.hotkey_listener.cinematic_capture.connect(self._on_cinematic_trigger)
         self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
         if hasattr(self.hotkey_listener, "command_mode_cancelled"):
             self.hotkey_listener.command_mode_cancelled.connect(self.hide_osd)
-
-        self.hud_manager = HudManager(self)
-        self.hotkey_listener.trigger_hud.connect(self.show_hud_presets)
 
         self.hotkey_listener.start()
 
@@ -472,6 +480,9 @@ class XianApp(QWidget):
         self.mouse_listener = create_mouse_listener()
         self.mouse_listener.left_click.connect(self.on_dialogue_click)
         self.dialogue_bubble = None
+        # Accumulates (original, translation) for the current dialogue session so
+        # the whole session can be saved as a single note.
+        self._dialogue_session: list[tuple[str, str]] = []
 
         self.osd = CommandOSD(self)
         self.osd.initialize_settings(
@@ -490,6 +501,7 @@ class XianApp(QWidget):
         self.osd_timer.timeout.connect(self.hide_osd)
 
         self.chat_sidebar = ChatSidebar(self.processor, parent=self)
+        self.notes_sidebar = NotesSidebar(self)
 
         self.how_to_say_dialog = HowToSayDialog(self)
         self.how_to_say_dialog.translation_requested.connect(self._on_how_to_say_submit)
@@ -515,6 +527,8 @@ class XianApp(QWidget):
         self.window_tracking_timer.timeout.connect(self._track_target_window)
         self.window_tracking_timer.start(100) # Check every 100ms
         self._setup_window_binder()
+        self.apply_overlay_opacity()
+        self.apply_overlay_text_size()
 
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(self)
@@ -553,6 +567,33 @@ class XianApp(QWidget):
         self.tray.show()
 
         logger.info("System tray icon initialised")
+
+    def _start_prewarm(self):
+        """(Re)start model pre-warming. Translation ops are blocked until it finishes."""
+        self._model_warmup_complete = False
+        self._prewarm_worker = PrewarmWorker(self.processor)
+        self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
+        self._prewarm_worker.finished.connect(self._on_prewarm_finished)
+        self._prewarm_worker.start()
+
+    def _on_prewarm_finished(self):
+        """Pre-warm thread has returned (success or failure); allow translation ops.
+
+        We unblock on failure too: a failed prewarm (e.g. on-demand load) should
+        surface the real error from the inference attempt rather than block forever.
+        """
+        self._model_warmup_complete = True
+        logger.info("Model warmup complete; translation operations enabled.")
+
+    def _ensure_model_ready(self) -> bool:
+        """Guard for translation operations. If the model is still pre-warming,
+        show a friendly bubble and return False so the caller aborts."""
+        if getattr(self, "_model_warmup_complete", False):
+            return True
+        bubble = ResultBubble(t("model.loading"), auto_close_ms=4000)
+        self._add_bubble(bubble)
+        logger.info("Translation blocked: model is still warming up.")
+        return False
 
     def _on_prewarm_status(self, msg: str):
         logger.info("[Prewarm Status] %s", msg)
@@ -613,9 +654,7 @@ class XianApp(QWidget):
             )
             self._run_health_check()
             self._safe_stop_worker("_prewarm_worker")
-            self._prewarm_worker = PrewarmWorker(self.processor)
-            self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
-            self._prewarm_worker.start()
+            self._start_prewarm()
 
     def _on_osd_command(self, key: str):
         """Handle option buttons clicked in the OSD."""
@@ -633,23 +672,15 @@ class XianApp(QWidget):
             self.show_how_to_say()
         elif key == "R":
             self.start_raid_mode()
-        elif key == "H":
-            self.show_hud_presets()
-
+        elif key == "N":
+            self.toggle_notes()
         elif key == "S":
             self._open_settings()
 
-    def show_hud_presets(self):
-        """Close OSD and open the HUD preset dialog."""
-        self.hide_osd()
-        dev_val = self.settings.value("developer_options", "false")
-        if not (dev_val == "true" or dev_val is True):
-            logger.info("HUD mode bypassed: developer options disabled")
-            return
-        self.hud_manager.show_hud_presets()
-
     def show_lens(self):
         """Capture the screen and open the Lens overlay."""
+        if not self._ensure_model_ready():
+            return
         self.hide_osd()
         logger.info("Opening Lens overlay")
         # Close any existing lens
@@ -676,6 +707,7 @@ class XianApp(QWidget):
         if action == "dialogue":
             LensOverlayWindow._last_rect = rect
             self.dialogue_mode_active = True
+            self._dialogue_session = []
             self.mouse_listener.start()
             
             # Instantly translate the selected dialogue region using the clean crop
@@ -718,6 +750,8 @@ class XianApp(QWidget):
 
     def _run_inference(self, image_data: bytes, action: str, anchor_rect: QRect):
         """Spawn an InferenceWorker for the given image crop."""
+        if not self._ensure_model_ready():
+            return
         source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
         mode = self.settings.value(KEY_MODE, constants.DEFAULT_MODE)
@@ -765,7 +799,7 @@ class XianApp(QWidget):
         if hasattr(self, "layout_edit_mode_active") and self.layout_edit_mode_active:
             bubble.set_edit_mode(True)
 
-    def _replace_persistent_bubble(self, attr_name: str, text: str, original_text: str = "", anchor: QRect = QRect(), border_color: str | None = None, truncated: bool = False, auto_close_ms: int = 0, show_stop: bool = False) -> ResultBubble:
+    def _replace_persistent_bubble(self, attr_name: str, text: str, original_text: str = "", anchor: QRect = QRect(), border_color: str | None = None, truncated: bool = False, auto_close_ms: int = 0, show_stop: bool = False, confidence: float | None = None, show_add_note: bool = False) -> ResultBubble:
         """Helper to close and recreate a persistent dialogue or cinematic bubble."""
         old_bubble = getattr(self, attr_name, None)
         if old_bubble is not None:
@@ -773,7 +807,7 @@ class XianApp(QWidget):
                 old_bubble.close()
             except Exception:
                 pass
-        
+
         bubble = ResultBubble(
             text,
             original_text=original_text,
@@ -782,6 +816,8 @@ class XianApp(QWidget):
             border_color=border_color,
             truncated=truncated,
             show_stop=show_stop,
+            confidence=confidence,
+            show_add_note=show_add_note,
         )
         setattr(self, attr_name, bubble)
         if truncated:
@@ -869,6 +905,18 @@ class XianApp(QWidget):
         # Detect truncation
         any_truncated = any(getattr(r, 'truncated', False) for r in results)
 
+        # Only surface confidence / Add-to-Notes for real translation content
+        has_translation = bool(results) and bool(translation_combined.strip())
+        conf_display = min_confidence if has_translation else None
+        show_add_note = has_translation
+
+        # Accumulate this phrase into the dialogue session for "save whole session as one note".
+        # Skip consecutive duplicates, since dialogue mode re-captures on a timer.
+        if self.dialogue_mode_active and has_translation:
+            entry = (original_combined, translation_combined)
+            if not self._dialogue_session or self._dialogue_session[-1] != entry:
+                self._dialogue_session.append(entry)
+
         # If a thinking bubble is active, reuse it and update in-place
         if bubble and bubble.isVisible():
             show_stop = (bubble == self.dialogue_bubble)
@@ -877,7 +925,9 @@ class XianApp(QWidget):
                 original_text=original_combined,
                 border_color=border_color,
                 truncated=any_truncated,
-                show_stop=show_stop
+                show_stop=show_stop,
+                confidence=conf_display,
+                show_add_note=show_add_note,
             )
             target_bubble = bubble
             
@@ -899,6 +949,8 @@ class XianApp(QWidget):
                     anchor=anchor,
                     border_color=border_color,
                     truncated=any_truncated,
+                    confidence=conf_display,
+                    show_add_note=show_add_note,
                 )
             elif self.dialogue_mode_active:
                 target_bubble = self._replace_persistent_bubble(
@@ -910,6 +962,8 @@ class XianApp(QWidget):
                     truncated=any_truncated,
                     auto_close_ms=30000,
                     show_stop=True,
+                    confidence=conf_display,
+                    show_add_note=show_add_note,
                 )
             else:
                 bubble = ResultBubble(
@@ -918,6 +972,8 @@ class XianApp(QWidget):
                     anchor_rect=anchor,
                     border_color=border_color,
                     truncated=any_truncated,
+                    confidence=conf_display,
+                    show_add_note=show_add_note,
                 )
                 target_bubble = bubble
                 if any_truncated:
@@ -991,6 +1047,41 @@ class XianApp(QWidget):
             lambda b=bubble: self._on_speak_requested(b, source=False)
         )
         bubble.stop_requested.connect(self.disable_dialogue_mode)
+        bubble.add_to_notes_requested.connect(
+            lambda b=bubble: self._on_bubble_add_to_notes(b)
+        )
+
+    def _on_bubble_add_to_notes(self, bubble):
+        """Save a bubble's translation to Notes. For the dialogue bubble, save the
+        entire accumulated session as one note."""
+        if bubble is getattr(self, "dialogue_bubble", None) and self._dialogue_session:
+            lines = []
+            for i, (orig, trans) in enumerate(self._dialogue_session, 1):
+                lines.append(f"[{i}] {orig}\n    ➔ {trans}")
+            content = "\n\n".join(lines)
+            stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            title = f"{t('notes.title.dialogue_session')} — {stamp}"
+            self.notes_sidebar.add_note(title, content, tags=["dialogue"])
+        else:
+            original = getattr(bubble, "_original", "") or ""
+            translation = getattr(bubble, "_text", "") or ""
+            if not translation.strip():
+                return
+            self.notes_sidebar.add_note_from_translation(original, translation)
+        bubble.mark_note_saved()
+
+    def _on_raid_add_to_notes(self):
+        """Save the whole raid transcript as a single note."""
+        if not self.raid_window or not self.raid_window._entries:
+            return
+        lines = [
+            f"[{ts}] {orig}\n    ➔ {trans}"
+            for ts, orig, trans in self.raid_window._entries
+        ]
+        content = "\n\n".join(lines)
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        title = f"{t('notes.title.raid_session')} — {stamp}"
+        self.notes_sidebar.add_note(title, content, tags=["raid"])
 
     def disable_dialogue_mode(self):
         if self.dialogue_mode_active:
@@ -1161,9 +1252,32 @@ class XianApp(QWidget):
                     )
             self.chat_sidebar.raise_()
 
+    # Notes
+    def toggle_notes(self):
+        """Toggle the notes sidebar visibility."""
+        self.hide_osd()
+        if self.notes_sidebar.isVisible():
+            self.notes_sidebar.hide()
+        else:
+            self.notes_sidebar.show()
+            if self.target_binder:
+                self._apply_transient_parent(self.notes_sidebar)
+                geom = self.target_binder.get_geometry()
+                if geom:
+                    tx, ty, tw, th = geom
+                    self.notes_sidebar.setGeometry(
+                        tx,
+                        ty,
+                        self.notes_sidebar.width(),
+                        th
+                    )
+            self.notes_sidebar.raise_()
+
     # How to say
     def show_how_to_say(self):
         self.hide_osd()
+        if not self._ensure_model_ready():
+            return
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
         source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
         self.how_to_say_dialog.show_centered(target_lang=target_lang, source_lang=source_lang)
@@ -1352,6 +1466,8 @@ class XianApp(QWidget):
             bubble = ResultBubble(t("cinematic.status.deactivated"), auto_close_ms=3000)
             self._add_bubble(bubble)
         else:
+            if not self._ensure_model_ready():
+                return
             if not CinematicLensOverlay._last_rects:
                 # Open Cinematic Lens for selection
                 self._show_cinematic_lens()
@@ -1449,6 +1565,9 @@ class XianApp(QWidget):
             self.stop_raid_mode()
             return
 
+        if not self._ensure_model_ready():
+            return
+
         logger.info("Triggered Raid Mode")
         
         # Instantiate/show the RaidWindow
@@ -1456,6 +1575,7 @@ class XianApp(QWidget):
             self.raid_window = RaidWindow(self.settings, parent=self)
             self.raid_window.audio_toggled.connect(self._on_raid_audio_toggled)
             self.raid_window.stop_requested.connect(self.stop_raid_mode)
+            self.raid_window.add_to_notes_requested.connect(self._on_raid_add_to_notes)
             self._apply_transient_parent(self.raid_window)
 
         self.raid_window.clear_log()
@@ -1477,8 +1597,9 @@ class XianApp(QWidget):
         )
 
         worker.chunk_translated.connect(
-            lambda transcript, translation, audio_bytes, w=worker: self._on_chunk_translated(transcript, translation, audio_bytes, w)
+            lambda transcript, translation, w=worker: self._on_chunk_translated(transcript, translation, w)
         )
+        worker.audio_ready.connect(self._on_raid_audio_ready)
         worker.error.connect(
             lambda msg, w=worker: self._on_raid_error(msg, w)
         )
@@ -1486,6 +1607,11 @@ class XianApp(QWidget):
             lambda text, w=worker: self._on_raid_progress(text, w)
         )
         worker.finished.connect(lambda w=worker: self._cleanup_raid_worker(w))
+
+        # Serialized playback for raid speech (one utterance at a time).
+        if not getattr(self, "_raid_player", None):
+            self._raid_player = SerialAudioPlayer()
+        self._raid_player.start()
 
         self._raid_worker = worker
         self._workers.append(worker)
@@ -1497,6 +1623,9 @@ class XianApp(QWidget):
             logger.info("Stopping Raid Mode")
             self._raid_worker.stop()
             self._raid_worker = None
+        if getattr(self, "_raid_player", None):
+            self._raid_player.stop()
+            self._raid_player = None
         if hasattr(self, "raid_window") and self.raid_window:
             self.raid_window.close()
 
@@ -1510,6 +1639,9 @@ class XianApp(QWidget):
     def _on_raid_audio_toggled(self, checked):
         if hasattr(self, "_raid_worker") and self._raid_worker is not None:
             self._raid_worker.set_audio_enabled(checked)
+        # Turning audio off stops speech immediately (flush pending + current).
+        if not checked and getattr(self, "_raid_player", None):
+            self._raid_player.flush()
 
     def _on_raid_progress(self, text, worker):
         if hasattr(self, "raid_window") and self.raid_window and self.raid_window.isVisible():
@@ -1523,23 +1655,18 @@ class XianApp(QWidget):
             elif "speech" in text.lower():
                 state = "listening"
                 text = t("raid.window.status.listening")
-            elif "synthesiz" in text.lower():
-                state = "processing"
-                text = t("raid.window.status.processing")
             self.raid_window.set_status(text, state)
 
-    def _on_chunk_translated(self, transcript, translation, audio_bytes, worker):
+    def _on_chunk_translated(self, transcript, translation, worker):
         logger.info("Raid chunk translated: %s -> %s", transcript, translation)
-        
+
         if hasattr(self, "raid_window") and self.raid_window and self.raid_window.isVisible():
             self.raid_window.append_translation(transcript, translation)
 
-        # Sequential background TTS synthesis was executed inside RaidWorker.
-        # Play the received WAV bytes directly in the background thread.
-        live_voice_raid = self.settings.value("live_voice_raid", "false")
-        if (live_voice_raid == "true" or live_voice_raid is True) and audio_bytes:
-            from mage.capture.audio import play_audio_async
-            play_audio_async(audio_bytes)
+    def _on_raid_audio_ready(self, audio_bytes):
+        """Stage-3 speech arrived; queue it for serialized, non-overlapping playback."""
+        if getattr(self, "_raid_player", None) and audio_bytes:
+            self._raid_player.enqueue(audio_bytes)
 
     def _on_raid_error(self, msg, worker):
         logger.error("Raid Mode error: %s", msg)
@@ -1639,9 +1766,7 @@ class XianApp(QWidget):
             self._run_health_check()
             
             self._safe_stop_worker("_prewarm_worker")
-            self._prewarm_worker = PrewarmWorker(self.processor)
-            self._prewarm_worker.status_changed.connect(self._on_prewarm_status)
-            self._prewarm_worker.start()
+            self._start_prewarm()
             
             # Apply new leader key
             new_leader = self.settings.value(KEY_LEADER_KEY, constants.DEFAULT_LEADER_KEY)
@@ -1658,8 +1783,30 @@ class XianApp(QWidget):
             self.how_to_say_dialog.restore_geometry()
             if hasattr(self, "raid_window") and self.raid_window:
                 self.raid_window.restore_geometry()
-                
+
+            self.apply_overlay_opacity()
+            self.apply_overlay_text_size()
+
             logger.info("Settings updated and applied")
+
+    def apply_overlay_opacity(self):
+        value = int(self.settings.value("overlay_opacity", 85))
+        for overlay in self._all_overlays():
+            if hasattr(overlay, "set_opacity"):
+                overlay.set_opacity(value)
+
+    def apply_overlay_text_size(self):
+        px = int(self.settings.value("overlay_text_size", 13))
+        for overlay in self._all_overlays():
+            if hasattr(overlay, "set_text_size"):
+                overlay.set_text_size(px)
+
+    def _all_overlays(self):
+        overlays = [self.osd, self.chat_sidebar, self.notes_sidebar, self.how_to_say_dialog]
+        if hasattr(self, "raid_window") and self.raid_window:
+            overlays.append(self.raid_window)
+        overlays.extend(self._bubbles)
+        return overlays
 
     def toggle_layout_edit_mode(self):
         """Toggle UI Layout Edit Mode for all overlays."""
@@ -1694,12 +1841,9 @@ class XianApp(QWidget):
         for bubble in self._bubbles:
             if bubble.isVisible():
                 bubble.set_edit_mode(active)
-                
-        # All active HUD tooltips
-        if hasattr(self, "hud_manager") and self.hud_manager:
-            for widget in self.hud_manager.tooltip_widgets:
-                if widget.isVisible():
-                    widget.set_edit_mode(active)
+
+        if hasattr(self, "notes_sidebar") and self.notes_sidebar:
+            self.notes_sidebar.set_edit_mode(active)
 
     def _is_valid_widget(self, w):
         if w is None:

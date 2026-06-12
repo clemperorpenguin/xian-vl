@@ -202,6 +202,10 @@ class ChatSidebar(MageOverlayWindow):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         
+        _text_size = 14
+        if self.app and hasattr(self.app, "settings") and self.app.settings:
+            _text_size = int(self.app.settings.value("overlay_text_size", 13)) + 1
+
         # Style
         self.setStyleSheet(f"""
             QWidget {{
@@ -212,21 +216,21 @@ class ChatSidebar(MageOverlayWindow):
             QTextEdit, QTextBrowser {{
                 background-color: transparent;
                 border: none;
-                font-size: 14px;
+                font-size: {_text_size}px;
             }}
             QLineEdit {{
                 background-color: #333;
                 border: 1px solid #555;
-                border-radius: 4px;
+                border-radius: 0px;
                 padding: 8px;
-                font-size: 14px;
+                font-size: {_text_size}px;
             }}
             QPushButton {{
                 background-color: {accent_hex()};
                 color: white;
                 border: none;
                 padding: 8px 12px;
-                border-radius: 4px;
+                border-radius: 0px;
                 font-weight: bold;
             }}
             QPushButton:hover {{
@@ -436,6 +440,41 @@ class ChatSidebar(MageOverlayWindow):
             except Exception as e:
                 logger.error("Failed to replay audio: %s", e)
         
+    def set_opacity(self, value: int):
+        self.setWindowOpacity(value / 100)
+
+    def set_text_size(self, px: int):
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: rgba(20, 20, 20, 240);
+                color: white;
+                border-left: 1px solid {accent_hex()};
+            }}
+            QTextEdit, QTextBrowser {{
+                background-color: transparent;
+                border: none;
+                font-size: {px + 1}px;
+            }}
+            QLineEdit {{
+                background-color: #333;
+                border: 1px solid #555;
+                border-radius: 0px;
+                padding: 8px;
+                font-size: {px + 1}px;
+            }}
+            QPushButton {{
+                background-color: {accent_hex()};
+                color: white;
+                border: none;
+                padding: 8px 12px;
+                border-radius: 0px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {accent_hover_hex()};
+            }}
+        """)
+
     def showEvent(self, event):
         super().showEvent(event)
         self.activateWindow()
