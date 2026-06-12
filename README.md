@@ -113,9 +113,6 @@ The monorepo contains the core production-ready MAGE client as well as experimen
     └── shared-types/     # 📦 Canonical models, constants, and shared types
 ```
 
-> [!WARNING]
-> **ASR / Audio Limitation**: Sending live audio stream uploads to Lemonade is currently broken due to server-side backend limitations. Consequently, live speech translation features (such as **Raid Mode**) are disabled. All visual OCR, text translation, dictionary, and chat grounding features are fully functional.
-
 ---
 
 ## 📜 License
