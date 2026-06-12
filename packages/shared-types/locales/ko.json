@@ -6,6 +6,8 @@
   "settings.label.target_language": "목어:",
   "settings.label.mode": "모드:",
   "settings.label.leader_key": "리더 키:",
+  "settings.label.overlay_toggle_key": "오버레이 표시/숨기기 키:",
+  "tray.menu.toggle_overlays": "👁 오버레이 표시/숨기기",
   "settings.label.ui_language": "UI 언어:",
   "settings.label.styles": "스타일:",
   "settings.label.max_tokens": "최대 토큰:",

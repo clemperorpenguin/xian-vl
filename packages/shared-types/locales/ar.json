@@ -6,6 +6,8 @@
   "settings.label.target_language": "اللغة المستهدفة:",
   "settings.label.mode": "الوضع:",
   "settings.label.leader_key": "مفتاح القائد:",
+  "settings.label.overlay_toggle_key": "مفتاح إظهار/إخفاء التراكبات:",
+  "tray.menu.toggle_overlays": "👁 إظهار/إخفاء التراكبات",
   "settings.label.ui_language": "لغة واجهة المستخدم:",
   "settings.label.styles": "الأناقة:",
   "settings.label.max_tokens": "الحد الأقصى للرموز:",

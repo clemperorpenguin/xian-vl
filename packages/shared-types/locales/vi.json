@@ -6,6 +6,8 @@
   "settings.label.target_language": "Ngôn ngữ đích:",
   "settings.label.mode": "Chế độ:",
   "settings.label.leader_key": "Chốt điều khiển chính:",
+  "settings.label.overlay_toggle_key": "Phím hiện/ẩn lớp phủ:",
+  "tray.menu.toggle_overlays": "👁 Hiện/ẩn lớp phủ",
   "settings.label.ui_language": "Ngôn ngữ giao diện:",
   "settings.label.styles": "Phong cách:",
   "settings.label.max_tokens": "Số token tối đa:",

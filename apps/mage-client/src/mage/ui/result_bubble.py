@@ -130,6 +130,10 @@ class ResultBubble(MageOverlayWindow):
 
         # Original text (collapsed by default)
         self._orig_label = QLabel(original_text)
+        # Model-generated text is never trusted as markup: PlainText stops Qt
+        # from interpreting stray tags (e.g. <img src="http://..."> would
+        # otherwise trigger an outbound fetch when the bubble is shown).
+        self._orig_label.setTextFormat(Qt.TextFormat.PlainText)
         self._orig_label.setWordWrap(True)
         self._orig_label.setStyleSheet(f"color: #bbb; font-size: {_text_size - 1}px;")
         self._orig_label.setMaximumHeight(60)
@@ -138,6 +142,7 @@ class ResultBubble(MageOverlayWindow):
 
         # Translation
         self._trans_label = QLabel(text)
+        self._trans_label.setTextFormat(Qt.TextFormat.PlainText)
         self._trans_label.setWordWrap(True)
         self._trans_label.setFont(QFont("sans-serif", _text_size))
         self._trans_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -212,7 +217,7 @@ class ResultBubble(MageOverlayWindow):
             QTimer.singleShot(auto_close_ms, self.close)
 
         self.show()
-        self.raise_()
+        self.promote()
 
     # ------------------------------------------------------------------
     def _position_near(self, rect: QRect):
@@ -336,8 +341,8 @@ class ResultBubble(MageOverlayWindow):
             
         if not has_saved and self._anchor_rect and not self._anchor_rect.isEmpty():
             self._position_near(self._anchor_rect)
-            
-        self.raise_()
+
+        self.promote()
 
     def _on_continue_clicked(self):
         self._continue_btn.setText(t("bubble.status.continuing"))

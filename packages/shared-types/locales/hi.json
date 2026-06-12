@@ -6,6 +6,8 @@
   "settings.label.target_language": "लक्ष्य भाषा:",
   "settings.label.mode": "प्रकार:",
   "settings.label.leader_key": "लीडर की (हॉटकी):",
+  "settings.label.overlay_toggle_key": "ओवरले दिखाएं/छिपाएं कुंजी:",
+  "tray.menu.toggle_overlays": "👁 ओवरले दिखाएं/छिपाएं",
   "settings.label.ui_language": "UI भाषा:",
   "settings.label.styles": "शैलियां:",
   "settings.label.max_tokens": "अधिकतम टोकन्स:",

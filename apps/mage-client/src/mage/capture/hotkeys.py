@@ -39,6 +39,7 @@ class HotkeyListener(QObject):
     command_mode_cancelled = pyqtSignal()
     trigger_raid_mode = pyqtSignal()
     trigger_notes = pyqtSignal()
+    toggle_overlays = pyqtSignal()
 
     mouse_position_updated = pyqtSignal(int, int)
 
@@ -49,6 +50,9 @@ class HotkeyListener(QObject):
         pass
 
     def set_leader_key(self, leader_string: str):
+        pass
+
+    def set_overlay_toggle_key(self, key_token: str):
         pass
 
     def seed_mouse_position(self, x: int, y: int, width: int, height: int):
@@ -76,12 +80,16 @@ if sys.platform == "linux":
             self.leader_mod = 'shift'
             self.command_mode_active = False
             self.command_mode_end_time = 0.0
-            
+
+            # Dedicated overlay show/hide gesture: double-tap right shift.
+            self.overlay_toggle_key = 'rshift'
+
             self.cinematic_mode_active = False
-            
+
             self.modifiers = {}
             self.mod_clean = {}
             self.last_leader_press_time = {}
+            self.last_overlay_press_time = {}
             
             self.mouse_x = 0
             self.mouse_y = 0
@@ -153,11 +161,25 @@ if sys.platform == "linux":
                 if len(parts) > 0:
                     self.leader_mod = parts[-1]  # "shift", "ctrl", "alt", "super"
 
+        def set_overlay_toggle_key(self, key_token: str):
+            with self._lock:
+                token = (key_token or "").strip().lower()
+                if token in ('rshift', 'lshift', 'rctrl', 'ralt', 'super'):
+                    self.overlay_toggle_key = token
+
         def _is_leader_mod_key(self, keycode):
             if self.leader_mod == 'shift': return keycode in (42, 54)
             if self.leader_mod == 'ctrl': return keycode in (29, 97)
             if self.leader_mod == 'alt': return keycode in (56, 100)
             if self.leader_mod == 'super': return keycode in (125, 126)
+            return False
+
+        def _is_overlay_toggle_key(self, keycode):
+            if self.overlay_toggle_key == 'rshift': return keycode == 54  # right shift
+            if self.overlay_toggle_key == 'lshift': return keycode == 42  # left shift
+            if self.overlay_toggle_key == 'rctrl': return keycode == 97
+            if self.overlay_toggle_key == 'ralt': return keycode == 100
+            if self.overlay_toggle_key == 'super': return keycode in (125, 126)
             return False
 
         def _monitor_devices_loop(self):
@@ -241,6 +263,8 @@ if sys.platform == "linux":
                         del self.mod_clean[device.path]
                     if device.path in self.last_leader_press_time:
                         del self.last_leader_press_time[device.path]
+                    if device.path in self.last_overlay_press_time:
+                        del self.last_overlay_press_time[device.path]
 
         def _handle_event(self, device_path: str, event):
             """Process input events."""
@@ -289,6 +313,23 @@ if sys.platform == "linux":
                 if not is_modifier:
                     self.mod_clean[device_path] = False
 
+                # Overlay toggle (right shift) is checked first and always
+                # returns, so it never falls through to the leader logic even
+                # when the leader is also 'shift'.
+                if self._is_overlay_toggle_key(keycode):
+                    if self.mod_clean.get(device_path, True) and (now - self.last_overlay_press_time.get(device_path, 0)) < 0.4:
+                        self.last_overlay_press_time[device_path] = 0.0  # reset
+                        logger.info("EvdevListener: Toggle Overlays via %s double-tap", self.overlay_toggle_key)
+                        self.toggle_overlays.emit()
+                    else:
+                        self.last_overlay_press_time[device_path] = now
+                        # Reset the leader timer so an interleaved tap of the
+                        # other shift (rshift→lshift→rshift) can't be misread as
+                        # a double-tap of this gesture.
+                        self.last_leader_press_time[device_path] = 0.0
+                        self.mod_clean[device_path] = True
+                    return
+
                 if self._is_leader_mod_key(keycode):
                     if self.mod_clean.get(device_path, True) and (now - self.last_leader_press_time.get(device_path, 0)) < 0.4:
                         self.last_leader_press_time[device_path] = 0.0 # reset
@@ -304,6 +345,9 @@ if sys.platform == "linux":
                         return
                     else:
                         self.last_leader_press_time[device_path] = now
+                        # Symmetric reset: a stray overlay-key tap mustn't seed a
+                        # false leader double-tap either.
+                        self.last_overlay_press_time[device_path] = 0.0
                         self.mod_clean[device_path] = True
 
                 if self.command_mode_active and keycode == evdev.ecodes.KEY_ESC:
@@ -373,9 +417,11 @@ else:
             self.leader_mod = 'shift'
             self.command_mode_active = False
             self.command_mode_end_time = 0.0
+            self.overlay_toggle_key = 'rshift'
             self.cinematic_mode_active = False
             self.mod_clean = True
             self.last_leader_press_time = 0.0
+            self.last_overlay_press_time = 0.0
 
         def seed_mouse_position(self, x: int, y: int, width: int, height: int):
             pass
@@ -387,13 +433,27 @@ else:
                 if len(parts) > 0:
                     self.leader_mod = parts[-1]
 
+        def set_overlay_toggle_key(self, key_token: str):
+            with self.lock:
+                token = (key_token or "").strip().lower()
+                if token in ('rshift', 'lshift', 'rctrl', 'ralt', 'super'):
+                    self.overlay_toggle_key = token
+
         def _is_leader_mod_key(self, key):
             if self.leader_mod == 'shift': return key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r)
             if self.leader_mod == 'ctrl': return key in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r)
             if self.leader_mod == 'alt': return key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r)
             if self.leader_mod == 'super': return key in (keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r)
             return False
-            
+
+        def _is_overlay_toggle_key(self, key):
+            if self.overlay_toggle_key == 'rshift': return key == keyboard.Key.shift_r
+            if self.overlay_toggle_key == 'lshift': return key == keyboard.Key.shift_l
+            if self.overlay_toggle_key == 'rctrl': return key == keyboard.Key.ctrl_r
+            if self.overlay_toggle_key == 'ralt': return key == keyboard.Key.alt_r
+            if self.overlay_toggle_key == 'super': return key in (keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r)
+            return False
+
         def on_press(self, key):
             with self.lock:
                 is_new_press = key not in self.current_keys
@@ -411,6 +471,21 @@ else:
                     if not is_modifier:
                         self.mod_clean = False
 
+                    # Overlay toggle (right shift) is checked first and always
+                    # returns, so it never falls through to the leader logic.
+                    if self._is_overlay_toggle_key(key):
+                        if self.mod_clean and (now - self.last_overlay_press_time) < 0.4:
+                            self.last_overlay_press_time = 0.0
+                            logger.info("PynputListener: Toggle Overlays via %s double-tap", self.overlay_toggle_key)
+                            self.toggle_overlays.emit()
+                        else:
+                            self.last_overlay_press_time = now
+                            # Reset the leader timer so an interleaved tap of the
+                            # other shift can't be misread as this gesture.
+                            self.last_leader_press_time = 0.0
+                            self.mod_clean = True
+                        return
+
                     if self._is_leader_mod_key(key):
                         if self.mod_clean and (now - self.last_leader_press_time) < 0.4:
                             self.last_leader_press_time = 0.0
@@ -426,6 +501,8 @@ else:
                             return
                         else:
                             self.last_leader_press_time = now
+                            # Symmetric reset against a stray overlay-key tap.
+                            self.last_overlay_press_time = 0.0
                             self.mod_clean = True
 
                 if self.command_mode_active and key == keyboard.Key.esc:

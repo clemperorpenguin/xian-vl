@@ -27,6 +27,10 @@
     "value": "Leader Key:",
     "context": "Label for the Hotkey leader selection field in settings"
   },
+  "settings.label.overlay_toggle_key": {
+    "value": "Show/Hide Overlays Key:",
+    "context": "Label for the double-tap key that toggles visibility of all overlay windows"
+  },
   "settings.label.ui_language": {
     "value": "UI Language:",
     "context": "Label for the UI Language selection field in settings"
@@ -86,6 +90,10 @@
   "tray.menu.chat": {
     "value": "💬 Chat (Leader+A)",
     "context": "Tray menu item to open chat"
+  },
+  "tray.menu.toggle_overlays": {
+    "value": "👁 Show/Hide Overlays",
+    "context": "Tray menu item to show or hide all overlay windows at once"
   },
   "tray.menu.settings": {
     "value": "⚙ Settings… (Leader+S)",

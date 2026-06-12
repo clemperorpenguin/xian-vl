@@ -26,6 +26,7 @@ icon is the primary entry point.
 import datetime
 import logging
 import os
+import time
 
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QDialog, QFormLayout,
@@ -44,6 +45,7 @@ from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.how_to_say import HowToSayDialog
 from mage.ui.raid_window import RaidWindow
 from mage.ui.result_bubble import ResultBubble
+from mage.ui.overlay_base import MageOverlayWindow
 from mage.capture.hotkeys import create_hotkey_listener
 from mage.capture.mouse import create_mouse_listener
 from mage.capture.screen import ScreenCapture
@@ -56,7 +58,7 @@ from shared_types import constants
 from shared_types.enums import SourceLanguage, TargetLanguage, TranslationMode, TranslationStyle
 from mage.settings_keys import (
     KEY_API_URL, KEY_API_MODEL, KEY_SOURCE_LANG, KEY_TARGET_LANG,
-    KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY,
+    KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY, KEY_OVERLAY_TOGGLE_KEY,
     KEY_GPU_UTIL, KEY_DIALOGUE_DELAY,
     KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG
 )
@@ -240,6 +242,17 @@ class SettingsDialog(QDialog):
             self.leader_combo.setCurrentIndex(idx)
         features_layout.addRow(t("settings.label.leader_key"), self.leader_combo)
 
+        self.overlay_toggle_combo = QComboBox()
+        self.overlay_toggle_combo.addItem("Right Shift", "rshift")
+        self.overlay_toggle_combo.addItem("Right Ctrl", "rctrl")
+        self.overlay_toggle_combo.addItem("Right Alt", "ralt")
+        self.overlay_toggle_combo.addItem("Super", "super")
+        toggle_val = settings.value(KEY_OVERLAY_TOGGLE_KEY, constants.DEFAULT_OVERLAY_TOGGLE_KEY)
+        t_idx = self.overlay_toggle_combo.findData(toggle_val)
+        if t_idx >= 0:
+            self.overlay_toggle_combo.setCurrentIndex(t_idx)
+        features_layout.addRow(t("settings.label.overlay_toggle_key"), self.overlay_toggle_combo)
+
         self.auto_continue_cb = QCheckBox(t("settings.checkbox.auto_continue"))
         auto_val = settings.value(KEY_AUTO_CONTINUE, "false")
         self.auto_continue_cb.setChecked(auto_val == "true" or auto_val is True)
@@ -390,6 +403,7 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_STYLES, selected_styles)
         self.settings.setValue(KEY_MAX_TOKENS, self.tokens_spin.value())
         self.settings.setValue(KEY_LEADER_KEY, self.leader_combo.currentData())
+        self.settings.setValue(KEY_OVERLAY_TOGGLE_KEY, self.overlay_toggle_combo.currentData())
         self.settings.setValue(KEY_GPU_UTIL, self.gpu_combo.currentText())
         self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
@@ -450,7 +464,11 @@ class XianApp(QWidget):
         initial_leader = self.settings.value(KEY_LEADER_KEY, constants.DEFAULT_LEADER_KEY)
         if hasattr(self.hotkey_listener, "set_leader_key"):
             self.hotkey_listener.set_leader_key(initial_leader)
-            
+
+        initial_toggle = self.settings.value(KEY_OVERLAY_TOGGLE_KEY, constants.DEFAULT_OVERLAY_TOGGLE_KEY)
+        if hasattr(self.hotkey_listener, "set_overlay_toggle_key"):
+            self.hotkey_listener.set_overlay_toggle_key(initial_toggle)
+
         self.hotkey_listener.trigger_lens.connect(self.show_lens)
         self.hotkey_listener.trigger_chat.connect(self.toggle_chat)
         self.hotkey_listener.trigger_settings.connect(self._open_settings)
@@ -463,6 +481,8 @@ class XianApp(QWidget):
         self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
         if hasattr(self.hotkey_listener, "command_mode_cancelled"):
             self.hotkey_listener.command_mode_cancelled.connect(self.hide_osd)
+        if hasattr(self.hotkey_listener, "toggle_overlays"):
+            self.hotkey_listener.toggle_overlays.connect(self.toggle_all_overlays)
 
         self.hotkey_listener.start()
 
@@ -513,6 +533,12 @@ class XianApp(QWidget):
         self._pull_worker = None
         self._bubbles: list = []
         self._active_bubbles: dict[InferenceWorker, ResultBubble] = {}
+
+        # Overlay show/hide gesture (double-tap right shift) state. The restore
+        # queue itself lives on MageOverlayWindow (the suppression chokepoint).
+        self._overlays_hidden = False
+        # Throttle for the periodic "stay on top" re-assert in the tracking loop.
+        self._last_promote_ts = 0.0
         self._model_pull_attempted: bool = False
 
         self._setup_tray()
@@ -547,6 +573,9 @@ class XianApp(QWidget):
 
         chat_action = menu.addAction(t("tray.menu.chat"))
         chat_action.triggered.connect(self.toggle_chat)
+
+        overlays_action = menu.addAction(t("tray.menu.toggle_overlays"))
+        overlays_action.triggered.connect(self.toggle_all_overlays)
 
         menu.addSeparator()
 
@@ -1772,6 +1801,10 @@ class XianApp(QWidget):
             new_leader = self.settings.value(KEY_LEADER_KEY, constants.DEFAULT_LEADER_KEY)
             if hasattr(self.hotkey_listener, "set_leader_key"):
                 self.hotkey_listener.set_leader_key(new_leader)
+
+            new_toggle = self.settings.value(KEY_OVERLAY_TOGGLE_KEY, constants.DEFAULT_OVERLAY_TOGGLE_KEY)
+            if hasattr(self.hotkey_listener, "set_overlay_toggle_key"):
+                self.hotkey_listener.set_overlay_toggle_key(new_toggle)
                 
             self._setup_window_binder()
             dev_val = self.settings.value("developer_options", "false")
@@ -1807,6 +1840,50 @@ class XianApp(QWidget):
             overlays.append(self.raid_window)
         overlays.extend(self._bubbles)
         return overlays
+
+    def _collect_overlays(self):
+        """Return every live overlay widget (chrome + all bubbles), validated.
+
+        Single source of truth for the binder visibility loop, the periodic
+        promote tick, and the show/hide-all gesture.
+        """
+        raw = [
+            getattr(self, "osd", None),
+            getattr(self, "chat_sidebar", None),
+            getattr(self, "notes_sidebar", None),
+            getattr(self, "how_to_say_dialog", None),
+            getattr(self, "cinematic_bubble", None),
+            getattr(self, "raid_window", None),
+            getattr(self, "dialogue_bubble", None),
+        ]
+        raw.extend(self._bubbles)
+        raw.extend(self._active_bubbles.values())
+        seen = set()
+        overlays = []
+        for w in raw:
+            if w is None or id(w) in seen:
+                continue
+            if self._is_valid_widget(w):
+                seen.add(id(w))
+                overlays.append(w)
+        return overlays
+
+    def toggle_all_overlays(self):
+        """Show or hide every overlay at once (double-tap right shift gesture).
+
+        A user-initiated hide takes precedence over the window binder's
+        auto-show; toggling back hands control to the binder again.
+        """
+        self._overlays_hidden = not self._overlays_hidden
+        if self._overlays_hidden:
+            # MageOverlayWindow owns the suppression mode: it hides the current
+            # overlays AND captures any shown afterwards (e.g. a translation that
+            # finishes while hidden), so they all reappear together on un-hide.
+            MageOverlayWindow.hide_all_overlays(self._collect_overlays())
+            logger.info("Overlays hidden via toggle gesture")
+        else:
+            MageOverlayWindow.show_all_overlays()
+            logger.info("Overlays restored via toggle gesture")
 
     def toggle_layout_edit_mode(self):
         """Toggle UI Layout Edit Mode for all overlays."""
@@ -1899,6 +1976,20 @@ class XianApp(QWidget):
                 logger.debug("Failed to set transient parent for widget %s: %s", widget, e)
 
     def _track_target_window(self):
+        # Periodically re-assert "stay on top" for every visible overlay, even
+        # when no target window is bound. This keeps the HUD above a game that
+        # re-raises itself, without an expensive call on every 100ms tick.
+        if not self._overlays_hidden:
+            now_ts = time.monotonic()
+            if now_ts - self._last_promote_ts >= 0.75:
+                self._last_promote_ts = now_ts
+                for overlay in self._collect_overlays():
+                    if overlay.isVisible() and hasattr(overlay, "promote"):
+                        try:
+                            overlay.promote()
+                        except Exception as e:
+                            logger.debug("promote() failed for %s: %s", overlay, e)
+
         if not self.target_binder:
             return
 
@@ -1956,14 +2047,15 @@ class XianApp(QWidget):
                 if self._is_valid_widget(w):
                     overlays.append(w)
 
-            # Update visibility based on target active state
+            # Update visibility based on target active state. A user-initiated
+            # hide (toggle gesture) takes precedence over binder auto-show.
             for overlay in overlays:
                 if not target_should_be_visible:
                     # Hide overlay if visible and not already marked
                     if overlay.isVisible():
                         overlay.setVisible(False)
                         overlay._temp_hidden_by_binder = True
-                else:
+                elif not self._overlays_hidden:
                     # Restore visibility if temporarily hidden by binder
                     if getattr(overlay, "_temp_hidden_by_binder", False):
                         overlay.setVisible(True)

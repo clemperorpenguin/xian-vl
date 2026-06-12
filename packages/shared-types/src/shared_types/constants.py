@@ -49,6 +49,7 @@ APPLICATION_NAME = "VideoGameTranslator"
 
 # ── Hotkeys ──────────────────────────────────────────────────────────
 DEFAULT_LEADER_KEY = "Double-Tap Shift"
+DEFAULT_OVERLAY_TOGGLE_KEY = "rshift"
 
 # ── GPU ──────────────────────────────────────────────────────────────
 DEFAULT_GPU_MEMORY_UTILIZATION = "Default"

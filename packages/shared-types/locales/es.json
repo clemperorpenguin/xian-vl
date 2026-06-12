@@ -6,6 +6,8 @@
   "settings.label.target_language": "Idioma de destino:",
   "settings.label.mode": "Modo:",
   "settings.label.leader_key": "Tecla líder:",
+  "settings.label.overlay_toggle_key": "Tecla mostrar/ocultar superposiciones:",
+  "tray.menu.toggle_overlays": "👁 Mostrar/ocultar superposiciones",
   "settings.label.ui_language": "Idioma de la interfaz:",
   "settings.label.styles": "Estilos:",
   "settings.label.max_tokens": "Máximo de tokens:",
