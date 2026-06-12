@@ -8,7 +8,7 @@ This document outlines the planned milestones, upcoming features, and long-term 
 
 - [x] **Core HUD & Visual Translation**: PyQt6 overlay, Wayland hotkeys, Grim/Spectacle screenshot integration, local dictionary lookup, translation OSD menus, and settings panel.
 - [x] **Multimodal Omni Integration**: Local Omni routing (`OmniModelRouter`), component auto-discovery via Lemonade, and basic TTS playback.
-- [/] **Unified Audio & Speech (Raid Mode & Live Streaming)**: Client-side Raid Mode Window overlay, custom ToggleSwitch, StatusDot LED, and optimized background TTS pipeline complete. Fully blocked by Lemonade server-side ASR model load failure (Lemonade Issue #2083).
+- [x] **Unified Audio & Speech (Raid Mode & Live Streaming)**: Client-side Raid Mode Window overlay, custom ToggleSwitch, StatusDot LED, and optimized background TTS pipeline complete. Fully blocked by Lemonade server-side ASR model load failure (Lemonade Issue #2083).
 
 ---
 
@@ -17,17 +17,18 @@ This document outlines the planned milestones, upcoming features, and long-term 
 ### 1. Resolve Server-Side ASR Blocker (Lemonade #2083)
 =======
 * **Status**: Client-side UI and background worker pipeline are fully implemented. Speech translation is currently blocked by Lemonade Server Issue #2083, which causes 500 errors when loading Whisper ASR models when lemond is running as a systemd service on Linux.
-* **Goal**: Resolve or work around Lemonade server-side Whisper loading limitations.
+* **Goal**: Resolve or work around Lemonade server-side Whisper loading limitations. (speech backend with streaming incoming)
 * **Approach**: Investigate server-side configuration workarounds for model loading or collaborate with Lemonade core developers. Explore client-side local speech-to-text fallbacks if server-side fixes are delayed.
 
 ### 2. High-Priority MAGE Desktop Features
-* **Bilibili Support**: Support overlay capture and live-translation flows for Bilibili video streams and interface windows, making it easier for users to translate on-screen dialogue and commentary in real-time.
 * [x] **Raid Mode UI Integration**: Draggable overlay window (`RaidWindow`), custom slide switches, status LEDs, and real-time speech logs integrated into the MAGE HUD.
 =======
 * [x] **Static Translations** Static translations on mouseover, eg tooltips for toolbar buttons - implemented in dev branch.
 * [x] **Windows Support** Lightly tested.
-* [ ] **Mac Support** Results returned from embedded lemonade are garbled, needs investigation. Permissions are weird on MacOS. Lightly tested, should work with a LAN or remote node.
-
+* [x] **Mac Support** Lightly tested.
+* [ ] **Embedded Lemonade** Currently produces garbled text, more testing is necessary. Install Lemonade as a separate service.
+* [ ] **Bilibili Support**: Support overlay capture and live-translation flows for Bilibili video streams and interface windows, making it easier for users to translate on-screen dialogue and commentary in real-time.
+* [ ] **Perfect Window Focus** Perfect window focus means the overlay is either up or down. I need to unify this behavior across platforms, there is some weirdness on wayland.
 
 ### 3. Expansion of UI Target Locales
 * **Approach**: Adding additional languages is straightforward. New strings can be appended to the reference [en.json](file:///packages/shared-types/locales/en.json) with description contexts, followed by running:
