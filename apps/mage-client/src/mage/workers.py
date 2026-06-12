@@ -75,6 +75,42 @@ def sanitize_markdown(text: str) -> str:
     """Escape backticks and HTML tags to prevent markdown injection."""
     return text.replace("`", "'").replace("<", "&lt;").replace(">", "&gt;")
 
+
+def whisper_language_hint(source_lang: str) -> str:
+    """Map a configured source language to an ASR (Whisper) language code.
+
+    Falls back to English for anything unrecognized (including "Auto").
+    """
+    s = (source_lang or "").lower()
+    if "chin" in s:
+        return "zh"
+    if "japan" in s:
+        return "ja"
+    if "korea" in s:
+        return "ko"
+    if "russ" in s:
+        return "ru"
+    return "en"
+
+
+def _queue_put_drop_oldest(q: "asyncio.Queue", item) -> None:
+    """Put *item* on a bounded queue, discarding the oldest entry if it is full.
+
+    Keeps the pipeline near-live: under sustained load we drop backlog rather
+    than fall progressively behind.
+    """
+    try:
+        q.put_nowait(item)
+    except asyncio.QueueFull:
+        try:
+            q.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        try:
+            q.put_nowait(item)
+        except asyncio.QueueFull:
+            pass
+
 class InferenceWorker(QThread):
     """Run a single VLM inference off the main thread.
 
@@ -308,7 +344,11 @@ class CinematicWorker(QThread):
                     await self.processor.router.discover_async()
                 asr_model = self.processor.router.asr(active_model)
                 async with LemonadeClient(base_url=base_url_no_v1) as client:
-                    transcript = await client.transcribe(audio_bytes, model=asr_model)
+                    transcript = await client.transcribe(
+                        audio_bytes,
+                        language=whisper_language_hint(self.source_lang),
+                        model=asr_model,
+                    )
             except Exception as e:
                 logger.warning("Audio transcription failed: %s", e)
 
@@ -402,9 +442,16 @@ class RaidWorker(QThread):
     No screen/image processing is involved.
     """
 
-    chunk_translated = pyqtSignal(str, str, bytes)
+    # Stage 2 → UI: text only (transcript, translation). Audio is delivered separately.
+    chunk_translated = pyqtSignal(str, str)
+    # Stage 3 → UI: synthesized speech WAV bytes, ready for playback.
+    audio_ready = pyqtSignal(bytes)
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
+
+    # Bounded queues keep the pipeline near-live (drop-oldest under load).
+    AUDIO_QUEUE_MAX = 3
+    TTS_QUEUE_MAX = 3
 
     def __init__(self, processor, *, target_lang: str = "English", source_lang: str = "Chinese", save_lore: bool = False, audio_enabled: bool = False):
         super().__init__()
@@ -423,15 +470,21 @@ class RaidWorker(QThread):
         logger.info("RaidWorker: Audio output set to %s", enabled)
 
     async def _run_async(self):
+        """Three-stage pipeline so the text path stays near-live:
+
+        Stage 1 (reader)      — drains the recorder pipe into ``_audio_queue``.
+        Stage 2 (this method) — transcribe + translate, emits text immediately.
+        Stage 3 (tts consumer)— synthesizes speech off the critical path.
+        """
         from mage.capture.audio import ContinuousAudioStreamer
-        
+
         self.progress.emit("Initializing live audio capture...")
         streamer = ContinuousAudioStreamer()
         await streamer.start()
 
         base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
         base_url_no_v1 = base_url.removesuffix("/v1")
-        
+
         if self.save_lore:
             try:
                 import datetime
@@ -439,15 +492,20 @@ class RaidWorker(QThread):
                 lore_dir = pathlib.Path.home() / ".local" / "share" / "xian-vl" / "lore"
                 lore_dir.mkdir(parents=True, exist_ok=True)
                 self.lore_filepath = lore_dir / f"Raid_Log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-                
+
                 def _init_lore():
                     with open(self.lore_filepath, "w", encoding="utf-8") as f:
                         f.write(f"# Raid Log ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n\n")
-                
+
                 await asyncio.to_thread(_init_lore)
             except Exception as e:
                 logger.error("Failed to initialize Raid Log file: %s", e)
                 self.save_lore = False
+
+        audio_queue: asyncio.Queue = asyncio.Queue(maxsize=self.AUDIO_QUEUE_MAX)
+        tts_queue: asyncio.Queue = asyncio.Queue(maxsize=self.TTS_QUEUE_MAX)
+        reader_task = None
+        tts_task = None
 
         try:
             active_model = self.processor.config.model_name
@@ -460,108 +518,157 @@ class RaidWorker(QThread):
             self.progress.emit("Listening for speech...")
 
             async with LemonadeClient(base_url=base_url_no_v1) as client:
-                async for wav_chunk in streamer.read_chunks():
-                    if not self._running:
-                        break
-
-                    try:
-                        self.progress.emit("Transcribing audio...")
-                        transcript = await asyncio.wait_for(
-                            client.transcribe(
-                                wav_chunk,
-                                language="zh" if "chin" in self.source_lang.lower() else "en",
-                                model=asr_model
-                            ),
-                            timeout=15.0
-                        )
-                    except (asyncio.TimeoutError, Exception) as e:
-                        logger.warning("Raid Mode transcription failed or timed out: %s", e)
-                        err_msg = str(e).lower()
-                        if "500" in err_msg or "internal server error" in err_msg or "model_load_error" in err_msg:
-                            self.chunk_translated.emit(
-                                "[ASR Server Error]",
-                                "⚠️ ASR Server Error (500): Lemonade failed to load/start the speech-to-text model on the server. Live speech translation is disabled due to server-side backend limitations. (Ref: https://github.com/lemonade-sdk/lemonade/issues/2083)",
-                                b""
-                            )
-                            self._running = False
-                            self.progress.emit("ASR server error (500). Raid mode stopped.")
-                            break
-                        else:
-                            self.progress.emit(f"Transcription failed ({e}), listening...")
-                            continue
-
-                    if not transcript or not transcript.strip():
-                        self.progress.emit("Listening for speech...")
-                        continue
-
-                    self.progress.emit("Translating text...")
-                    system_prompt = (
-                        "You are a translation API. You MUST respond with valid JSON ONLY. "
-                        "Do NOT include markdown formatting, backticks, or any other text outside the JSON object. "
-                        "The JSON object must have exactly one key: 'translation'."
-                    )
-                    user_prompt = f"Translate from {self.source_lang} to {self.target_lang}:\n\n{transcript}"
-                    
-                    try:
-                        response = await asyncio.wait_for(
-                            self.processor.client.chat.completions.create(
-                                model=self.processor.get_model_name(),
-                                messages=[
-                                    {"role": "system", "content": system_prompt},
-                                    {"role": "user", "content": user_prompt}
-                                ],
-                                max_tokens=self.processor.config.max_tokens,
-                                temperature=0.1,
-                                extra_body={"chat_template_kwargs": {"enable_thinking": False}}
-                            ),
-                            timeout=CHAT_AUX_TIMEOUT_SECONDS,
-                        )
-                        choice = response.choices[0] if response.choices else None
-                        final_output = (choice.message.content or "").strip() if choice else ""
-                    except (asyncio.TimeoutError, Exception) as e:
-                        logger.warning("Raid Mode translation failed or timed out: %s", e)
-                        self.progress.emit(f"Translation failed ({e}), listening...")
-                        continue
-                    
-                    translation = extract_translation_json(final_output)
-                    if not translation:
-                        logger.warning("Failed to parse translation from model output.")
-                        translation = "[Translation Failed]"
-
-                    # Sequential background TTS synthesis if audio is enabled
-                    audio_bytes = b""
-                    if getattr(self, "_audio_enabled", False):
-                        try:
-                            self.progress.emit("Synthesizing audio...")
-                            tts_model = self.processor.router.tts(active_model)
-                            if tts_model:
-                                voice_param = "af_heart"
-                                if self.target_lang == "Chinese":
-                                    voice_param = "zf_xiaoxiao"
-                                elif self.target_lang == "Japanese":
-                                    voice_param = "jf_alpha"
-                                
-                                audio_bytes = await asyncio.wait_for(
-                                    client.tts(translation, voice=voice_param, model=tts_model),
-                                    timeout=15.0
-                                )
-                        except Exception as tts_err:
-                            logger.error("Raid Mode sequential TTS synthesis failed: %s", tts_err)
-                            
-                    self.chunk_translated.emit(transcript, translation, audio_bytes)
-                    if self.save_lore and hasattr(self, "lore_filepath"):
-                        try:
-                            def _append_lore():
-                                with open(self.lore_filepath, "a", encoding="utf-8") as f:
-                                    f.write(f"**Source**: {sanitize_markdown(transcript)}\n\n**Translation**: {sanitize_markdown(translation)}\n\n---\n")
-                            await asyncio.to_thread(_append_lore)
-                        except Exception as e:
-                            logger.error("Failed to append to Raid Log file: %s", e)
-
-                    self.progress.emit("Listening for speech...")
-
+                reader_task = asyncio.create_task(self._audio_reader(streamer, audio_queue))
+                tts_task = asyncio.create_task(self._tts_consumer(client, active_model, tts_queue))
+                await self._translate_loop(client, asr_model, audio_queue, tts_queue)
         finally:
+            self._running = False
+            for task in (reader_task, tts_task):
+                if task is not None:
+                    task.cancel()
+            for task in (reader_task, tts_task):
+                if task is not None:
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
             await streamer.stop()
+
+    async def _audio_reader(self, streamer, audio_queue: asyncio.Queue):
+        """Stage 1: continuously drain the recorder so the pipe never backs up."""
+        try:
+            async for wav_chunk in streamer.read_chunks():
+                if not self._running:
+                    break
+                _queue_put_drop_oldest(audio_queue, wav_chunk)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Raid audio reader stopped: %s", e)
+
+    async def _translate_loop(self, client, asr_model, audio_queue: asyncio.Queue, tts_queue: asyncio.Queue):
+        """Stage 2: transcribe + translate. Owns the status indicator."""
+        while self._running:
+            try:
+                wav_chunk = await asyncio.wait_for(audio_queue.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                continue
+
+            try:
+                self.progress.emit("Transcribing audio...")
+                transcript = await asyncio.wait_for(
+                    client.transcribe(
+                        wav_chunk,
+                        language=whisper_language_hint(self.source_lang),
+                        model=asr_model,
+                    ),
+                    timeout=15.0,
+                )
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning("Raid Mode transcription failed or timed out: %s", e)
+                err_msg = str(e).lower()
+                if "500" in err_msg or "internal server error" in err_msg or "model_load_error" in err_msg:
+                    self.chunk_translated.emit(
+                        "[ASR Server Error]",
+                        "⚠️ ASR Server Error (500): Lemonade failed to load/start the speech-to-text model on the server. Live speech translation is disabled due to server-side backend limitations. (Ref: https://github.com/lemonade-sdk/lemonade/issues/2083)",
+                    )
+                    self._running = False
+                    self.progress.emit("ASR server error (500). Raid mode stopped.")
+                    break
+                self.progress.emit(f"Transcription failed ({e}), listening...")
+                continue
+
+            if not transcript or not transcript.strip():
+                self.progress.emit("Listening for speech...")
+                continue
+
+            self.progress.emit("Translating text...")
+            system_prompt = (
+                "You are a translation API. You MUST respond with valid JSON ONLY. "
+                "Do NOT include markdown formatting, backticks, or any other text outside the JSON object. "
+                "The JSON object must have exactly one key: 'translation'."
+            )
+            user_prompt = f"Translate from {self.source_lang} to {self.target_lang}:\n\n{transcript}"
+
+            try:
+                response = await asyncio.wait_for(
+                    self.processor.client.chat.completions.create(
+                        model=self.processor.get_model_name(),
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        max_tokens=self.processor.config.max_tokens,
+                        temperature=0.1,
+                        extra_body={"chat_template_kwargs": {"enable_thinking": False}}
+                    ),
+                    timeout=CHAT_AUX_TIMEOUT_SECONDS,
+                )
+                choice = response.choices[0] if response.choices else None
+                final_output = (choice.message.content or "").strip() if choice else ""
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning("Raid Mode translation failed or timed out: %s", e)
+                self.progress.emit(f"Translation failed ({e}), listening...")
+                continue
+
+            translation = extract_translation_json(final_output)
+            if not translation:
+                logger.warning("Failed to parse translation from model output.")
+                translation = "[Translation Failed]"
+
+            # Stage 2 result reaches the UI immediately; speech is handled off-path.
+            self.chunk_translated.emit(transcript, translation)
+            if self._audio_enabled:
+                _queue_put_drop_oldest(tts_queue, translation)
+
+            if self.save_lore and hasattr(self, "lore_filepath"):
+                try:
+                    def _append_lore():
+                        with open(self.lore_filepath, "a", encoding="utf-8") as f:
+                            f.write(f"**Source**: {sanitize_markdown(transcript)}\n\n**Translation**: {sanitize_markdown(translation)}\n\n---\n")
+                    await asyncio.to_thread(_append_lore)
+                except Exception as e:
+                    logger.error("Failed to append to Raid Log file: %s", e)
+
+            self.progress.emit("Listening for speech...")
+
+    async def _tts_consumer(self, client, active_model, tts_queue: asyncio.Queue):
+        """Stage 3: synthesize speech serially, off the capture/translate path.
+
+        Honors the live audio toggle: items pending when audio is switched off are
+        drained without synthesis, and an in-flight result is discarded.
+        """
+        while self._running:
+            try:
+                translation = await asyncio.wait_for(tts_queue.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                continue
+
+            if not self._audio_enabled:
+                # Audio turned off: drop this pending item (Q4 flush).
+                continue
+
+            try:
+                tts_model = self.processor.router.tts(active_model)
+                if not tts_model:
+                    continue
+                voice_param = "af_heart"
+                if self.target_lang == "Chinese":
+                    voice_param = "zf_xiaoxiao"
+                elif self.target_lang == "Japanese":
+                    voice_param = "jf_alpha"
+
+                audio_bytes = await asyncio.wait_for(
+                    client.tts(translation, voice=voice_param, model=tts_model),
+                    timeout=15.0,
+                )
+                # Discard if audio was switched off while synthesizing.
+                if audio_bytes and self._audio_enabled:
+                    self.audio_ready.emit(audio_bytes)
+            except asyncio.CancelledError:
+                raise
+            except Exception as tts_err:
+                logger.error("Raid Mode TTS synthesis failed: %s", tts_err)
 
     def run(self):
         future = self.processor.engine.submit(self._run_async())

@@ -391,120 +391,84 @@
     "value": "Translating...",
     "context": "Status text when raid mode is translating speech"
   },
-  "osd.option.hud": {
-    "value": "HUD",
-    "context": "OSD option label for static translation HUD mode"
+  "osd.option.notes": {
+    "value": "Notes",
+    "context": "OSD option label for notes sidebar"
   },
-  "hud.preset.dialog.title": {
-    "value": "Static Translation HUD",
-    "context": "Title of the HUD preset selection dialog"
+  "notes.sidebar.title": {
+    "value": "Notes",
+    "context": "Header label for the notes sidebar"
   },
-  "hud.preset.dialog.prompt": {
-    "value": "Choose to load an existing HUD configuration or create a new one:",
-    "context": "Prompt label inside HUD preset selection dialog"
+  "notes.sidebar.button.new": {
+    "value": "New Note",
+    "context": "Button label to create a new note"
   },
-  "hud.preset.dialog.button.load": {
-    "value": "Load Selected Preset",
-    "context": "Button label to load an existing preset"
+  "notes.sidebar.button.edit": {
+    "value": "Edit",
+    "context": "Button label to edit an existing note"
   },
-  "hud.preset.dialog.button.create": {
-    "value": "Create New Preset",
-    "context": "Button label to create a new preset"
-  },
-  "hud.preset.dialog.button.cancel": {
-    "value": "Cancel",
-    "context": "Cancel button inside preset dialog"
-  },
-  "hud.setup.overlay.step1": {
-    "value": "Step 1/2: Click and drag to select the Hover Trigger area (invisible button region). Right-click to cancel.",
-    "context": "Instruction label shown during HUD setup step 1"
-  },
-  "hud.setup.overlay.step2": {
-    "value": "Step 2/2: Click and drag to select the original text Box to be translated (the tooltip). Right-click to cancel.",
-    "context": "Instruction label shown during HUD setup step 2"
-  },
-  "hud.confirm.dialog.title": {
-    "value": "Confirm HUD Button Translation",
-    "context": "Title of the HUD button translation confirmation dialog"
-  },
-  "hud.confirm.dialog.label.original": {
-    "value": "Detected Original Text:",
-    "context": "Label for original text in confirmation dialog"
-  },
-  "hud.confirm.dialog.label.translated": {
-    "value": "Translated Text:",
-    "context": "Label for translated text input in confirmation dialog"
-  },
-  "hud.confirm.dialog.button.confirm": {
-    "value": "Confirm & Save Button",
-    "context": "Button label to confirm and save the translation mapping"
-  },
-  "hud.confirm.dialog.button.recapture": {
-    "value": "Re-capture Translation Region",
-    "context": "Button label to re-select the translation region"
-  },
-  "hud.confirm.dialog.button.cancel": {
-    "value": "Cancel",
-    "context": "Cancel button text"
-  },
-  "hud.setup.status.saved": {
-    "value": "Added button to current preset config.",
-    "context": "Status feedback when a button is added to HUD preset"
-  },
-  "hud.setup.dialog.title": {
-    "value": "HUD Configuration Setup",
-    "context": "Title of the HUD setup control dialog"
-  },
-  "hud.setup.dialog.prompt": {
-    "value": "Configured Buttons: {count}",
-    "context": "Label showing the count of buttons currently configured in the preset"
-  },
-  "hud.setup.dialog.button.add": {
-    "value": "Add Another Button",
-    "context": "Button label to add another hover translation zone"
-  },
-  "hud.setup.dialog.button.save": {
-    "value": "Save Configuration",
-    "context": "Button label to save the HUD preset"
-  },
-  "hud.setup.dialog.save_prompt.title": {
-    "value": "Save HUD Preset",
-    "context": "Title of the preset save name prompt"
-  },
-  "hud.setup.dialog.save_prompt.label": {
-    "value": "Enter a name for the preset configuration:",
-    "context": "Label text asking for a preset name"
-  },
-  "hud.status.activated": {
-    "value": "HUD Mode Active (Preset: {name})",
-    "context": "Tray message when HUD mode is activated"
-  },
-  "hud.status.deactivated": {
-    "value": "HUD Mode Disabled",
-    "context": "Tray message when HUD mode is deactivated"
-  },
-  "hud.countdown.label": {
-    "value": "Hover mouse over the button now!\nCapturing screen in {secs}s...",
-    "context": "Countdown notification label shown to user before screen capture"
-  },
-  "settings.checkbox.hud_show_original": {
-    "value": "Show original text in HUD tooltips",
-    "context": "Checkbox label to show original text in HUD tooltips"
-  },
-  "settings.checkbox.hud_show_pinyin": {
-    "value": "Enable Pinyin in HUD tooltips",
-    "context": "Checkbox label to show Pinyin in HUD tooltips"
-  },
-  "hud.error.no_wayland_backend": {
-    "value": "Global mouse tracking is restricted on this Wayland session. Please ensure evdev access is configured or use a supported compositor.",
-    "context": "Error message shown when HUD cannot start on Wayland because no tracking backend was resolved"
-  },
-  "hud.preset.dialog.button.delete": {
+  "notes.sidebar.button.delete": {
     "value": "Delete",
-    "context": "Button label to delete a selected preset"
+    "context": "Button label to delete a note"
+  },
+  "notes.sidebar.button.save": {
+    "value": "Save",
+    "context": "Button label to save a note"
+  },
+  "notes.sidebar.button.cancel": {
+    "value": "Cancel",
+    "context": "Button label to cancel note editing"
+  },
+  "notes.sidebar.button.close": {
+    "value": "Close",
+    "context": "Button label to close the notes sidebar"
+  },
+  "notes.sidebar.field.title_placeholder": {
+    "value": "Note title...",
+    "context": "Placeholder text for the note title input field"
+  },
+  "notes.sidebar.field.content_placeholder": {
+    "value": "Write your note here...",
+    "context": "Placeholder text for the note content input field"
+  },
+  "notes.sidebar.empty_state": {
+    "value": "No notes yet. Press 'New Note' to get started.",
+    "context": "Message shown when the notes list is empty"
   },
   "settings.button.edit_layout": {
     "value": "Edit UI Layout",
     "context": "Button in settings to edit UI layout"
+  },
+  "settings.label.overlay_opacity": {
+    "value": "Overlay Opacity:",
+    "context": "Label for the overlay opacity slider in settings"
+  },
+  "settings.label.text_size": {
+    "value": "Text Size:",
+    "context": "Label for the overlay text size spinbox in settings"
+  },
+  "bubble.button.add_note": {
+    "value": "📝 Notes",
+    "context": "Button on a translation bubble to save the translation to Notes"
+  },
+  "bubble.button.added": {
+    "value": "✓ Saved",
+    "context": "Transient confirmation label shown after a translation is saved to Notes"
+  },
+  "raid.window.add_note": {
+    "value": "📝 Notes",
+    "context": "Button on the raid window to save the whole transcript to Notes"
+  },
+  "notes.title.dialogue_session": {
+    "value": "Dialogue session",
+    "context": "Title prefix for a note saved from a dialogue-mode translation session"
+  },
+  "notes.title.raid_session": {
+    "value": "Raid session",
+    "context": "Title prefix for a note saved from a raid-mode transcript"
+  },
+  "model.loading": {
+    "value": "⏳ The model is still loading — please wait a moment and try again.",
+    "context": "Shown when a translation is attempted before the model has finished loading"
   }
 }

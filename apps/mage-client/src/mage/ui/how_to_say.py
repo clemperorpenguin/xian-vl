@@ -49,7 +49,7 @@ class HowToSayDialog(MageOverlayWindow):
             #HowToSayBg {{
                 background-color: rgba(20, 20, 20, 240);
                 border: 1px solid {accent_hex()};
-                border-radius: 12px;
+                border-radius: 0px;
             }}
         """)
         layout.addWidget(self.bg_frame)
@@ -80,7 +80,7 @@ class HowToSayDialog(MageOverlayWindow):
                 background-color: #2A2A2A;
                 color: #FFFFFF;
                 border: 1px solid #444;
-                border-radius: 6px;
+                border-radius: 0px;
                 padding: 6px;
                 font-size: 13px;
             }}
@@ -101,7 +101,7 @@ class HowToSayDialog(MageOverlayWindow):
                 background-color: #2A2A2A;
                 color: #FFFFFF;
                 border: 1px solid #444;
-                border-radius: 6px;
+                border-radius: 0px;
                 padding: 6px;
                 font-size: 14px;
             }}
@@ -122,7 +122,7 @@ class HowToSayDialog(MageOverlayWindow):
         btn_style = f"""
             QPushButton {{
                 background-color: #333; color: #EEE; border: 1px solid #555;
-                border-radius: 4px; padding: 6px 12px; font-size: 12px;
+                border-radius: 0px; padding: 6px 12px; font-size: 12px;
             }}
             QPushButton:hover {{ background-color: {accent_hover_hex()}; border: 1px solid {accent_hex()}; }}
             QPushButton:disabled {{ background-color: #222; color: #555; border: 1px solid #333; }}
@@ -190,6 +190,27 @@ class HowToSayDialog(MageOverlayWindow):
             except Exception as e:
                 self.status_label.setText(t("chat.status.error").format(error=e))
                 self.status_label.setStyleSheet("color: #e74c3c;")
+
+    def set_opacity(self, value: int):
+        self.setWindowOpacity(value / 100)
+
+    def set_text_size(self, px: int):
+        self.input_field.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: #2A2A2A; color: #FFFFFF;
+                border: 1px solid #444; border-radius: 0px;
+                padding: 6px; font-size: {px}px;
+            }}
+            QTextEdit:focus {{ border: 1px solid {accent_hex()}; }}
+        """)
+        self.output_field.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: #2A2A2A; color: #FFFFFF;
+                border: 1px solid #444; border-radius: 0px;
+                padding: 6px; font-size: {px}px;
+            }}
+            QTextEdit:focus {{ border: 1px solid {accent_hex()}; }}
+        """)
 
     def set_result(self, translated_text: str):
         self.output_field.setPlainText(translated_text)

@@ -34,6 +34,7 @@ class MageOverlayWindow(QWidget):
         self.app = app or parent
         self._drag_position = QPoint()
         self._is_dragging = False
+        self._system_moving = False
         self._click_through = False
         self._edit_mode_active = False
 
@@ -103,8 +104,13 @@ class MageOverlayWindow(QWidget):
         self.update()  # Repaint to show/hide dashed edit border
 
     def mousePressEvent(self, event):
-        # Allow dragging if edit mode is active, or if window is not click-through
         if event.button() == Qt.MouseButton.LeftButton and (self._edit_mode_active or not self._click_through):
+            handle = self.windowHandle()
+            if handle and handle.startSystemMove():
+                self._system_moving = True
+                event.accept()
+                return
+            # Fallback for platforms where startSystemMove() is unavailable
             self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self._is_dragging = True
             event.accept()
@@ -120,12 +126,22 @@ class MageOverlayWindow(QWidget):
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._is_dragging:
-            self._is_dragging = False
-            self.save_geometry()
-            event.accept()
-        else:
-            super().mouseReleaseEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._system_moving:
+                self._system_moving = False
+                self.save_geometry()
+                event.accept()
+                return
+            if self._is_dragging:
+                self._is_dragging = False
+                self.save_geometry()
+                event.accept()
+                return
+        super().mouseReleaseEvent(event)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.save_geometry()
 
     def paintEvent(self, event):
         super().paintEvent(event)

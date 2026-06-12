@@ -144,10 +144,12 @@ class RaidWindow(MageOverlayWindow):
 
     audio_toggled = pyqtSignal(bool)
     stop_requested = pyqtSignal()
+    add_to_notes_requested = pyqtSignal()
 
     def __init__(self, settings, parent=None):
         super().__init__(window_id="raid_window", app=parent, parent=parent)
         self.settings = settings
+        self._entries: list[tuple[str, str, str]] = []
 
         # Main Layout
         layout = QVBoxLayout(self)
@@ -205,7 +207,7 @@ class RaidWindow(MageOverlayWindow):
                 background-color: rgba(10, 10, 10, 100);
                 color: #E0E0E0;
                 border: 1px solid #2D2D2D;
-                border-radius: 8px;
+                border-radius: 0px;
                 padding: 10px;
                 font-family: sans-serif;
                 font-size: 13px;
@@ -214,7 +216,7 @@ class RaidWindow(MageOverlayWindow):
                 border: none; background: transparent; width: 6px; margin: 0px;
             }}
             QScrollBar::handle:vertical {{
-                background: #555; min-height: 20px; border-radius: 3px;
+                background: #555; min-height: 20px; border-radius: 0px;
             }}
             QScrollBar::handle:vertical:hover {{
                 background: {accent_hex()};
@@ -247,10 +249,15 @@ class RaidWindow(MageOverlayWindow):
         btn_style = f"""
             QPushButton {{
                 background-color: #2D2D2D; color: #EEE; border: 1px solid #444;
-                border-radius: 4px; padding: 4px 10px; font-size: 11px;
+                border-radius: 0px; padding: 4px 10px; font-size: 11px;
             }}
             QPushButton:hover {{ background-color: {accent_hover_hex()}; border: 1px solid {accent_hex()}; }}
         """
+
+        self.add_note_btn = QPushButton(t("raid.window.add_note"))
+        self.add_note_btn.setStyleSheet(btn_style)
+        self.add_note_btn.clicked.connect(self._on_add_to_notes_clicked)
+        bottom.addWidget(self.add_note_btn)
 
         self.clear_btn = QPushButton(t("raid.window.clear"))
         self.clear_btn.setStyleSheet(btn_style)
@@ -261,7 +268,7 @@ class RaidWindow(MageOverlayWindow):
         self.stop_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3d1c1c; color: #ff8a8a; border: 1px solid #732a2a;
-                border-radius: 4px; padding: 4px 10px; font-size: 11px; font-weight: bold;
+                border-radius: 0px; padding: 4px 10px; font-size: 11px; font-weight: bold;
             }
             QPushButton:hover { background-color: #5c2424; border: 1px solid #ff5252; color: #FFF; }
         """)
@@ -279,7 +286,7 @@ class RaidWindow(MageOverlayWindow):
             #RaidWindowRoot {{
                 background-color: rgba(22, 22, 26, 235);
                 border: 1px solid {border};
-                border-radius: 12px;
+                border-radius: 0px;
             }}
         """)
 
@@ -291,6 +298,7 @@ class RaidWindow(MageOverlayWindow):
     def append_translation(self, original: str, translation: str):
         """Append translated phrase to the scroll feed with rich styling."""
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        self._entries.append((timestamp, original, translation))
         accent = accent_hex()
         html = f"""
         <div style="margin-bottom: 10px; line-height: 1.35;">
@@ -309,6 +317,11 @@ class RaidWindow(MageOverlayWindow):
 
     def clear_log(self):
         self.transcript_area.clear()
+        self._entries.clear()
+
+    def _on_add_to_notes_clicked(self):
+        if self._entries:
+            self.add_to_notes_requested.emit()
 
     def _on_audio_toggled(self, checked: bool):
         self.settings.setValue("live_voice_raid", "true" if checked else "false")
@@ -318,6 +331,34 @@ class RaidWindow(MageOverlayWindow):
     def _on_stop_clicked(self):
         self.stop_requested.emit()
         self.close()
+
+    def set_opacity(self, value: int):
+        self.setWindowOpacity(value / 100)
+
+    def set_text_size(self, px: int):
+        self.transcript_area.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: rgba(10, 10, 10, 100);
+                color: #E0E0E0;
+                border: 1px solid #2D2D2D;
+                border-radius: 0px;
+                padding: 10px;
+                font-family: sans-serif;
+                font-size: {px}px;
+            }}
+            QScrollBar:vertical {{
+                border: none; background: transparent; width: 6px; margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: #555; min-height: 20px; border-radius: 0px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {accent_hex()};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+        """)
 
     # --- Window Placement & Geometry Persistence ------------------------------
     def showEvent(self, event):

@@ -38,7 +38,7 @@ class HotkeyListener(QObject):
     command_mode_started = pyqtSignal()
     command_mode_cancelled = pyqtSignal()
     trigger_raid_mode = pyqtSignal()
-    trigger_hud = pyqtSignal()
+    trigger_notes = pyqtSignal()
 
     mouse_position_updated = pyqtSignal(int, int)
 
@@ -350,9 +350,9 @@ if sys.platform == "linux":
                         self.trigger_raid_mode.emit()
                         self.command_mode_active = False
 
-                    elif keycode == evdev.ecodes.KEY_H:
-                        logger.info("EvdevListener: Triggered HUD")
-                        self.trigger_hud.emit()
+                    elif keycode == evdev.ecodes.KEY_N:
+                        logger.info("EvdevListener: Triggered Notes")
+                        self.trigger_notes.emit()
                         self.command_mode_active = False
 
 
@@ -469,9 +469,9 @@ else:
                                 logger.info("PynputListener: Triggered Raid Mode")
                                 self.trigger_raid_mode.emit()
                                 self.command_mode_active = False
-                            elif char == 'h':
-                                logger.info("PynputListener: Triggered HUD")
-                                self.trigger_hud.emit()
+                            elif char == 'n':
+                                logger.info("PynputListener: Triggered Notes")
+                                self.trigger_notes.emit()
                                 self.command_mode_active = False
 
                     except Exception as e:
