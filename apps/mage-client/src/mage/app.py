@@ -31,7 +31,8 @@ import time
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QDialog, QFormLayout,
     QLineEdit, QComboBox, QSpinBox, QPushButton, QLabel, QVBoxLayout,
-    QHBoxLayout, QWidget, QCheckBox, QMessageBox, QInputDialog, QTabWidget, QSlider
+    QHBoxLayout, QWidget, QCheckBox, QMessageBox, QInputDialog, QTabWidget, QSlider,
+    QFileDialog
 )
 from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap, QCursor
@@ -47,6 +48,7 @@ from mage.ui.raid_window import RaidWindow
 from mage.ui.result_bubble import ResultBubble
 from mage.ui.overlay_base import MageOverlayWindow
 from mage.capture.hotkeys import create_hotkey_listener
+from mage.telemetry import get_recorder, TelemetrySampler
 from mage.capture.mouse import create_mouse_listener
 from mage.capture.screen import ScreenCapture
 from mage.capture.audio import play_audio_async, SerialAudioPlayer
@@ -555,6 +557,19 @@ class XianApp(QWidget):
         self._setup_window_binder()
         self.apply_overlay_opacity()
         self.apply_overlay_text_size()
+        self._setup_telemetry()
+
+    def _setup_telemetry(self):
+        """Start periodic host-resource sampling (CPU/GPU/RAM/VRAM).
+
+        The timer lives on the GUI thread but only dispatches a coroutine to the
+        async engine, so no sampling work touches the overlay's hot path.
+        """
+        self._telemetry = get_recorder()
+        self._telemetry_sampler = TelemetrySampler(self.processor, self._telemetry)
+        self._telemetry_timer = QTimer(self)
+        self._telemetry_timer.timeout.connect(self._telemetry_sampler.tick)
+        self._telemetry_timer.start(5000)  # sample every 5s
 
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(self)
@@ -583,6 +598,9 @@ class XianApp(QWidget):
         settings_action.triggered.connect(self._open_settings)
 
         menu.addSeparator()
+
+        perf_action = menu.addAction(t("tray.menu.perf_report"))
+        perf_action.triggered.connect(self._show_perf_report)
 
         about_action = menu.addAction(t("tray.menu.about"))
         about_action.triggered.connect(self.show_about_dialog)
@@ -633,6 +651,32 @@ class XianApp(QWidget):
                 QSystemTrayIcon.MessageIcon.Information,
                 5000
             )
+
+    def _show_perf_report(self):
+        """Render the accumulated telemetry to markdown, copy it to the
+        clipboard, and offer to save it (the perf-deepdive artifact)."""
+        report = self._telemetry.to_markdown()
+        cb = QApplication.clipboard()
+        if cb:
+            cb.setText(report)
+        box = QMessageBox(self)
+        box.setWindowTitle(t("perf.report.title"))
+        box.setText(t("perf.report.copied"))
+        box.setDetailedText(report)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Close
+        )
+        if box.exec() == QMessageBox.StandardButton.Save:
+            path, _ = QFileDialog.getSaveFileName(
+                self, t("perf.report.title"), "mage-performance.md",
+                "Markdown (*.md);;All files (*)"
+            )
+            if path:
+                try:
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write(report)
+                except OSError as e:
+                    logger.error("Failed to save performance report: %s", e)
 
     def show_about_dialog(self):
         from mage.resources import get_resource_path

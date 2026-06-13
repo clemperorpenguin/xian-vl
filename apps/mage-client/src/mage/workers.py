@@ -29,6 +29,7 @@ import httpx
 from PyQt6.QtCore import QThread, QRect, pyqtSignal
 
 from mage.capture.audio import capture_system_audio
+from mage.telemetry import get_recorder
 from xian.lemonade_client import LemonadeClient
 from xian.timeout import vision_timeout_for_mode, CHAT_TIMEOUT_SECONDS, CHAT_AUX_TIMEOUT_SECONDS
 
@@ -216,13 +217,17 @@ class InferenceWorker(QThread):
             if not self.isInterruptionRequested():
                 self.translation_done.emit(results, self.action)
 
-            # Fire-and-forget stats log
+            # Fire-and-forget stats log + telemetry capture (data already fetched).
             async def _log_stats():
                 try:
                      base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
                      async with LemonadeClient(base_url=base_url.removesuffix("/v1")) as c:
                           stats = await c.stats()
                           logger.debug("Lemonade stats post-inference: %s", stats)
+                          get_recorder().record_inference(
+                              stats, "vision",
+                              getattr(self.processor.config, "model_name", None),
+                          )
                 except Exception:
                      pass
             self.processor.engine.submit(_log_stats())

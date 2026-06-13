@@ -99,6 +99,18 @@
     "value": "⚙ Settings… (Leader+S)",
     "context": "Tray menu item to open settings"
   },
+  "tray.menu.perf_report": {
+    "value": "📊 Performance Report",
+    "context": "Tray menu item to generate a CPU/GPU/RAM/VRAM and inference-latency performance report"
+  },
+  "perf.report.title": {
+    "value": "MAGE — Performance Report",
+    "context": "Window title for the performance report dialog and save-file prompt"
+  },
+  "perf.report.copied": {
+    "value": "Performance report copied to clipboard. Use “Show Details…” to view, or Save to a file.",
+    "context": "Confirmation shown when the performance report has been copied to the clipboard"
+  },
   "tray.menu.about": {
     "value": "ℹ About MAGE",
     "context": "Tray menu item to show about dialog"
