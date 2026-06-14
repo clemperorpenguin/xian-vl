@@ -16,19 +16,23 @@
 #
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
-"""Desktop Wizard — a floating pixel companion that walks the bottom of the screen.
+"""Familiar Mode — a floating pixel companion that walks the bottom of the screen.
 
-The wizard is the "chat mode equivalent" surfaced as a living desktop pet: it
+The familiar is the "chat mode equivalent" surfaced as a living desktop pet: it
 wanders along the screen floor, dodges the cursor, reacts when a translation is
-running, and opens the Chat sidebar when clicked. It does *no* inference itself —
-every state change is driven by signals the app already emits, and all animation
-runs off plain ``QTimer`` ticks on the GUI thread, so it never touches the
-inference hot path.
+running, and opens the Chat sidebar when clicked. When Familiar Mode is on, the
+familiar's speech bubble *replaces* the standalone translation popup for the
+default capture path — results appear next to the familiar instead.
 
-Art is fully optional. Drop sprite frames into ``wizard/`` at the workspace root
-named ``<state>_<n>.png`` (e.g. ``idle_0.png``, ``walk_0.png``, ``cast_0.png``,
-``react_0.png``, ``sad_0.png``) and they are picked up automatically. Until then,
-a vector placeholder wizard is drawn so the whole system is testable today.
+It does *no* inference itself — every state change is driven by signals the app
+already emits, and all animation runs off plain ``QTimer`` ticks on the GUI
+thread, so it never touches the inference hot path.
+
+Art is fully optional. Drop sprite frames into ``familiar/`` at the workspace
+root named ``<state>_<n>.png`` (e.g. ``idle_0.png``, ``walk_0.png``,
+``cast_0.png``, ``react_0.png``, ``sad_0.png``) and they are picked up
+automatically. Until then, a vector placeholder is drawn so the whole system is
+testable today.
 """
 
 import logging
@@ -36,6 +40,7 @@ import os
 import random
 import time
 from enum import Enum, auto
+from html import escape as html_escape
 
 from PyQt6.QtWidgets import QWidget, QLabel, QMenu, QVBoxLayout, QApplication
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect
@@ -61,14 +66,18 @@ TICK_INTERVAL_MS = 33     # behaviour / movement cadence (~30 fps)
 AVOID_RADIUS = 150        # cursor proximity that triggers a teleport-flee
 DRAG_THRESHOLD = 6        # px of movement before a press becomes a drag
 CAST_HOLD_S = 2.0         # how long a "thinking" pose lingers between updates
-REACT_HOLD_S = 3.0        # how long the wizard celebrates a finished result
-SAD_HOLD_S = 2.5
+BUBBLE_MS = 9000          # speech-bubble lifetime
+ERROR_BUBBLE_MS = 5000    # shorter lifetime for error bubbles
+# Hold the react/sad pose for the full bubble lifetime so the familiar stays
+# planted under its speech bubble instead of wandering off mid-display.
+REACT_HOLD_S = BUBBLE_MS / 1000.0
+SAD_HOLD_S = ERROR_BUBBLE_MS / 1000.0
 DWELL_MIN_S = 1.5         # idle pause range between walks
 DWELL_MAX_S = 4.5
-BUBBLE_MS = 4500          # speech-bubble lifetime
+BUBBLE_MAX_W = 360        # speech-bubble width cap
 
 
-class WizardState(Enum):
+class FamiliarState(Enum):
     IDLE = auto()
     WALK = auto()
     CAST = auto()    # a translation is running
@@ -78,77 +87,104 @@ class WizardState(Enum):
 
 # Placeholder palette per state (used only until real art is dropped in).
 _STATE_TINT = {
-    WizardState.IDLE: QColor(80, 130, 220),
-    WizardState.WALK: QColor(90, 160, 235),
-    WizardState.CAST: QColor(150, 90, 230),
-    WizardState.REACT: QColor(80, 200, 130),
-    WizardState.SAD: QColor(130, 130, 140),
+    FamiliarState.IDLE: QColor(80, 130, 220),
+    FamiliarState.WALK: QColor(90, 160, 235),
+    FamiliarState.CAST: QColor(150, 90, 230),
+    FamiliarState.REACT: QColor(80, 200, 130),
+    FamiliarState.SAD: QColor(130, 130, 140),
 }
 
 
-class WizardSpeechBubble(MageOverlayWindow):
-    """Tiny auto-closing speech bubble shown above the wizard."""
+class FamiliarSpeechBubble(MageOverlayWindow):
+    """Auto-closing speech bubble shown above the familiar.
+
+    In Familiar Mode this is the primary translation display, so it shows the
+    original text (dim) above the translation (bright) much like the normal
+    result popup, wraps long content, and auto-fades.
+    """
 
     def __init__(self, app=None, parent=None):
-        super().__init__(window_id="wizard_bubble", app=app, parent=parent)
+        super().__init__(window_id="familiar_bubble", app=app, parent=parent)
         # A speech bubble should never be draggable or steal interaction.
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        text_size = 14
+        if app is not None and hasattr(app, "settings") and app.settings:
+            try:
+                text_size = int(app.settings.value("overlay_text_size", 14))
+            except (TypeError, ValueError):
+                text_size = 14
+
         self._label = QLabel(self)
         self._label.setWordWrap(True)
+        self._label.setTextFormat(Qt.TextFormat.RichText)
+        self._label.setMaximumWidth(BUBBLE_MAX_W)
         self._label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self._label.setStyleSheet(
-            f"color: #f4f4f4; background: rgba(20,20,24,235);"
-            f"border: 1px solid {accent_hex()}; border-radius: 10px;"
-            f"padding: 8px 10px; font-size: 13px;"
+            f"QLabel {{ color: #f4f4f4; background: rgba(18,18,22,236);"
+            f" border: 1px solid {accent_hex()}; border-radius: 12px;"
+            f" padding: 10px 13px; font-size: {text_size}px; }}"
         )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._label)
+
         self._close_timer = QTimer(self)
         self._close_timer.setSingleShot(True)
         self._close_timer.timeout.connect(self.hide)
 
-    def say(self, text: str, anchor: QRect, ms: int = BUBBLE_MS):
-        text = (text or "").strip()
-        if not text:
+    def say(self, translation: str, original: str = "", anchor: QRect = None,
+            ms: int = BUBBLE_MS):
+        translation = (translation or "").strip()
+        original = (original or "").strip()
+        if not translation and not original:
             return
-        if len(text) > 140:
-            text = text[:139].rstrip() + "…"
-        self._label.setText(text)
-        self.setFixedWidth(260)
+
+        parts = []
+        if original:
+            parts.append(
+                f"<div style='color:#9aa0aa; font-size:0.85em; margin-bottom:4px;'>"
+                f"{html_escape(original)}</div>"
+            )
+        if translation:
+            parts.append(f"<div>{html_escape(translation)}</div>")
+        self._label.setText("".join(parts))
         self._label.adjustSize()
         self.adjustSize()
-        # Anchor centred above the wizard, clamped onto its screen.
+
+        if anchor is None:
+            anchor = QRect(self.x(), self.y(), SPRITE_W, SPRITE_H)
+        # Anchor centred above the familiar, clamped onto its screen.
         x = anchor.center().x() - self.width() // 2
-        y = anchor.top() - self.height() - 6
+        y = anchor.top() - self.height() - 8
         screen = (QGuiApplication.screenAt(anchor.center())
                   or QGuiApplication.primaryScreen())
         geo = screen.availableGeometry()
         x = max(geo.left() + 4, min(x, geo.right() - self.width() - 4))
         if y < geo.top() + 4:
-            y = anchor.bottom() + 6
+            y = anchor.bottom() + 8
         self.move(x, y)
         self.show()
         self.raise_()
         self._close_timer.start(ms)
 
 
-class WizardPet(MageOverlayWindow):
+class FamiliarPet(MageOverlayWindow):
     """A frameless, always-on-top sprite that lives on the desktop floor."""
 
     def __init__(self, app=None, parent=None):
-        super().__init__(window_id="wizard_pet", app=app, parent=parent)
+        super().__init__(window_id="familiar_pet", app=app, parent=parent)
         self.setFixedSize(SPRITE_W, SPRITE_H)
 
         # --- animation / behaviour state ---
-        self._state = WizardState.IDLE
-        self._behaviour = WizardState.IDLE      # autonomous mode: IDLE or WALK
-        self._facing = 1                        # +1 faces right, -1 faces left
+        self._state = FamiliarState.IDLE
+        self._behaviour = FamiliarState.IDLE      # autonomous mode: IDLE or WALK
+        self._facing = 1                          # +1 faces right, -1 faces left
         self._frame = 0
         self._target_x = self.x()
         now = time.monotonic()
         self._dwell_until = now + random.uniform(DWELL_MIN_S, DWELL_MAX_S)
-        self._emote_until = 0.0                 # while > now, an emote overrides autonomy
+        self._emote_until = 0.0                   # while > now, an emote overrides autonomy
 
         # --- drag vs click discrimination ---
         self._press_global = QPoint()
@@ -156,10 +192,10 @@ class WizardPet(MageOverlayWindow):
         self._dragging_user = False
 
         # --- frames: real art if present, else vector placeholder ---
-        self._frames: dict[WizardState, list[QPixmap]] = {}
+        self._frames: dict[FamiliarState, list[QPixmap]] = {}
         self._load_all_frames()
 
-        self._bubble = WizardSpeechBubble(app=self.app, parent=self)
+        self._bubble = FamiliarSpeechBubble(app=self.app, parent=self)
 
         self._snap_to_floor()
 
@@ -170,14 +206,14 @@ class WizardPet(MageOverlayWindow):
 
     # ----- asset loading ----------------------------------------------------
     def _load_all_frames(self):
-        for st in WizardState:
+        for st in FamiliarState:
             self._frames[st] = self._load_frames(st.name.lower())
 
     def _load_frames(self, state_name: str) -> list[QPixmap]:
         frames: list[QPixmap] = []
         i = 0
         while True:
-            rel = f"wizard/{state_name}_{i}.png"
+            rel = f"familiar/{state_name}_{i}.png"
             path = get_resource_path(rel)
             if path == rel or not os.path.exists(path):
                 break
@@ -196,19 +232,20 @@ class WizardPet(MageOverlayWindow):
     def on_thinking(self):
         """A translation has started; hold a casting pose."""
         self._emote_until = time.monotonic() + CAST_HOLD_S
-        self._set_state(WizardState.CAST)
+        self._set_state(FamiliarState.CAST)
 
-    def on_result(self, text: str):
-        """A translation finished; celebrate and pop a speech bubble."""
+    def on_result(self, text: str, original: str = "", with_bubble: bool = True):
+        """A translation finished; react, and optionally pop a speech bubble."""
         self._emote_until = time.monotonic() + REACT_HOLD_S
-        self._set_state(WizardState.REACT)
-        if text and text.strip():
-            self._bubble.say(text, self.geometry())
+        self._set_state(FamiliarState.REACT)
+        if with_bubble and ((text and text.strip()) or (original and original.strip())):
+            self._bubble.say(text, original=original, anchor=self.geometry())
 
-    def on_error(self):
+    def on_error(self, msg: str = "", with_bubble: bool = True):
         self._emote_until = time.monotonic() + SAD_HOLD_S
-        self._set_state(WizardState.SAD)
-        self._bubble.say("?!", self.geometry(), ms=2000)
+        self._set_state(FamiliarState.SAD)
+        if with_bubble:
+            self._bubble.say(f"⚠ {msg}" if msg else "?!", anchor=self.geometry(), ms=ERROR_BUBBLE_MS)
 
     def shutdown(self):
         """Stop all timers and dismiss the bubble (called when disabling)."""
@@ -217,7 +254,7 @@ class WizardPet(MageOverlayWindow):
         if self._bubble:
             self._bubble.close()
 
-    # The wizard must always be clickable, so block the click-through plumbing
+    # The familiar must always be clickable, so block the click-through plumbing
     # the binder may apply to ordinary overlays.
     def set_click_through(self, click_through: bool):
         self._click_through = False
@@ -239,7 +276,7 @@ class WizardPet(MageOverlayWindow):
         super().hideEvent(event)
 
     # ----- animation --------------------------------------------------------
-    def _set_state(self, state: WizardState):
+    def _set_state(self, state: FamiliarState):
         if state != self._state:
             self._state = state
             self._frame = 0
@@ -274,10 +311,10 @@ class WizardPet(MageOverlayWindow):
         # An active emote (cast/react/sad) freezes wandering until it expires.
         if now < self._emote_until:
             return
-        if self._state in (WizardState.CAST, WizardState.REACT, WizardState.SAD):
-            self._behaviour = WizardState.IDLE
+        if self._state in (FamiliarState.CAST, FamiliarState.REACT, FamiliarState.SAD):
+            self._behaviour = FamiliarState.IDLE
             self._dwell_until = now + random.uniform(DWELL_MIN_S, DWELL_MAX_S)
-            self._set_state(WizardState.IDLE)
+            self._set_state(FamiliarState.IDLE)
 
         home = self._home_geometry()
         y = self._floor_y(home)
@@ -290,27 +327,27 @@ class WizardPet(MageOverlayWindow):
             self._flee(cursor, home, y)
             return
 
-        if self._behaviour == WizardState.WALK:
+        if self._behaviour == FamiliarState.WALK:
             cur_x = self.x()
             dx = self._target_x - cur_x
             if abs(dx) <= WALK_STEP:
                 self.move(self._target_x, y)
-                self._behaviour = WizardState.IDLE
+                self._behaviour = FamiliarState.IDLE
                 self._dwell_until = now + random.uniform(DWELL_MIN_S, DWELL_MAX_S)
-                self._set_state(WizardState.IDLE)
+                self._set_state(FamiliarState.IDLE)
             else:
                 self._facing = 1 if dx > 0 else -1
                 self.move(cur_x + (WALK_STEP if dx > 0 else -WALK_STEP), y)
-                self._set_state(WizardState.WALK)
+                self._set_state(FamiliarState.WALK)
         else:  # IDLE
             self.move(self.x(), y)  # keep glued to the floor if the screen changed
-            self._set_state(WizardState.IDLE)
+            self._set_state(FamiliarState.IDLE)
             if now >= self._dwell_until:
                 lo = home.left()
                 hi = home.right() - self.width()
                 if hi > lo:
                     self._target_x = random.randint(lo, hi)
-                    self._behaviour = WizardState.WALK
+                    self._behaviour = FamiliarState.WALK
 
     def _flee(self, cursor: QPoint, home: QRect, y: int):
         """Teleport away from the cursor to a random spot on the opposite side."""
@@ -326,9 +363,9 @@ class WizardPet(MageOverlayWindow):
             new_x = random.randint(lo, mid)          # cursor on the right → flee left
             self._facing = -1
         self.move(new_x, y)
-        self._behaviour = WizardState.IDLE
+        self._behaviour = FamiliarState.IDLE
         self._dwell_until = time.monotonic() + random.uniform(DWELL_MIN_S, DWELL_MAX_S)
-        self._set_state(WizardState.WALK)
+        self._set_state(FamiliarState.WALK)
 
     # ----- rendering --------------------------------------------------------
     def paintEvent(self, event):
@@ -350,11 +387,11 @@ class WizardPet(MageOverlayWindow):
         super().paintEvent(event)
 
     def _paint_placeholder(self, painter: QPainter):
-        """Draw a simple vector wizard so the pet works before real art lands."""
+        """Draw a simple vector familiar so the pet works before real art lands."""
         bob = 2 if (self._frame % 2 == 0) else -2
         cx = self.width() // 2
-        tint = _STATE_TINT.get(self._state, _STATE_TINT[WizardState.IDLE])
-        base_y = self.height() - 12 + (bob if self._state == WizardState.WALK else 0)
+        tint = _STATE_TINT.get(self._state, _STATE_TINT[FamiliarState.IDLE])
+        base_y = self.height() - 12 + (bob if self._state == FamiliarState.WALK else 0)
 
         # Robe (triangle body).
         robe = QPolygon([
@@ -387,9 +424,9 @@ class WizardPet(MageOverlayWindow):
         staff_x = cx + self._facing * 24
         painter.setPen(QPen(QColor(150, 110, 70), 3))
         painter.drawLine(staff_x, base_y, staff_x, base_y - 46)
-        if self._state in (WizardState.CAST, WizardState.REACT):
+        if self._state in (FamiliarState.CAST, FamiliarState.REACT):
             glow = QColor(tint)
-            glow.setAlpha(160 if self._state == WizardState.CAST else 220)
+            glow.setAlpha(160 if self._state == FamiliarState.CAST else 220)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(glow))
             r = 7 + (self._frame % 3)
@@ -398,7 +435,7 @@ class WizardPet(MageOverlayWindow):
         # Tiny eyes; X-eyes when sad.
         painter.setPen(QPen(QColor(40, 40, 40), 2))
         ex = cx + self._facing * 2
-        if self._state == WizardState.SAD:
+        if self._state == FamiliarState.SAD:
             painter.drawText(QRect(ex - 8, base_y - 56, 16, 12),
                              Qt.AlignmentFlag.AlignCenter, "x x")
         else:
@@ -442,11 +479,11 @@ class WizardPet(MageOverlayWindow):
 
     def _show_context_menu(self, global_pos: QPoint):
         menu = QMenu()
-        hide_action = menu.addAction(t("wizard.menu.hide"))
-        settings_action = menu.addAction(t("wizard.menu.settings"))
+        hide_action = menu.addAction(t("familiar.menu.hide"))
+        settings_action = menu.addAction(t("familiar.menu.settings"))
         chosen = menu.exec(global_pos)
-        if chosen == hide_action and self.app is not None and hasattr(self.app, "toggle_wizard"):
-            self.app.toggle_wizard()
+        if chosen == hide_action and self.app is not None and hasattr(self.app, "toggle_familiar"):
+            self.app.toggle_familiar()
         elif chosen == settings_action and self.app is not None and hasattr(self.app, "_open_settings"):
             self.app._open_settings()
 

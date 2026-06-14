@@ -44,7 +44,7 @@ def _prefer_xwayland_on_wayland() -> None:
 
     Wayland forbids clients from positioning their own top-level windows, so
     ``QWidget.move()`` is silently ignored and the compositor centres every
-    overlay (the HUD bubbles, and most visibly the desktop wizard). MAGE's
+    overlay (the HUD bubbles, and most visibly the desktop familiar). MAGE's
     entire overlay stack — global positioning, stay-on-top, and the X11 window
     binder — is built for the ``xcb`` backend, so we default to it under
     XWayland, where all of that works as designed.

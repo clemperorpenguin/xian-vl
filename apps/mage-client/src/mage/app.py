@@ -46,7 +46,7 @@ from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.how_to_say import HowToSayDialog
 from mage.ui.raid_window import RaidWindow
 from mage.ui.result_bubble import ResultBubble
-from mage.ui.wizard_pet import WizardPet
+from mage.ui.familiar_pet import FamiliarPet
 from mage.ui.overlay_base import MageOverlayWindow
 from mage.capture.hotkeys import create_hotkey_listener
 from mage.telemetry import get_recorder, TelemetrySampler
@@ -64,7 +64,7 @@ from mage.settings_keys import (
     KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY, KEY_OVERLAY_TOGGLE_KEY,
     KEY_GPU_UTIL, KEY_DIALOGUE_DELAY,
     KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG,
-    KEY_WIZARD_ENABLED, KEY_WIZARD_TTS
+    KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS
 )
 from mage.utils.window_binder import WindowBinder
 from shared_types.state import state, t
@@ -267,15 +267,15 @@ class SettingsDialog(QDialog):
         self.auto_speak_cb.setChecked(speak_val == "true" or speak_val is True)
         features_layout.addRow(self.auto_speak_cb)
 
-        self.wizard_enabled_cb = QCheckBox(t("settings.checkbox.wizard_enabled"))
-        wiz_val = settings.value(KEY_WIZARD_ENABLED, "false")
-        self.wizard_enabled_cb.setChecked(wiz_val == "true" or wiz_val is True)
-        features_layout.addRow(self.wizard_enabled_cb)
+        self.familiar_enabled_cb = QCheckBox(t("settings.checkbox.familiar_enabled"))
+        fam_val = settings.value(KEY_FAMILIAR_ENABLED, "false")
+        self.familiar_enabled_cb.setChecked(fam_val == "true" or fam_val is True)
+        features_layout.addRow(self.familiar_enabled_cb)
 
-        self.wizard_tts_cb = QCheckBox(t("settings.checkbox.wizard_tts"))
-        wiz_tts_val = settings.value(KEY_WIZARD_TTS, "false")
-        self.wizard_tts_cb.setChecked(wiz_tts_val == "true" or wiz_tts_val is True)
-        features_layout.addRow(self.wizard_tts_cb)
+        self.familiar_tts_cb = QCheckBox(t("settings.checkbox.familiar_tts"))
+        fam_tts_val = settings.value(KEY_FAMILIAR_TTS, "false")
+        self.familiar_tts_cb.setChecked(fam_tts_val == "true" or fam_tts_val is True)
+        features_layout.addRow(self.familiar_tts_cb)
 
         self.live_voice_raid_cb = QCheckBox(t("settings.checkbox.live_voice_raid"))
         lv_raid_val = settings.value("live_voice_raid", "false")
@@ -422,8 +422,8 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
-        self.settings.setValue(KEY_WIZARD_ENABLED, "true" if self.wizard_enabled_cb.isChecked() else "false")
-        self.settings.setValue(KEY_WIZARD_TTS, "true" if self.wizard_tts_cb.isChecked() else "false")
+        self.settings.setValue(KEY_FAMILIAR_ENABLED, "true" if self.familiar_enabled_cb.isChecked() else "false")
+        self.settings.setValue(KEY_FAMILIAR_TTS, "true" if self.familiar_tts_cb.isChecked() else "false")
         self.settings.setValue("live_voice_raid", "true" if self.live_voice_raid_cb.isChecked() else "false")
         self.settings.setValue("live_raid_lore_save", "true" if self.live_raid_lore_save_cb.isChecked() else "false")
         self.settings.setValue("overlay_opacity", self.opacity_slider.value())
@@ -572,44 +572,59 @@ class XianApp(QWidget):
         self.apply_overlay_opacity()
         self.apply_overlay_text_size()
         self._setup_telemetry()
-        self._setup_wizard()
+        self._setup_familiar()
 
-    def _setup_wizard(self):
-        """Create the desktop wizard companion if it is enabled in settings."""
-        self.wizard = None
-        wiz_val = self.settings.value(KEY_WIZARD_ENABLED, "false")
-        if wiz_val == "true" or wiz_val is True:
-            self._create_wizard()
+    def _setup_familiar(self):
+        """Create the desktop familiar companion if Familiar Mode is enabled."""
+        self.familiar = None
+        fam_val = self.settings.value(KEY_FAMILIAR_ENABLED, "false")
+        if fam_val == "true" or fam_val is True:
+            self._create_familiar()
 
-    def _create_wizard(self):
-        if getattr(self, "wizard", None):
+    def _create_familiar(self):
+        if getattr(self, "familiar", None):
             return
-        self.wizard = WizardPet(app=self, parent=self)
-        self.wizard.show()
-        if hasattr(self, "wizard_action"):
-            self.wizard_action.setChecked(True)
-        logger.info("Desktop wizard enabled")
+        self.familiar = FamiliarPet(app=self, parent=self)
+        self.familiar.show()
+        if hasattr(self, "familiar_action"):
+            self.familiar_action.setChecked(True)
+        logger.info("Familiar Mode enabled")
 
-    def _destroy_wizard(self):
-        wizard = getattr(self, "wizard", None)
-        if wizard is None:
+    def _destroy_familiar(self):
+        familiar = getattr(self, "familiar", None)
+        if familiar is None:
             return
-        wizard.shutdown()
-        wizard.close()
-        wizard.deleteLater()
-        self.wizard = None
-        if hasattr(self, "wizard_action"):
-            self.wizard_action.setChecked(False)
-        logger.info("Desktop wizard disabled")
+        familiar.shutdown()
+        familiar.close()
+        familiar.deleteLater()
+        self.familiar = None
+        if hasattr(self, "familiar_action"):
+            self.familiar_action.setChecked(False)
+        logger.info("Familiar Mode disabled")
 
-    def toggle_wizard(self):
+    def toggle_familiar(self):
         """Tray/context-menu toggle that also persists the preference."""
-        if getattr(self, "wizard", None):
-            self.settings.setValue(KEY_WIZARD_ENABLED, "false")
-            self._destroy_wizard()
+        if getattr(self, "familiar", None):
+            self.settings.setValue(KEY_FAMILIAR_ENABLED, "false")
+            self._destroy_familiar()
         else:
-            self.settings.setValue(KEY_WIZARD_ENABLED, "true")
-            self._create_wizard()
+            self.settings.setValue(KEY_FAMILIAR_ENABLED, "true")
+            self._create_familiar()
+
+    def _familiar_default_path(self, action) -> bool:
+        """True when a visible familiar should be the sole display for this result.
+
+        Familiar Mode replaces the standalone popup only on the default capture
+        path — dialogue and cinematic keep their dedicated bubbles (which carry
+        continue/notes/stop affordances the compact familiar bubble lacks).
+        """
+        familiar = getattr(self, "familiar", None)
+        return (
+            familiar is not None
+            and familiar.isVisible()
+            and not self.dialogue_mode_active
+            and action != "cinematic"
+        )
 
     def _setup_telemetry(self):
         """Start periodic host-resource sampling (CPU/GPU/RAM/VRAM).
@@ -644,11 +659,11 @@ class XianApp(QWidget):
         overlays_action = menu.addAction(t("tray.menu.toggle_overlays"))
         overlays_action.triggered.connect(self.toggle_all_overlays)
 
-        self.wizard_action = menu.addAction(t("tray.menu.wizard"))
-        self.wizard_action.setCheckable(True)
-        wiz_val = self.settings.value(KEY_WIZARD_ENABLED, "false")
-        self.wizard_action.setChecked(wiz_val == "true" or wiz_val is True)
-        self.wizard_action.triggered.connect(self.toggle_wizard)
+        self.familiar_action = menu.addAction(t("tray.menu.familiar"))
+        self.familiar_action.setCheckable(True)
+        fam_val = self.settings.value(KEY_FAMILIAR_ENABLED, "false")
+        self.familiar_action.setChecked(fam_val == "true" or fam_val is True)
+        self.familiar_action.triggered.connect(self.toggle_familiar)
 
         menu.addSeparator()
 
@@ -979,6 +994,11 @@ class XianApp(QWidget):
                 bubble._anchor_rect = anchor
                 bubble._position_near(anchor)
         else:
+            # In Familiar Mode the familiar's cast pose is the activity indicator
+            # on the default path, so skip the standalone "Translating…" popup.
+            if self._familiar_default_path(worker.action):
+                self.familiar.on_thinking()
+                return
             # Create a new bubble
             show_stop = self.dialogue_mode_active
             bubble = ResultBubble(
@@ -993,11 +1013,11 @@ class XianApp(QWidget):
                 self.cinematic_bubble = bubble
             else:
                 self._add_bubble(bubble)
-                
+
         self._active_bubbles[worker] = bubble
 
-        if getattr(self, "wizard", None) and self.wizard.isVisible():
-            self.wizard.on_thinking()
+        if getattr(self, "familiar", None) and self.familiar.isVisible():
+            self.familiar.on_thinking()
 
     def _on_inference_partial(self, text, action, worker):
         bubble = self._active_bubbles.get(worker)
@@ -1099,6 +1119,10 @@ class XianApp(QWidget):
                     confidence=conf_display,
                     show_add_note=show_add_note,
                 )
+            elif self._familiar_default_path(action):
+                # Familiar Mode: the familiar's speech bubble (shown below) is
+                # the sole display; no standalone popup.
+                target_bubble = None
             else:
                 bubble = ResultBubble(
                     translation_combined if results else "No text detected in the selected region.",
@@ -1145,11 +1169,21 @@ class XianApp(QWidget):
             self._speak_text(translation_combined, source=False, voice_ref_bytes=getattr(worker, "audio_bytes", None))
             spoke = True
 
-        # Wizard reacts to the finished translation, and optionally reads it aloud.
-        if getattr(self, "wizard", None) and self.wizard.isVisible() and results:
-            self.wizard.on_result(translation_combined)
-            wiz_tts = self.settings.value(KEY_WIZARD_TTS, "false")
-            if (wiz_tts == "true" or wiz_tts is True) and not spoke and translation_combined.strip():
+        # Familiar reacts to the finished translation. On the default path its
+        # speech bubble is the display; in dialogue/cinematic it only poses
+        # (those modes keep their dedicated bubbles).
+        familiar = getattr(self, "familiar", None)
+        if familiar and familiar.isVisible():
+            if self._familiar_default_path(action):
+                familiar.on_result(
+                    translation_combined if results else "No text detected.",
+                    original=original_combined if results else "",
+                    with_bubble=True,
+                )
+            elif results:
+                familiar.on_result(translation_combined, with_bubble=False)
+            fam_tts = self.settings.value(KEY_FAMILIAR_TTS, "false")
+            if (fam_tts == "true" or fam_tts is True) and not spoke and results and translation_combined.strip():
                 self._speak_text(translation_combined, source=False, voice_ref_bytes=getattr(worker, "audio_bytes", None))
 
     def _on_inference_error(self, msg, worker):
@@ -1157,6 +1191,13 @@ class XianApp(QWidget):
         bubble = self._active_bubbles.pop(worker, None)
         if bubble:
             bubble.close()
+
+        # Familiar Mode: surface the error through the familiar instead of a
+        # standalone popup on the default path.
+        if self._familiar_default_path(getattr(worker, "action", None)):
+            self.familiar.on_error(str(msg))
+            return
+
         bubble = ResultBubble(
             f"⚠ Error: {msg}",
             anchor_rect=anchor,
@@ -1164,8 +1205,8 @@ class XianApp(QWidget):
         )
         self._add_bubble(bubble)
 
-        if getattr(self, "wizard", None) and self.wizard.isVisible():
-            self.wizard.on_error()
+        if getattr(self, "familiar", None) and self.familiar.isVisible():
+            self.familiar.on_error(with_bubble=False)
 
     def _cleanup_worker(self, worker):
         try:
@@ -1934,13 +1975,13 @@ class XianApp(QWidget):
             if hasattr(self, "raid_window") and self.raid_window:
                 self.raid_window.restore_geometry()
 
-            # Sync the desktop wizard to its (possibly changed) setting.
-            wiz_enabled = self.settings.value(KEY_WIZARD_ENABLED, "false")
-            wiz_enabled = wiz_enabled == "true" or wiz_enabled is True
-            if wiz_enabled and not getattr(self, "wizard", None):
-                self._create_wizard()
-            elif not wiz_enabled and getattr(self, "wizard", None):
-                self._destroy_wizard()
+            # Sync the desktop familiar to its (possibly changed) setting.
+            fam_enabled = self.settings.value(KEY_FAMILIAR_ENABLED, "false")
+            fam_enabled = fam_enabled == "true" or fam_enabled is True
+            if fam_enabled and not getattr(self, "familiar", None):
+                self._create_familiar()
+            elif not fam_enabled and getattr(self, "familiar", None):
+                self._destroy_familiar()
 
             self.apply_overlay_opacity()
             self.apply_overlay_text_size()
@@ -1980,7 +2021,7 @@ class XianApp(QWidget):
             getattr(self, "cinematic_bubble", None),
             getattr(self, "raid_window", None),
             getattr(self, "dialogue_bubble", None),
-            getattr(self, "wizard", None),
+            getattr(self, "familiar", None),
         ]
         raw.extend(self._bubbles)
         raw.extend(self._active_bubbles.values())

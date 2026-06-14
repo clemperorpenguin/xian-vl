@@ -59,13 +59,13 @@
     "value": "Auto-speak translations (Text-to-Speech)",
     "context": "Checkbox label to auto-speak translations"
   },
-  "settings.checkbox.wizard_enabled": {
-    "value": "Desktop Wizard companion",
-    "context": "Checkbox label to enable the floating desktop wizard pet that walks around the screen"
+  "settings.checkbox.familiar_enabled": {
+    "value": "Familiar Mode (desktop companion)",
+    "context": "Checkbox label to enable Familiar Mode: a floating desktop companion pet that walks around the screen"
   },
-  "settings.checkbox.wizard_tts": {
-    "value": "Wizard speaks translations (Text-to-Speech)",
-    "context": "Checkbox label: the desktop wizard reads finished translations aloud via TTS"
+  "settings.checkbox.familiar_tts": {
+    "value": "Familiar speaks translations (Text-to-Speech)",
+    "context": "Checkbox label: the desktop familiar reads finished translations aloud via TTS"
   },
   "settings.checkbox.live_voice_raid": {
     "value": "Live Voice Translation (Raid Mode)",
@@ -103,17 +103,17 @@
     "value": "👁 Show/Hide Overlays",
     "context": "Tray menu item to show or hide all overlay windows at once"
   },
-  "tray.menu.wizard": {
-    "value": "🧙 Desktop Wizard",
-    "context": "Tray menu item to toggle the floating desktop wizard companion on or off"
+  "tray.menu.familiar": {
+    "value": "🧙 Familiar Mode",
+    "context": "Tray menu item to toggle Familiar Mode (the floating desktop companion) on or off"
   },
-  "wizard.menu.hide": {
-    "value": "Hide wizard",
-    "context": "Right-click context menu item on the desktop wizard to dismiss it"
+  "familiar.menu.hide": {
+    "value": "Hide familiar",
+    "context": "Right-click context menu item on the desktop familiar to dismiss it"
   },
-  "wizard.menu.settings": {
+  "familiar.menu.settings": {
     "value": "Settings…",
-    "context": "Right-click context menu item on the desktop wizard to open settings"
+    "context": "Right-click context menu item on the desktop familiar to open settings"
   },
   "tray.menu.settings": {
     "value": "⚙ Settings… (Leader+S)",
