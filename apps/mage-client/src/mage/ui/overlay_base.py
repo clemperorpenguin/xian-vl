@@ -20,7 +20,11 @@ import logging
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import Qt, QPoint, QRect
 from PyQt6.QtGui import QPainter, QColor, QPen
-from mage.utils.window_binder import set_bypass_compositor_hint_x11, set_above_state_x11
+from mage.utils.window_binder import (
+    set_bypass_compositor_hint_x11,
+    set_above_state_x11,
+    set_overlay_window_type_x11,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +173,9 @@ class MageOverlayWindow(QWidget):
             self.show()
         self.raise_()
         set_above_state_x11(self.winId())
+        # Under XWayland, keep-above alone loses to a fullscreen game; re-tag
+        # the overlay into KWin's over-fullscreen (critical-notification) layer.
+        set_overlay_window_type_x11(self.winId())
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and (self._edit_mode_active or not self._click_through):
@@ -226,3 +233,8 @@ class MageOverlayWindow(QWidget):
         super().showEvent(event)
         set_bypass_compositor_hint_x11(self.winId())
         set_above_state_x11(self.winId())
+        # XWayland-only: place the overlay in KWin's layer above fullscreen
+        # games. No-op on native X11 (keep-above already suffices there) and
+        # off-xcb. Re-applied here because Qt resets _NET_WM_WINDOW_TYPE
+        # whenever the native window is recreated (e.g. on a flags change).
+        set_overlay_window_type_x11(self.winId())
