@@ -46,6 +46,7 @@ from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.how_to_say import HowToSayDialog
 from mage.ui.raid_window import RaidWindow
 from mage.ui.result_bubble import ResultBubble
+from mage.ui.wizard_pet import WizardPet
 from mage.ui.overlay_base import MageOverlayWindow
 from mage.capture.hotkeys import create_hotkey_listener
 from mage.telemetry import get_recorder, TelemetrySampler
@@ -62,7 +63,8 @@ from mage.settings_keys import (
     KEY_API_URL, KEY_API_MODEL, KEY_SOURCE_LANG, KEY_TARGET_LANG,
     KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY, KEY_OVERLAY_TOGGLE_KEY,
     KEY_GPU_UTIL, KEY_DIALOGUE_DELAY,
-    KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG
+    KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG,
+    KEY_WIZARD_ENABLED, KEY_WIZARD_TTS
 )
 from mage.utils.window_binder import WindowBinder
 from shared_types.state import state, t
@@ -265,6 +267,16 @@ class SettingsDialog(QDialog):
         self.auto_speak_cb.setChecked(speak_val == "true" or speak_val is True)
         features_layout.addRow(self.auto_speak_cb)
 
+        self.wizard_enabled_cb = QCheckBox(t("settings.checkbox.wizard_enabled"))
+        wiz_val = settings.value(KEY_WIZARD_ENABLED, "false")
+        self.wizard_enabled_cb.setChecked(wiz_val == "true" or wiz_val is True)
+        features_layout.addRow(self.wizard_enabled_cb)
+
+        self.wizard_tts_cb = QCheckBox(t("settings.checkbox.wizard_tts"))
+        wiz_tts_val = settings.value(KEY_WIZARD_TTS, "false")
+        self.wizard_tts_cb.setChecked(wiz_tts_val == "true" or wiz_tts_val is True)
+        features_layout.addRow(self.wizard_tts_cb)
+
         self.live_voice_raid_cb = QCheckBox(t("settings.checkbox.live_voice_raid"))
         lv_raid_val = settings.value("live_voice_raid", "false")
         self.live_voice_raid_cb.setChecked(lv_raid_val == "true" or lv_raid_val is True)
@@ -410,6 +422,8 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
+        self.settings.setValue(KEY_WIZARD_ENABLED, "true" if self.wizard_enabled_cb.isChecked() else "false")
+        self.settings.setValue(KEY_WIZARD_TTS, "true" if self.wizard_tts_cb.isChecked() else "false")
         self.settings.setValue("live_voice_raid", "true" if self.live_voice_raid_cb.isChecked() else "false")
         self.settings.setValue("live_raid_lore_save", "true" if self.live_raid_lore_save_cb.isChecked() else "false")
         self.settings.setValue("overlay_opacity", self.opacity_slider.value())
@@ -558,6 +572,44 @@ class XianApp(QWidget):
         self.apply_overlay_opacity()
         self.apply_overlay_text_size()
         self._setup_telemetry()
+        self._setup_wizard()
+
+    def _setup_wizard(self):
+        """Create the desktop wizard companion if it is enabled in settings."""
+        self.wizard = None
+        wiz_val = self.settings.value(KEY_WIZARD_ENABLED, "false")
+        if wiz_val == "true" or wiz_val is True:
+            self._create_wizard()
+
+    def _create_wizard(self):
+        if getattr(self, "wizard", None):
+            return
+        self.wizard = WizardPet(app=self, parent=self)
+        self.wizard.show()
+        if hasattr(self, "wizard_action"):
+            self.wizard_action.setChecked(True)
+        logger.info("Desktop wizard enabled")
+
+    def _destroy_wizard(self):
+        wizard = getattr(self, "wizard", None)
+        if wizard is None:
+            return
+        wizard.shutdown()
+        wizard.close()
+        wizard.deleteLater()
+        self.wizard = None
+        if hasattr(self, "wizard_action"):
+            self.wizard_action.setChecked(False)
+        logger.info("Desktop wizard disabled")
+
+    def toggle_wizard(self):
+        """Tray/context-menu toggle that also persists the preference."""
+        if getattr(self, "wizard", None):
+            self.settings.setValue(KEY_WIZARD_ENABLED, "false")
+            self._destroy_wizard()
+        else:
+            self.settings.setValue(KEY_WIZARD_ENABLED, "true")
+            self._create_wizard()
 
     def _setup_telemetry(self):
         """Start periodic host-resource sampling (CPU/GPU/RAM/VRAM).
@@ -591,6 +643,12 @@ class XianApp(QWidget):
 
         overlays_action = menu.addAction(t("tray.menu.toggle_overlays"))
         overlays_action.triggered.connect(self.toggle_all_overlays)
+
+        self.wizard_action = menu.addAction(t("tray.menu.wizard"))
+        self.wizard_action.setCheckable(True)
+        wiz_val = self.settings.value(KEY_WIZARD_ENABLED, "false")
+        self.wizard_action.setChecked(wiz_val == "true" or wiz_val is True)
+        self.wizard_action.triggered.connect(self.toggle_wizard)
 
         menu.addSeparator()
 
@@ -938,6 +996,9 @@ class XianApp(QWidget):
                 
         self._active_bubbles[worker] = bubble
 
+        if getattr(self, "wizard", None) and self.wizard.isVisible():
+            self.wizard.on_thinking()
+
     def _on_inference_partial(self, text, action, worker):
         bubble = self._active_bubbles.get(worker)
         if bubble and bubble.isVisible():
@@ -1079,8 +1140,17 @@ class XianApp(QWidget):
 
         # Auto-speak if in Cinematic Mode, or if Auto-speak setting is checked
         auto_speak = self.settings.value(KEY_AUTO_SPEAK, "false")
+        spoke = False
         if action == "cinematic" or auto_speak == "true" or auto_speak is True:
             self._speak_text(translation_combined, source=False, voice_ref_bytes=getattr(worker, "audio_bytes", None))
+            spoke = True
+
+        # Wizard reacts to the finished translation, and optionally reads it aloud.
+        if getattr(self, "wizard", None) and self.wizard.isVisible() and results:
+            self.wizard.on_result(translation_combined)
+            wiz_tts = self.settings.value(KEY_WIZARD_TTS, "false")
+            if (wiz_tts == "true" or wiz_tts is True) and not spoke and translation_combined.strip():
+                self._speak_text(translation_combined, source=False, voice_ref_bytes=getattr(worker, "audio_bytes", None))
 
     def _on_inference_error(self, msg, worker):
         anchor = worker.anchor_rect
@@ -1093,6 +1163,9 @@ class XianApp(QWidget):
             auto_close_ms=8000,
         )
         self._add_bubble(bubble)
+
+        if getattr(self, "wizard", None) and self.wizard.isVisible():
+            self.wizard.on_error()
 
     def _cleanup_worker(self, worker):
         try:
@@ -1861,6 +1934,14 @@ class XianApp(QWidget):
             if hasattr(self, "raid_window") and self.raid_window:
                 self.raid_window.restore_geometry()
 
+            # Sync the desktop wizard to its (possibly changed) setting.
+            wiz_enabled = self.settings.value(KEY_WIZARD_ENABLED, "false")
+            wiz_enabled = wiz_enabled == "true" or wiz_enabled is True
+            if wiz_enabled and not getattr(self, "wizard", None):
+                self._create_wizard()
+            elif not wiz_enabled and getattr(self, "wizard", None):
+                self._destroy_wizard()
+
             self.apply_overlay_opacity()
             self.apply_overlay_text_size()
 
@@ -1899,6 +1980,7 @@ class XianApp(QWidget):
             getattr(self, "cinematic_bubble", None),
             getattr(self, "raid_window", None),
             getattr(self, "dialogue_bubble", None),
+            getattr(self, "wizard", None),
         ]
         raw.extend(self._bubbles)
         raw.extend(self._active_bubbles.values())

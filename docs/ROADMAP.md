@@ -20,7 +20,7 @@ This document outlines the planned milestones, upcoming features, and long-term 
 * [x] **Static Translations** Static translations on mouseover, eg tooltips for toolbar buttons - implemented in dev branch.
 * [x] **Windows Support** Lightly tested.
 * [x] **Mac Support** Lightly tested.
-* [ ] **Embedded Lemonade** Currently produces garbled text, more testing is necessary. Install Lemonade as a separate service.
+* [x] **Embedded Lemonade** Garbled text bug resolved. Lemonade installs/runs as a separate service.
 * [ ] **Bilibili Support**: Support overlay capture and live-translation flows for Bilibili video streams and interface windows, making it easier for users to translate on-screen dialogue and commentary in real-time.
 * [ ] **Perfect Window Focus** Perfect window focus means the overlay is either up or down. I need to unify this behavior across platforms, there is some weirdness on wayland.
 
