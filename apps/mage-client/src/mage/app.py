@@ -64,7 +64,7 @@ from mage.settings_keys import (
     KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY, KEY_OVERLAY_TOGGLE_KEY,
     KEY_GPU_UTIL, KEY_DIALOGUE_DELAY,
     KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG,
-    KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS
+    KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS, KEY_FAMILIAR_TYPE
 )
 from mage.utils.window_binder import WindowBinder
 from shared_types.state import state, t
@@ -272,6 +272,15 @@ class SettingsDialog(QDialog):
         self.familiar_enabled_cb.setChecked(fam_val == "true" or fam_val is True)
         features_layout.addRow(self.familiar_enabled_cb)
 
+        self.familiar_type_combo = QComboBox()
+        for sp in ("wizard", "witch", "cat", "owl", "lemonfae"):
+            self.familiar_type_combo.addItem(t(f"familiar.species.{sp}"), sp)
+        fam_type_val = settings.value(KEY_FAMILIAR_TYPE, "wizard")
+        ft_idx = self.familiar_type_combo.findData(fam_type_val)
+        if ft_idx >= 0:
+            self.familiar_type_combo.setCurrentIndex(ft_idx)
+        features_layout.addRow(t("settings.label.familiar_type"), self.familiar_type_combo)
+
         self.familiar_tts_cb = QCheckBox(t("settings.checkbox.familiar_tts"))
         fam_tts_val = settings.value(KEY_FAMILIAR_TTS, "false")
         self.familiar_tts_cb.setChecked(fam_tts_val == "true" or fam_tts_val is True)
@@ -423,7 +432,10 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
         self.settings.setValue(KEY_FAMILIAR_ENABLED, "true" if self.familiar_enabled_cb.isChecked() else "false")
+        self.settings.setValue(KEY_FAMILIAR_TYPE, self.familiar_type_combo.currentData())
         self.settings.setValue(KEY_FAMILIAR_TTS, "true" if self.familiar_tts_cb.isChecked() else "false")
+        if getattr(self, "familiar", None):
+            self.familiar.set_species(self.familiar_type_combo.currentData())
         self.settings.setValue("live_voice_raid", "true" if self.live_voice_raid_cb.isChecked() else "false")
         self.settings.setValue("live_raid_lore_save", "true" if self.live_raid_lore_save_cb.isChecked() else "false")
         self.settings.setValue("overlay_opacity", self.opacity_slider.value())

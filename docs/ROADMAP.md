@@ -31,6 +31,11 @@ This document outlines the planned milestones, upcoming features, and long-term 
   ```
   This automatically translates new strings into targeted locale files (`zh.json`, `ja.json`, etc.) using the Lemonade model.
 
+### 3. Familiar Mode — Generative Companions
+* [x] **Switchable familiars**: Five built-in desktop companions (wizard, witch, cat, owl, lemonfae), each with its own transit animation to the top of the screen (teleport-and-float, broom/owl flight, cat edge-climb) and drop-in PNG art override (`familiar/<species>/<state>_<n>.png`).
+* [ ] **"Conjure…" — Lemonade-authored familiars**: A 6th familiar slot where the user describes a creature in natural language and a local **Lemonade LLM** returns a structured JSON "art recipe" (palette, body/feature primitives, accessory, transit style) that drives a parametric vector renderer. Fully local, single-model, no diffusion dependency and no VRAM contention with the translation model — and it animates live (walk bob, cast glow) like the built-ins.
+* [ ] **Follow-up — High-fidelity diffusion sprites** *(stretch)*: An optional higher-quality path where Lemonade expands the prompt into a consistent character sheet and a local **diffusion backend** (SDXL-Turbo via ONNX/DirectML, or stable-diffusion.cpp/Vulkan on Strix Halo) renders the frames, followed by background removal and frame-to-frame consistency (img2img from a base render / sprite-sheet slicing). Gated behind a flag; reliability, latency, and VRAM trade-offs to be weighed against the vector path before promoting it.
+
 ---
 
 ## 🌀 Medium-Term Goals (3-6 Months)
