@@ -31,13 +31,14 @@ unknown values to the nearest valid one rather than ever raising.
 import re
 
 # --- allowed vocabularies ---------------------------------------------------
-BODY_SHAPES = {"round", "triangle", "blob", "tall", "quad"}
+BODY_SHAPES = {"round", "triangle", "blob", "tall", "quad", "egg", "ghost"}
 HEAD_KINDS = {"round", "merged"}
-EARS = {"none", "pointed", "tufts", "long", "horns"}
-EYES = {"dots", "big", "glow"}
-FEATURES = {"wings", "tail", "halo", "antennae", "whiskers", "spikes"}
-HEADWEAR = {"none", "pointed_hat", "crown", "hood", "leaf"}
-ACCESSORY = {"none", "staff", "broom", "wand", "orb"}
+EARS = {"none", "pointed", "tufts", "long", "horns", "round", "floppy"}
+EYES = {"dots", "big", "glow", "sleepy", "wink"}
+FEATURES = {"wings", "tail", "halo", "antennae", "whiskers", "spikes",
+            "fangs", "scarf", "flame", "gem", "glasses"}
+HEADWEAR = {"none", "pointed_hat", "crown", "hood", "leaf", "bow", "antlers"}
+ACCESSORY = {"none", "staff", "broom", "wand", "orb", "lantern", "book"}
 TRANSIT = {"teleport", "fly", "climb"}
 
 PALETTE_KEYS = ("primary", "secondary", "accent", "skin")
@@ -173,10 +174,63 @@ TEST_RECIPES = {
         "palette": {"primary": "#7d7468", "secondary": "#544c42",
                     "accent": "#b9aa92", "skin": "#9a8f7d"},
         "body": "triangle", "head": "round", "ears": "none", "eyes": "dots",
-        "features": ["spikes"], "headwear": "crown", "accessory": "staff",
+        "features": ["spikes", "gem"], "headwear": "crown", "accessory": "staff",
         "transit": "teleport", "float_down": True, "glow_color": "#c9b48a",
+    },
+    "pumpkin_imp": {
+        "name": "Pumpkin Imp",
+        "palette": {"primary": "#d8761e", "secondary": "#8f4711",
+                    "accent": "#ffd24a", "skin": "#f0b96a"},
+        "body": "egg", "head": "merged", "ears": "horns", "eyes": "glow",
+        "features": ["fangs", "flame"], "headwear": "none", "accessory": "none",
+        "transit": "teleport", "float_down": True, "glow_color": "#ff7a18",
+    },
+    "scholar_fox": {
+        "name": "Scholar Fox",
+        "palette": {"primary": "#c0622d", "secondary": "#7a3a18",
+                    "accent": "#ffe0b0", "skin": "#fff0db"},
+        "body": "quad", "head": "round", "ears": "pointed", "eyes": "dots",
+        "features": ["tail", "glasses", "whiskers"], "headwear": "none",
+        "accessory": "book", "transit": "climb", "float_down": False,
+        "glow_color": "#ffcaa0",
+    },
+    "ghost_lyra": {
+        "name": "Ghost Lyra",
+        "palette": {"primary": "#cfc7e8", "secondary": "#9a8fc0",
+                    "accent": "#ffffff", "skin": "#efeaff"},
+        "body": "ghost", "head": "merged", "ears": "none", "eyes": "big",
+        "features": ["scarf"], "headwear": "none", "accessory": "lantern",
+        "transit": "teleport", "float_down": True, "glow_color": "#c9b8ff",
+    },
+    "royal_stag": {
+        "name": "Royal Stag",
+        "palette": {"primary": "#8a5a34", "secondary": "#5a3a20",
+                    "accent": "#f4d27a", "skin": "#e8c7a0"},
+        "body": "tall", "head": "round", "ears": "none", "eyes": "dots",
+        "features": ["gem"], "headwear": "antlers", "accessory": "staff",
+        "transit": "teleport", "float_down": True, "glow_color": "#f4d27a",
+    },
+    "bow_bunny": {
+        "name": "Bow Bunny",
+        "palette": {"primary": "#e7a9c6", "secondary": "#b86d92",
+                    "accent": "#fff1f6", "skin": "#fff5fa"},
+        "body": "round", "head": "round", "ears": "long", "eyes": "sleepy",
+        "features": [], "headwear": "bow", "accessory": "none",
+        "transit": "climb", "float_down": False, "glow_color": "#ffc0dd",
+    },
+    "frost_owl": {
+        "name": "Frost Owl",
+        "palette": {"primary": "#7fa8d8", "secondary": "#4d6f9e",
+                    "accent": "#eaf4ff", "skin": "#dfeeff"},
+        "body": "round", "head": "round", "ears": "tufts", "eyes": "big",
+        "features": ["wings"], "headwear": "none", "accessory": "lantern",
+        "transit": "fly", "float_down": False, "glow_color": "#bfe3ff",
     },
 }
 
-# Order the Phase-1 dev cycle steps through.
-TEST_RECIPE_ORDER = ["ember_drake", "storm_sprite", "ivy_cat", "lantern_fae", "stone_golem"]
+# Order the Phase-1 dev cycle steps through (broad spread of shapes/styles).
+TEST_RECIPE_ORDER = [
+    "ember_drake", "storm_sprite", "ivy_cat", "lantern_fae", "stone_golem",
+    "pumpkin_imp", "scholar_fox", "ghost_lyra", "royal_stag", "bow_bunny",
+    "frost_owl",
+]

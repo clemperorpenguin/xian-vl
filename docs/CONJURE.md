@@ -102,10 +102,21 @@ it.
 
 ## Build phases
 
-1. **Schema + `_RecipeArt`** with bundled test recipes — verify all 5 mood
-   states + 3 transit styles render. (No LLM.)  ← *current*
-2. **`familiar_conjure.py`**: Lemonade call + validation/retry → validated recipe.
-3. **Conjure dialog + persistence + menu/dropdown wiring + i18n**, end-to-end.
+1. ✅ **Schema + `_RecipeArt`** with bundled test recipes — all 5 mood states +
+   3 transit styles render. Vocabulary later widened to 7 body shapes, 7 ear
+   types, 5 eye styles, 11 features, 7 headwear, 7 accessories.
+2. ✅ **`familiar_conjure.py`**: `ConjureWorker` (QThread → `processor.engine`)
+   with first-balanced-`{}` extraction, trailing-comma tolerance, coercion, and
+   one retry-with-nudge. Triggered by **right-click → "Conjure new familiar…"**,
+   a plain `QInputDialog` (casting pose while it thinks; name shown in a bubble
+   on success; sad pose on failure).
+3. ✅ **Conjure dialog + dropdown wiring**: `conjure_dialog.py` — a modal with a
+   description box, example chips, an **animated live preview** (the real
+   `_RecipeArt`, cycling idle→walk→cast→react), **Reroll**, and **Use this**.
+   Surfaced from right-click → "Conjure new familiar…", a **"Conjure…" button**
+   next to the settings dropdown, and the dropdown now includes the `custom`
+   slot so it round-trips. The Phase-1 dev cycle was removed; selecting
+   "Conjure ✨" simply switches to the existing custom familiar.
 
 ### Phase 1 dev affordance
 

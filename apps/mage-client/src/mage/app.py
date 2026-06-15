@@ -46,7 +46,7 @@ from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.how_to_say import HowToSayDialog
 from mage.ui.raid_window import RaidWindow
 from mage.ui.result_bubble import ResultBubble
-from mage.ui.familiar_pet import FamiliarPet
+from mage.ui.familiar_pet import FamiliarPet, FamiliarSpecies
 from mage.ui.overlay_base import MageOverlayWindow
 from mage.capture.hotkeys import create_hotkey_listener
 from mage.telemetry import get_recorder, TelemetrySampler
@@ -64,7 +64,8 @@ from mage.settings_keys import (
     KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY, KEY_OVERLAY_TOGGLE_KEY,
     KEY_GPU_UTIL, KEY_DIALOGUE_DELAY,
     KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG,
-    KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS, KEY_FAMILIAR_TYPE
+    KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS, KEY_FAMILIAR_TYPE,
+    KEY_FAMILIAR_CUSTOM_RECIPE,
 )
 from mage.utils.window_binder import WindowBinder
 from shared_types.state import state, t
@@ -273,13 +274,18 @@ class SettingsDialog(QDialog):
         features_layout.addRow(self.familiar_enabled_cb)
 
         self.familiar_type_combo = QComboBox()
-        for sp in ("wizard", "witch", "cat", "owl", "lemonfae"):
+        for sp in ("wizard", "witch", "cat", "owl", "lemonfae", "custom"):
             self.familiar_type_combo.addItem(t(f"familiar.species.{sp}"), sp)
         fam_type_val = settings.value(KEY_FAMILIAR_TYPE, "wizard")
         ft_idx = self.familiar_type_combo.findData(fam_type_val)
         if ft_idx >= 0:
             self.familiar_type_combo.setCurrentIndex(ft_idx)
-        features_layout.addRow(t("settings.label.familiar_type"), self.familiar_type_combo)
+        fam_type_row = QHBoxLayout()
+        fam_type_row.addWidget(self.familiar_type_combo, 1)
+        self.conjure_btn = QPushButton(t("familiar.conjure.button"))
+        self.conjure_btn.clicked.connect(self._on_conjure_clicked)
+        fam_type_row.addWidget(self.conjure_btn)
+        features_layout.addRow(t("settings.label.familiar_type"), fam_type_row)
 
         self.familiar_tts_cb = QCheckBox(t("settings.checkbox.familiar_tts"))
         fam_tts_val = settings.value(KEY_FAMILIAR_TTS, "false")
@@ -622,6 +628,44 @@ class XianApp(QWidget):
         else:
             self.settings.setValue(KEY_FAMILIAR_ENABLED, "true")
             self._create_familiar()
+
+    def conjure_familiar(self):
+        """Open the Conjure modal; on accept, apply + persist the new recipe.
+
+        Returns the chosen recipe dict, or ``None`` if cancelled. Works whether
+        or not a familiar is currently visible.
+        """
+        from mage.ui.conjure_dialog import ConjureDialog
+        fam = getattr(self, "familiar", None)
+        initial = (fam.current_recipe
+                   if fam and fam.species == FamiliarSpecies.CUSTOM else None)
+        dialog = ConjureDialog(self.processor, initial_recipe=initial, parent=self)
+        if dialog.exec() and dialog.result_recipe():
+            recipe = dialog.result_recipe()
+            self._apply_conjured_recipe(recipe)
+            return recipe
+        return None
+
+    def _apply_conjured_recipe(self, recipe: dict):
+        """Persist a conjured recipe and switch the (live) familiar to it."""
+        import json
+        self.settings.setValue(KEY_FAMILIAR_CUSTOM_RECIPE, json.dumps(recipe))
+        self.settings.setValue(KEY_FAMILIAR_TYPE, "custom")
+        fam = getattr(self, "familiar", None)
+        if fam:
+            if fam.species != FamiliarSpecies.CUSTOM:
+                fam.set_species("custom")
+            fam.set_recipe(recipe)
+            name = (recipe or {}).get("name", "")
+            if name:
+                fam.on_result(f"✨ {name}", with_bubble=True)
+
+    def _on_conjure_clicked(self):
+        """Settings 'Conjure…' button: generate, then select the custom slot."""
+        if self.conjure_familiar():
+            idx = self.familiar_type_combo.findData("custom")
+            if idx >= 0:
+                self.familiar_type_combo.setCurrentIndex(idx)
 
     def _familiar_default_path(self, action) -> bool:
         """True when a visible familiar should be the sole display for this result.

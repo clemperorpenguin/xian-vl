@@ -94,7 +94,9 @@ DWELL_MIN_S = 1.5         # idle pause range between walks
 DWELL_MAX_S = 4.5
 PERCH_MIN_S = 2.5         # how long the familiar lingers at the top
 PERCH_MAX_S = 6.0
-IDLE_ASCEND_CHANCE = 0.18  # chance an idle decision becomes an ascent
+# The familiar mostly stays on the floor; ascending to the top is the exception.
+IDLE_ASCEND_CHANCE = 0.08   # chance an idle decision becomes an ascent
+CURSOR_ASCEND_CHANCE = 0.2  # chance a cursor-dodge escapes up instead of along the floor
 TELEPORT_STEP = 0.14      # teleport blink progress per tick (0..1)
 BUBBLE_MAX_W = 360        # speech-bubble width cap
 
@@ -484,8 +486,19 @@ class _RecipeArt(_FamiliarArt):
         if "whiskers" in feats:
             self._whiskers(p, head_c, head_r)
         self._eyes_for(p, r["eyes"], head_c, facing, sad, state)
+        # 8b. face / accent features.
+        if "glasses" in feats:
+            self._glasses(p, head_c)
+        if "fangs" in feats and not sad:
+            self._fangs(p, head_c, head_r)
+        if "gem" in feats:
+            self._gem(p, head_c, head_r)
+        if "scarf" in feats:
+            self._scarf(p, head_c, head_r)
+        if "flame" in feats:
+            self._flame(p, head_c, head_r, frame)
         # 9. held accessory (not while flying — hands are busy).
-        if r["accessory"] in ("staff", "wand", "orb") and not flying:
+        if r["accessory"] in ("staff", "wand", "orb", "lantern", "book") and not flying:
             self._held(p, r["accessory"], cx, base_y, facing, state, frame)
 
     # -- body ----------------------------------------------------------------
@@ -501,6 +514,12 @@ class _RecipeArt(_FamiliarArt):
         elif shape == "blob":
             p.drawRoundedRect(QRect(cx - 22, base_y - 40, 44, 40), 18, 18)
             head_c, head_r, merge_y = QPoint(cx, base_y - 40), 13, base_y - 28
+        elif shape == "egg":
+            p.drawEllipse(QRect(cx - 18, base_y - 52, 36, 52))
+            head_c, head_r, merge_y = QPoint(cx, base_y - 42), 11, base_y - 32
+        elif shape == "ghost":
+            self._ghost_body(p, cx, base_y)
+            head_c, head_r, merge_y = QPoint(cx, base_y - 38), 11, base_y - 34
         elif shape == "quad":
             for lx in (-16, -6, 6, 16):
                 p.drawRect(cx + lx - 2, base_y - 8, 5, 8)
@@ -521,6 +540,21 @@ class _RecipeArt(_FamiliarArt):
         p.setBrush(QBrush(self.skin))
         p.drawEllipse(head_c, head_r, head_r)
         return head_c, head_r
+
+    def _ghost_body(self, p, cx, base_y):
+        top = base_y - 50
+        path = QPainterPath()
+        path.moveTo(cx - 20, base_y - 6)
+        path.lineTo(cx - 20, top + 18)
+        path.quadTo(cx - 20, top, cx, top)
+        path.quadTo(cx + 20, top, cx + 20, top + 18)
+        path.lineTo(cx + 20, base_y - 6)
+        # Wavy hem.
+        path.quadTo(cx + 13, base_y + 2, cx + 7, base_y - 6)
+        path.quadTo(cx, base_y + 2, cx - 7, base_y - 6)
+        path.quadTo(cx - 13, base_y + 2, cx - 20, base_y - 6)
+        path.closeSubpath()
+        p.drawPath(path)
 
     # -- behind-body features ------------------------------------------------
     def _wings(self, p, cx, base_y, frame, flying):
@@ -559,6 +593,16 @@ class _RecipeArt(_FamiliarArt):
             p.setBrush(QBrush(col))
             p.drawEllipse(QPoint(hx - 5, top - 8), 3, 12)
             p.drawEllipse(QPoint(hx + 5, top - 8), 3, 12)
+            return
+        if ears == "round":
+            p.setBrush(QBrush(col))
+            p.drawEllipse(QPoint(hx - head_r + 2, top + 2), 5, 5)
+            p.drawEllipse(QPoint(hx + head_r - 2, top + 2), 5, 5)
+            return
+        if ears == "floppy":
+            p.setBrush(QBrush(col))
+            p.drawEllipse(QPoint(hx - head_r, hy + 1), 4, 9)
+            p.drawEllipse(QPoint(hx + head_r, hy + 1), 4, 9)
             return
         if ears == "horns":
             p.setBrush(QBrush(self.accent))
@@ -619,6 +663,22 @@ class _RecipeArt(_FamiliarArt):
             p.setBrush(QBrush(QColor(120, 200, 110)))
             p.drawPolygon(QPolygon([
                 QPoint(hx, top), QPoint(hx + 9, top - 11), QPoint(hx + 2, top + 1)]))
+        elif hw == "bow":
+            by = top - 1
+            p.setBrush(QBrush(self.accent))
+            p.drawPolygon(QPolygon([
+                QPoint(hx, by), QPoint(hx - 9, by - 5), QPoint(hx - 9, by + 5)]))
+            p.drawPolygon(QPolygon([
+                QPoint(hx, by), QPoint(hx + 9, by - 5), QPoint(hx + 9, by + 5)]))
+            p.drawEllipse(QPoint(hx, by), 2, 2)
+        elif hw == "antlers":
+            p.setPen(QPen(QColor(155, 118, 83), 2))
+            for s in (-1, 1):
+                bx = hx + s * 5
+                p.drawLine(bx, top, bx + s * 4, top - 12)
+                p.drawLine(bx + s * 2, top - 6, bx + s * 8, top - 8)
+                p.drawLine(bx + s * 4, top - 12, bx + s * 9, top - 14)
+            p.setPen(Qt.PenStyle.NoPen)
 
     def _whiskers(self, p, head_c, head_r):
         hx, hy = head_c.x(), head_c.y()
@@ -642,6 +702,16 @@ class _RecipeArt(_FamiliarArt):
                 p.drawEllipse(QPoint(hx + sx, hy), 5, 5)
                 p.setBrush(QBrush(self.glow if lit else QColor(40, 40, 50)))
                 p.drawEllipse(QPoint(hx + sx + facing, hy), 2, 2)
+        elif eyes == "sleepy":
+            p.setPen(QPen(QColor(40, 40, 40), 2))
+            p.drawLine(hx - 7, hy, hx - 2, hy)
+            p.drawLine(hx + 2, hy, hx + 7, hy)
+            p.setPen(Qt.PenStyle.NoPen)
+        elif eyes == "wink":
+            p.setPen(QPen(QColor(40, 40, 40), 2))
+            p.drawPoint(hx - 4, hy)
+            p.drawLine(hx + 2, hy, hx + 7, hy)   # winking eye
+            p.setPen(Qt.PenStyle.NoPen)
         elif eyes == "glow":
             p.setBrush(QBrush(self.glow if lit else self.accent))
             p.drawEllipse(QPoint(hx - 5, hy), 3, 3)
@@ -651,6 +721,43 @@ class _RecipeArt(_FamiliarArt):
             p.drawPoint(hx - 4, hy)
             p.drawPoint(hx + 4, hy)
             p.setPen(Qt.PenStyle.NoPen)
+
+    # -- face / accent features ---------------------------------------------
+    def _glasses(self, p, head_c):
+        hx, hy = head_c.x(), head_c.y()
+        p.setPen(QPen(QColor(40, 40, 40), 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(QPoint(hx - 5, hy), 4, 4)
+        p.drawEllipse(QPoint(hx + 5, hy), 4, 4)
+        p.drawLine(hx - 1, hy, hx + 1, hy)
+        p.setPen(Qt.PenStyle.NoPen)
+
+    def _fangs(self, p, head_c, head_r):
+        hx, my = head_c.x(), head_c.y() + head_r - 3
+        p.setBrush(QBrush(QColor(250, 250, 250)))
+        p.drawPolygon(QPolygon([QPoint(hx - 5, my), QPoint(hx - 3, my), QPoint(hx - 4, my + 4)]))
+        p.drawPolygon(QPolygon([QPoint(hx + 5, my), QPoint(hx + 3, my), QPoint(hx + 4, my + 4)]))
+
+    def _gem(self, p, head_c, head_r):
+        hx, ty = head_c.x(), head_c.y() - head_r + 3
+        p.setBrush(QBrush(self.accent))
+        p.drawPolygon(QPolygon([
+            QPoint(hx, ty - 3), QPoint(hx + 3, ty), QPoint(hx, ty + 3), QPoint(hx - 3, ty)]))
+
+    def _scarf(self, p, head_c, head_r):
+        hx, ny = head_c.x(), head_c.y() + head_r - 2
+        p.setBrush(QBrush(self.accent))
+        p.drawRect(hx - 10, ny, 20, 4)
+        p.drawPolygon(QPolygon([
+            QPoint(hx + 6, ny + 4), QPoint(hx + 12, ny + 11), QPoint(hx + 6, ny + 11)]))
+
+    def _flame(self, p, head_c, head_r, frame):
+        hx, top = head_c.x(), head_c.y() - head_r
+        h = 10 if frame % 2 == 0 else 14
+        p.setBrush(QBrush(QColor(255, 122, 24)))
+        p.drawPolygon(QPolygon([QPoint(hx - 5, top + 2), QPoint(hx, top - h), QPoint(hx + 5, top + 2)]))
+        p.setBrush(QBrush(self.accent))
+        p.drawPolygon(QPolygon([QPoint(hx - 2, top), QPoint(hx, top - h + 5), QPoint(hx + 2, top)]))
 
     # -- accessories & aura --------------------------------------------------
     def _broom(self, p, cx, base_y):
@@ -679,6 +786,19 @@ class _RecipeArt(_FamiliarArt):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(self.accent))
             p.drawEllipse(QPoint(sx + facing * 8, base_y - 28), 3, 3)
+        elif acc == "lantern":
+            p.setPen(QPen(QColor(120, 90, 60), 2))
+            p.drawLine(sx, base_y - 20, sx, base_y - 30)
+            p.setPen(Qt.PenStyle.NoPen)
+            g = QColor(self.glow)
+            g.setAlpha(220)
+            p.setBrush(QBrush(g))
+            p.drawRect(sx - 4, base_y - 20, 8, 10)
+        elif acc == "book":
+            p.setBrush(QBrush(self.secondary))
+            p.drawRect(sx - 6, base_y - 22, 12, 9)
+            p.setBrush(QBrush(self.skin))
+            p.drawRect(sx - 4, base_y - 21, 8, 7)
         else:  # orb
             g = QColor(self.glow)
             g.setAlpha(210)
@@ -815,7 +935,6 @@ class FamiliarPet(MageOverlayWindow):
         # Conjured familiars are driven by an art recipe rather than a fixed
         # profile; load it up front so a "custom" species can resolve.
         self._recipe = self._load_recipe()
-        self._test_idx = 0
         if species is None:
             species = self._species_from_settings()
         self._profile = self._profile_for(FamiliarSpecies.from_value(species))
@@ -829,6 +948,7 @@ class FamiliarPet(MageOverlayWindow):
         now = time.monotonic()
         self._dwell_until = now + random.uniform(DWELL_MIN_S, DWELL_MAX_S)
         self._emote_until = 0.0                   # while > now, an emote overrides autonomy
+        self._fleeing = False                     # mid cursor-dodge (decide once, not per tick)
 
         # --- vertical-transit state machine ---
         self._transit = TransitPhase.GROUNDED
@@ -869,6 +989,10 @@ class FamiliarPet(MageOverlayWindow):
     @property
     def species(self) -> FamiliarSpecies:
         return self._profile.species
+
+    @property
+    def current_recipe(self) -> dict:
+        return self._recipe
 
     def _profile_for(self, species: FamiliarSpecies) -> _Profile:
         if species == FamiliarSpecies.CUSTOM:
@@ -1099,13 +1223,22 @@ class FamiliarPet(MageOverlayWindow):
         home = self._home_geometry()
         y = self._floor_y(home)
 
-        # Dodge the cursor by escaping upward to a perch.
+        # Dodge the cursor. Most of the time the familiar just scurries away
+        # along the floor; only occasionally does it escape up to the top.
         cursor = QCursor.pos()
         center = QPoint(self.x() + self.width() // 2, self.y() + self.height() // 2)
-        if (abs(cursor.x() - center.x()) < AVOID_RADIUS
-                and abs(cursor.y() - center.y()) < AVOID_RADIUS):
-            self._begin_ascend(home, cursor)
-            return
+        near = (abs(cursor.x() - center.x()) < AVOID_RADIUS
+                and abs(cursor.y() - center.y()) < AVOID_RADIUS)
+        if near:
+            if not self._fleeing:
+                self._fleeing = True
+                if random.random() < CURSOR_ASCEND_CHANCE:
+                    self._begin_ascend(home, cursor)
+                    return
+                self._start_ground_flee(cursor, home)
+            # else: already fleeing along the floor — fall through to WALK.
+        else:
+            self._fleeing = False
 
         if self._behaviour == FamiliarState.WALK:
             cur_x = self.x()
@@ -1132,6 +1265,19 @@ class FamiliarPet(MageOverlayWindow):
                 if hi > lo:
                     self._target_x = random.randint(lo, hi)
                     self._behaviour = FamiliarState.WALK
+
+    def _start_ground_flee(self, cursor: QPoint, home: QRect):
+        """Scurry away from the cursor along the floor (no ascent)."""
+        lo = home.left()
+        hi = home.right() - self.width()
+        if hi <= lo:
+            return
+        if cursor.x() < self.x() + self.width() // 2:
+            self._target_x, self._facing = hi, 1     # cursor on the left → go right
+        else:
+            self._target_x, self._facing = lo, -1
+        self._behaviour = FamiliarState.WALK
+        self._set_state(FamiliarState.WALK)
 
     def _begin_ascend(self, home: QRect, cursor):
         """Start a trip to the top of the screen using the species' transit style."""
@@ -1195,6 +1341,7 @@ class FamiliarPet(MageOverlayWindow):
             self.move(self.x() + bob, ny)
             if ny >= floor_y:
                 self._transit = TransitPhase.GROUNDED
+                self._fleeing = False
                 self._snap_to_floor()
                 self._dwell_until = now + random.uniform(DWELL_MIN_S, DWELL_MAX_S)
                 self._set_state(FamiliarState.IDLE)
@@ -1307,12 +1454,15 @@ class FamiliarPet(MageOverlayWindow):
             act.setChecked(sp == self._profile.species)
             act.setData(sp.value)
         menu.addSeparator()
+        conjure_action = menu.addAction(t("familiar.menu.conjure"))
         hide_action = menu.addAction(t("familiar.menu.hide"))
         settings_action = menu.addAction(t("familiar.menu.settings"))
         chosen = menu.exec(global_pos)
         if chosen is None:
             return
-        if chosen == hide_action and self.app is not None and hasattr(self.app, "toggle_familiar"):
+        if chosen == conjure_action and self.app is not None and hasattr(self.app, "conjure_familiar"):
+            self.app.conjure_familiar()
+        elif chosen == hide_action and self.app is not None and hasattr(self.app, "toggle_familiar"):
             self.app.toggle_familiar()
         elif chosen == settings_action and self.app is not None and hasattr(self.app, "_open_settings"):
             self.app._open_settings()
@@ -1320,14 +1470,9 @@ class FamiliarPet(MageOverlayWindow):
             self._apply_species_choice(chosen.data())
 
     def _apply_species_choice(self, value: str):
-        # Phase-1 dev affordance: re-picking "Conjure" while already custom
-        # cycles through the bundled test recipes so the renderer can be
-        # eyeballed across body shapes / transit styles. (Replaced by the
-        # Conjure dialog in Phase 3.)
-        if value == FamiliarSpecies.CUSTOM.value and self._profile.species == FamiliarSpecies.CUSTOM:
-            self._test_idx = (self._test_idx + 1) % len(TEST_RECIPE_ORDER)
-            self.set_recipe(TEST_RECIPES[TEST_RECIPE_ORDER[self._test_idx]], persist=False)
-            return
+        # Picking "Conjure ✨" here switches to the existing custom familiar; use
+        # the Conjure dialog (right-click → "Conjure new familiar…", or Settings)
+        # to generate a new one.
         self.set_species(value)
         if hasattr(self.app, "settings") and self.app.settings:
             try:
