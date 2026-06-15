@@ -140,6 +140,9 @@ class ConjureDialog(QDialog):
         lay.addLayout(prow)
 
         self.name_label = QLabel(self._recipe["name"] if self._recipe else "")
+        # The name is model-generated; render it as plain text so it can never
+        # be auto-detected as rich text / markup.
+        self.name_label.setTextFormat(Qt.TextFormat.PlainText)
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.name_label.setStyleSheet("font-weight: 600; font-size: 15px;")
         lay.addWidget(self.name_label)
