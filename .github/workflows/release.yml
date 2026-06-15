@@ -17,12 +17,20 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            preset: windows
+            preset: default
             artifact_name: lemonade-embeddable-windows-x64
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v6
 
       - name: Configure CMake
         run: cmake --preset ${{ matrix.preset }} -DBUILD_WEB_APP=OFF
