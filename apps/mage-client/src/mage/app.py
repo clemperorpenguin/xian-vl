@@ -234,6 +234,7 @@ class SettingsDialog(QDialog):
         # Tab: Features
         features_tab = QWidget()
         features_layout = QFormLayout(features_tab)
+        self.features_layout = features_layout
 
         self.leader_combo = QComboBox()
         self.leader_combo.addItem(t("leader.double_shift"), "Double-Tap Shift")
@@ -285,6 +286,7 @@ class SettingsDialog(QDialog):
         self.conjure_btn = QPushButton(t("familiar.conjure.button"))
         self.conjure_btn.clicked.connect(self._on_conjure_clicked)
         fam_type_row.addWidget(self.conjure_btn)
+        self.fam_type_row = fam_type_row
         features_layout.addRow(t("settings.label.familiar_type"), fam_type_row)
 
         self.familiar_tts_cb = QCheckBox(t("settings.checkbox.familiar_tts"))
@@ -458,6 +460,10 @@ class SettingsDialog(QDialog):
     def _update_dev_visibility(self, checked):
         self.live_voice_raid_cb.setVisible(checked)
         self.live_raid_lore_save_cb.setVisible(checked)
+        # Familiar Mode is a developer-only feature while its art is in progress.
+        self.familiar_enabled_cb.setVisible(checked)
+        self.familiar_tts_cb.setVisible(checked)
+        self.features_layout.setRowVisible(self.fam_type_row, checked)
 
 
 class XianApp(QWidget):
@@ -597,8 +603,18 @@ class XianApp(QWidget):
         if fam_val == "true" or fam_val is True:
             self._create_familiar()
 
+    def _developer_mode(self) -> bool:
+        val = self.settings.value("developer_options", "false")
+        return val == "true" or val is True
+
     def _create_familiar(self):
         if getattr(self, "familiar", None):
+            return
+        # Familiar Mode is gated behind Developer Mode while its art is in
+        # progress. This is the single chokepoint for every creation path
+        # (startup, tray toggle, settings save), so the gate lives here.
+        if not self._developer_mode():
+            logger.info("Familiar Mode is gated behind Developer Mode; skipping creation")
             return
         self.familiar = FamiliarPet(app=self, parent=self)
         self.familiar.show()
@@ -718,6 +734,8 @@ class XianApp(QWidget):
         fam_val = self.settings.value(KEY_FAMILIAR_ENABLED, "false")
         self.familiar_action.setChecked(fam_val == "true" or fam_val is True)
         self.familiar_action.triggered.connect(self.toggle_familiar)
+        # Developer-only while the art is in progress.
+        self.familiar_action.setVisible(self._developer_mode())
 
         menu.addSeparator()
 
@@ -2024,12 +2042,18 @@ class XianApp(QWidget):
             if hasattr(self, "raid_window") and self.raid_window:
                 self.raid_window.restore_geometry()
 
-            # Sync the desktop familiar to its (possibly changed) setting.
+            # Sync the desktop familiar. It's gated behind Developer Mode while
+            # the art is in progress, so it only runs when BOTH Developer Mode
+            # and the familiar toggle are on. Toggling Developer Mode off tears
+            # down a running familiar even if its own checkbox stayed on.
+            dev_on = self._developer_mode()
+            self.familiar_action.setVisible(dev_on)
             fam_enabled = self.settings.value(KEY_FAMILIAR_ENABLED, "false")
             fam_enabled = fam_enabled == "true" or fam_enabled is True
-            if fam_enabled and not getattr(self, "familiar", None):
+            want_familiar = dev_on and fam_enabled
+            if want_familiar and not getattr(self, "familiar", None):
                 self._create_familiar()
-            elif not fam_enabled and getattr(self, "familiar", None):
+            elif not want_familiar and getattr(self, "familiar", None):
                 self._destroy_familiar()
             elif getattr(self, "familiar", None):
                 # Already running: switch species if the type changed.
