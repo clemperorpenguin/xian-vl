@@ -6,6 +6,8 @@
   "settings.label.target_language": "Язык перевода:",
   "settings.label.mode": "Режим:",
   "settings.label.leader_key": "Ключ командира:",
+  "settings.label.overlay_toggle_key": "Клавиша показа/скрытия оверлеев:",
+  "tray.menu.toggle_overlays": "👁 Показать/скрыть оверлеи",
   "settings.label.ui_language": "Язык интерфейса:",
   "settings.label.styles": "Стили:",
   "settings.label.max_tokens": "Макс. токенов:",

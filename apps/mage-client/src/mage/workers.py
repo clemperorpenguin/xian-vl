@@ -29,6 +29,7 @@ import httpx
 from PyQt6.QtCore import QThread, QRect, pyqtSignal
 
 from mage.capture.audio import capture_system_audio
+from mage.telemetry import get_recorder
 from xian.lemonade_client import LemonadeClient
 from xian.timeout import vision_timeout_for_mode, CHAT_TIMEOUT_SECONDS, CHAT_AUX_TIMEOUT_SECONDS
 
@@ -91,6 +92,15 @@ def whisper_language_hint(source_lang: str) -> str:
     if "russ" in s:
         return "ru"
     return "en"
+
+
+def voice_for_language(language: str) -> str:
+    """Map a configured language to a Kokoro TTS voice, defaulting to English."""
+    if language == "Chinese":
+        return "zf_xiaoxiao"
+    if language == "Japanese":
+        return "jf_alpha"
+    return "af_heart"
 
 
 def _queue_put_drop_oldest(q: "asyncio.Queue", item) -> None:
@@ -216,13 +226,17 @@ class InferenceWorker(QThread):
             if not self.isInterruptionRequested():
                 self.translation_done.emit(results, self.action)
 
-            # Fire-and-forget stats log
+            # Fire-and-forget stats log + telemetry capture (data already fetched).
             async def _log_stats():
                 try:
                      base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
                      async with LemonadeClient(base_url=base_url.removesuffix("/v1")) as c:
                           stats = await c.stats()
                           logger.debug("Lemonade stats post-inference: %s", stats)
+                          get_recorder().record_inference(
+                              stats, "vision",
+                              getattr(self.processor.config, "model_name", None),
+                          )
                 except Exception:
                      pass
             self.processor.engine.submit(_log_stats())
@@ -652,11 +666,7 @@ class RaidWorker(QThread):
                 tts_model = self.processor.router.tts(active_model)
                 if not tts_model:
                     continue
-                voice_param = "af_heart"
-                if self.target_lang == "Chinese":
-                    voice_param = "zf_xiaoxiao"
-                elif self.target_lang == "Japanese":
-                    voice_param = "jf_alpha"
+                voice_param = voice_for_language(self.target_lang)
 
                 audio_bytes = await asyncio.wait_for(
                     client.tts(translation, voice=voice_param, model=tts_model),

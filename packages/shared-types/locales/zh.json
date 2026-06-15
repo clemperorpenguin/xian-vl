@@ -6,6 +6,8 @@
   "settings.label.target_language": "目标语言：",
   "settings.label.mode": "模式：",
   "settings.label.leader_key": "快捷键前缀：",
+  "settings.label.overlay_toggle_key": "显示/隐藏叠加层按键：",
+  "tray.menu.toggle_overlays": "👁 显示/隐藏叠加层",
   "settings.label.ui_language": "界面语言：",
   "settings.label.styles": "样式：",
   "settings.label.max_tokens": "最大令牌数：",

@@ -18,6 +18,7 @@
 
 import logging
 import datetime
+from html import escape as html_escape
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QTextEdit, QSizePolicy, QAbstractButton
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QSize, QPropertyAnimation, QRectF, pyqtProperty, QTimer
 from PyQt6.QtGui import QGuiApplication, QFont, QCursor, QPainter, QColor, QBrush, QPen, QRadialGradient
@@ -300,13 +301,18 @@ class RaidWindow(MageOverlayWindow):
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         self._entries.append((timestamp, original, translation))
         accent = accent_hex()
+        # original/translation are untrusted (transcribed audio + model output);
+        # escape them so markup like <img src="file:///..."> can't be rendered
+        # by the QTextEdit. The surrounding styling is static/trusted.
+        safe_original = html_escape(original)
+        safe_translation = html_escape(translation)
         html = f"""
         <div style="margin-bottom: 10px; line-height: 1.35;">
             <div style="color: #78909C; font-size: 11px;">
-                <span style="font-weight: bold; color: {accent};">[{timestamp}]</span> {original}
+                <span style="font-weight: bold; color: {accent};">[{timestamp}]</span> {safe_original}
             </div>
             <div style="color: #FFFFFF; font-size: 13px; font-weight: 500; margin-top: 2px; padding-left: 4px;">
-                ➔ {translation}
+                ➔ {safe_translation}
             </div>
         </div>
         """

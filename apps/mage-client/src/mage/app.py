@@ -26,11 +26,13 @@ icon is the primary entry point.
 import datetime
 import logging
 import os
+import time
 
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QDialog, QFormLayout,
     QLineEdit, QComboBox, QSpinBox, QPushButton, QLabel, QVBoxLayout,
-    QHBoxLayout, QWidget, QCheckBox, QMessageBox, QInputDialog, QTabWidget, QSlider
+    QHBoxLayout, QWidget, QCheckBox, QMessageBox, QInputDialog, QTabWidget, QSlider,
+    QFileDialog
 )
 from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap, QCursor
@@ -38,13 +40,16 @@ from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap, QCursor
 from mage.ui.theme import accent_hex, accent_hover_hex
 
 from xian.pipeline import VLProcessor, VLConfig
-from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker, ChatTranslationWorker, RaidWorker
+from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker, ChatTranslationWorker, RaidWorker, voice_for_language
 from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
 from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.how_to_say import HowToSayDialog
 from mage.ui.raid_window import RaidWindow
 from mage.ui.result_bubble import ResultBubble
+from mage.ui.familiar_pet import FamiliarPet, FamiliarSpecies
+from mage.ui.overlay_base import MageOverlayWindow
 from mage.capture.hotkeys import create_hotkey_listener
+from mage.telemetry import get_recorder, TelemetrySampler
 from mage.capture.mouse import create_mouse_listener
 from mage.capture.screen import ScreenCapture
 from mage.capture.audio import play_audio_async, SerialAudioPlayer
@@ -56,9 +61,11 @@ from shared_types import constants
 from shared_types.enums import SourceLanguage, TargetLanguage, TranslationMode, TranslationStyle
 from mage.settings_keys import (
     KEY_API_URL, KEY_API_MODEL, KEY_SOURCE_LANG, KEY_TARGET_LANG,
-    KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY,
+    KEY_MODE, KEY_STYLES, KEY_MAX_TOKENS, KEY_LEADER_KEY, KEY_OVERLAY_TOGGLE_KEY,
     KEY_GPU_UTIL, KEY_DIALOGUE_DELAY,
-    KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG
+    KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG,
+    KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS, KEY_FAMILIAR_TYPE,
+    KEY_FAMILIAR_CUSTOM_RECIPE,
 )
 from mage.utils.window_binder import WindowBinder
 from shared_types.state import state, t
@@ -227,6 +234,7 @@ class SettingsDialog(QDialog):
         # Tab: Features
         features_tab = QWidget()
         features_layout = QFormLayout(features_tab)
+        self.features_layout = features_layout
 
         self.leader_combo = QComboBox()
         self.leader_combo.addItem(t("leader.double_shift"), "Double-Tap Shift")
@@ -240,6 +248,17 @@ class SettingsDialog(QDialog):
             self.leader_combo.setCurrentIndex(idx)
         features_layout.addRow(t("settings.label.leader_key"), self.leader_combo)
 
+        self.overlay_toggle_combo = QComboBox()
+        self.overlay_toggle_combo.addItem("Right Shift", "rshift")
+        self.overlay_toggle_combo.addItem("Right Ctrl", "rctrl")
+        self.overlay_toggle_combo.addItem("Right Alt", "ralt")
+        self.overlay_toggle_combo.addItem("Super", "super")
+        toggle_val = settings.value(KEY_OVERLAY_TOGGLE_KEY, constants.DEFAULT_OVERLAY_TOGGLE_KEY)
+        t_idx = self.overlay_toggle_combo.findData(toggle_val)
+        if t_idx >= 0:
+            self.overlay_toggle_combo.setCurrentIndex(t_idx)
+        features_layout.addRow(t("settings.label.overlay_toggle_key"), self.overlay_toggle_combo)
+
         self.auto_continue_cb = QCheckBox(t("settings.checkbox.auto_continue"))
         auto_val = settings.value(KEY_AUTO_CONTINUE, "false")
         self.auto_continue_cb.setChecked(auto_val == "true" or auto_val is True)
@@ -249,6 +268,31 @@ class SettingsDialog(QDialog):
         speak_val = settings.value(KEY_AUTO_SPEAK, "false")
         self.auto_speak_cb.setChecked(speak_val == "true" or speak_val is True)
         features_layout.addRow(self.auto_speak_cb)
+
+        self.familiar_enabled_cb = QCheckBox(t("settings.checkbox.familiar_enabled"))
+        fam_val = settings.value(KEY_FAMILIAR_ENABLED, "false")
+        self.familiar_enabled_cb.setChecked(fam_val == "true" or fam_val is True)
+        features_layout.addRow(self.familiar_enabled_cb)
+
+        self.familiar_type_combo = QComboBox()
+        for sp in ("wizard", "witch", "cat", "owl", "lemonfae", "custom"):
+            self.familiar_type_combo.addItem(t(f"familiar.species.{sp}"), sp)
+        fam_type_val = settings.value(KEY_FAMILIAR_TYPE, "wizard")
+        ft_idx = self.familiar_type_combo.findData(fam_type_val)
+        if ft_idx >= 0:
+            self.familiar_type_combo.setCurrentIndex(ft_idx)
+        fam_type_row = QHBoxLayout()
+        fam_type_row.addWidget(self.familiar_type_combo, 1)
+        self.conjure_btn = QPushButton(t("familiar.conjure.button"))
+        self.conjure_btn.clicked.connect(self._on_conjure_clicked)
+        fam_type_row.addWidget(self.conjure_btn)
+        self.fam_type_row = fam_type_row
+        features_layout.addRow(t("settings.label.familiar_type"), fam_type_row)
+
+        self.familiar_tts_cb = QCheckBox(t("settings.checkbox.familiar_tts"))
+        fam_tts_val = settings.value(KEY_FAMILIAR_TTS, "false")
+        self.familiar_tts_cb.setChecked(fam_tts_val == "true" or fam_tts_val is True)
+        features_layout.addRow(self.familiar_tts_cb)
 
         self.live_voice_raid_cb = QCheckBox(t("settings.checkbox.live_voice_raid"))
         lv_raid_val = settings.value("live_voice_raid", "false")
@@ -390,10 +434,14 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_STYLES, selected_styles)
         self.settings.setValue(KEY_MAX_TOKENS, self.tokens_spin.value())
         self.settings.setValue(KEY_LEADER_KEY, self.leader_combo.currentData())
+        self.settings.setValue(KEY_OVERLAY_TOGGLE_KEY, self.overlay_toggle_combo.currentData())
         self.settings.setValue(KEY_GPU_UTIL, self.gpu_combo.currentText())
         self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
+        self.settings.setValue(KEY_FAMILIAR_ENABLED, "true" if self.familiar_enabled_cb.isChecked() else "false")
+        self.settings.setValue(KEY_FAMILIAR_TYPE, self.familiar_type_combo.currentData())
+        self.settings.setValue(KEY_FAMILIAR_TTS, "true" if self.familiar_tts_cb.isChecked() else "false")
         self.settings.setValue("live_voice_raid", "true" if self.live_voice_raid_cb.isChecked() else "false")
         self.settings.setValue("live_raid_lore_save", "true" if self.live_raid_lore_save_cb.isChecked() else "false")
         self.settings.setValue("overlay_opacity", self.opacity_slider.value())
@@ -412,6 +460,10 @@ class SettingsDialog(QDialog):
     def _update_dev_visibility(self, checked):
         self.live_voice_raid_cb.setVisible(checked)
         self.live_raid_lore_save_cb.setVisible(checked)
+        # Familiar Mode is a developer-only feature while its art is in progress.
+        self.familiar_enabled_cb.setVisible(checked)
+        self.familiar_tts_cb.setVisible(checked)
+        self.features_layout.setRowVisible(self.fam_type_row, checked)
 
 
 class XianApp(QWidget):
@@ -450,7 +502,11 @@ class XianApp(QWidget):
         initial_leader = self.settings.value(KEY_LEADER_KEY, constants.DEFAULT_LEADER_KEY)
         if hasattr(self.hotkey_listener, "set_leader_key"):
             self.hotkey_listener.set_leader_key(initial_leader)
-            
+
+        initial_toggle = self.settings.value(KEY_OVERLAY_TOGGLE_KEY, constants.DEFAULT_OVERLAY_TOGGLE_KEY)
+        if hasattr(self.hotkey_listener, "set_overlay_toggle_key"):
+            self.hotkey_listener.set_overlay_toggle_key(initial_toggle)
+
         self.hotkey_listener.trigger_lens.connect(self.show_lens)
         self.hotkey_listener.trigger_chat.connect(self.toggle_chat)
         self.hotkey_listener.trigger_settings.connect(self._open_settings)
@@ -463,6 +519,8 @@ class XianApp(QWidget):
         self.hotkey_listener.command_mode_started.connect(self._on_command_mode_started)
         if hasattr(self.hotkey_listener, "command_mode_cancelled"):
             self.hotkey_listener.command_mode_cancelled.connect(self.hide_osd)
+        if hasattr(self.hotkey_listener, "toggle_overlays"):
+            self.hotkey_listener.toggle_overlays.connect(self.toggle_all_overlays)
 
         self.hotkey_listener.start()
 
@@ -513,6 +571,12 @@ class XianApp(QWidget):
         self._pull_worker = None
         self._bubbles: list = []
         self._active_bubbles: dict[InferenceWorker, ResultBubble] = {}
+
+        # Overlay show/hide gesture (double-tap right shift) state. The restore
+        # queue itself lives on MageOverlayWindow (the suppression chokepoint).
+        self._overlays_hidden = False
+        # Throttle for the periodic "stay on top" re-assert in the tracking loop.
+        self._last_promote_ts = 0.0
         self._model_pull_attempted: bool = False
 
         self._setup_tray()
@@ -529,6 +593,120 @@ class XianApp(QWidget):
         self._setup_window_binder()
         self.apply_overlay_opacity()
         self.apply_overlay_text_size()
+        self._setup_telemetry()
+        self._setup_familiar()
+
+    def _setup_familiar(self):
+        """Create the desktop familiar companion if Familiar Mode is enabled."""
+        self.familiar = None
+        fam_val = self.settings.value(KEY_FAMILIAR_ENABLED, "false")
+        if fam_val == "true" or fam_val is True:
+            self._create_familiar()
+
+    def _developer_mode(self) -> bool:
+        val = self.settings.value("developer_options", "false")
+        return val == "true" or val is True
+
+    def _create_familiar(self):
+        if getattr(self, "familiar", None):
+            return
+        # Familiar Mode is gated behind Developer Mode while its art is in
+        # progress. This is the single chokepoint for every creation path
+        # (startup, tray toggle, settings save), so the gate lives here.
+        if not self._developer_mode():
+            logger.info("Familiar Mode is gated behind Developer Mode; skipping creation")
+            return
+        self.familiar = FamiliarPet(app=self, parent=self)
+        self.familiar.show()
+        if hasattr(self, "familiar_action"):
+            self.familiar_action.setChecked(True)
+        logger.info("Familiar Mode enabled")
+
+    def _destroy_familiar(self):
+        familiar = getattr(self, "familiar", None)
+        if familiar is None:
+            return
+        familiar.shutdown()
+        familiar.close()
+        familiar.deleteLater()
+        self.familiar = None
+        if hasattr(self, "familiar_action"):
+            self.familiar_action.setChecked(False)
+        logger.info("Familiar Mode disabled")
+
+    def toggle_familiar(self):
+        """Tray/context-menu toggle that also persists the preference."""
+        if getattr(self, "familiar", None):
+            self.settings.setValue(KEY_FAMILIAR_ENABLED, "false")
+            self._destroy_familiar()
+        else:
+            self.settings.setValue(KEY_FAMILIAR_ENABLED, "true")
+            self._create_familiar()
+
+    def conjure_familiar(self):
+        """Open the Conjure modal; on accept, apply + persist the new recipe.
+
+        Returns the chosen recipe dict, or ``None`` if cancelled. Works whether
+        or not a familiar is currently visible.
+        """
+        from mage.ui.conjure_dialog import ConjureDialog
+        fam = getattr(self, "familiar", None)
+        initial = (fam.current_recipe
+                   if fam and fam.species == FamiliarSpecies.CUSTOM else None)
+        dialog = ConjureDialog(self.processor, initial_recipe=initial, parent=self)
+        if dialog.exec() and dialog.result_recipe():
+            recipe = dialog.result_recipe()
+            self._apply_conjured_recipe(recipe)
+            return recipe
+        return None
+
+    def _apply_conjured_recipe(self, recipe: dict):
+        """Persist a conjured recipe and switch the (live) familiar to it."""
+        import json
+        self.settings.setValue(KEY_FAMILIAR_CUSTOM_RECIPE, json.dumps(recipe))
+        self.settings.setValue(KEY_FAMILIAR_TYPE, "custom")
+        fam = getattr(self, "familiar", None)
+        if fam:
+            if fam.species != FamiliarSpecies.CUSTOM:
+                fam.set_species("custom")
+            fam.set_recipe(recipe)
+            name = (recipe or {}).get("name", "")
+            if name:
+                fam.on_result(f"✨ {name}", with_bubble=True)
+
+    def _on_conjure_clicked(self):
+        """Settings 'Conjure…' button: generate, then select the custom slot."""
+        if self.conjure_familiar():
+            idx = self.familiar_type_combo.findData("custom")
+            if idx >= 0:
+                self.familiar_type_combo.setCurrentIndex(idx)
+
+    def _familiar_default_path(self, action) -> bool:
+        """True when a visible familiar should be the sole display for this result.
+
+        Familiar Mode replaces the standalone popup only on the default capture
+        path — dialogue and cinematic keep their dedicated bubbles (which carry
+        continue/notes/stop affordances the compact familiar bubble lacks).
+        """
+        familiar = getattr(self, "familiar", None)
+        return (
+            familiar is not None
+            and familiar.isVisible()
+            and not self.dialogue_mode_active
+            and action != "cinematic"
+        )
+
+    def _setup_telemetry(self):
+        """Start periodic host-resource sampling (CPU/GPU/RAM/VRAM).
+
+        The timer lives on the GUI thread but only dispatches a coroutine to the
+        async engine, so no sampling work touches the overlay's hot path.
+        """
+        self._telemetry = get_recorder()
+        self._telemetry_sampler = TelemetrySampler(self.processor, self._telemetry)
+        self._telemetry_timer = QTimer(self)
+        self._telemetry_timer.timeout.connect(self._telemetry_sampler.tick)
+        self._telemetry_timer.start(5000)  # sample every 5s
 
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(self)
@@ -548,12 +726,26 @@ class XianApp(QWidget):
         chat_action = menu.addAction(t("tray.menu.chat"))
         chat_action.triggered.connect(self.toggle_chat)
 
+        overlays_action = menu.addAction(t("tray.menu.toggle_overlays"))
+        overlays_action.triggered.connect(self.toggle_all_overlays)
+
+        self.familiar_action = menu.addAction(t("tray.menu.familiar"))
+        self.familiar_action.setCheckable(True)
+        fam_val = self.settings.value(KEY_FAMILIAR_ENABLED, "false")
+        self.familiar_action.setChecked(fam_val == "true" or fam_val is True)
+        self.familiar_action.triggered.connect(self.toggle_familiar)
+        # Developer-only while the art is in progress.
+        self.familiar_action.setVisible(self._developer_mode())
+
         menu.addSeparator()
 
         settings_action = menu.addAction(t("tray.menu.settings"))
         settings_action.triggered.connect(self._open_settings)
 
         menu.addSeparator()
+
+        perf_action = menu.addAction(t("tray.menu.perf_report"))
+        perf_action.triggered.connect(self._show_perf_report)
 
         about_action = menu.addAction(t("tray.menu.about"))
         about_action.triggered.connect(self.show_about_dialog)
@@ -604,6 +796,32 @@ class XianApp(QWidget):
                 QSystemTrayIcon.MessageIcon.Information,
                 5000
             )
+
+    def _show_perf_report(self):
+        """Render the accumulated telemetry to markdown, copy it to the
+        clipboard, and offer to save it (the perf-deepdive artifact)."""
+        report = self._telemetry.to_markdown()
+        cb = QApplication.clipboard()
+        if cb:
+            cb.setText(report)
+        box = QMessageBox(self)
+        box.setWindowTitle(t("perf.report.title"))
+        box.setText(t("perf.report.copied"))
+        box.setDetailedText(report)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Close
+        )
+        if box.exec() == QMessageBox.StandardButton.Save:
+            path, _ = QFileDialog.getSaveFileName(
+                self, t("perf.report.title"), "mage-performance.md",
+                "Markdown (*.md);;All files (*)"
+            )
+            if path:
+                try:
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write(report)
+                except OSError as e:
+                    logger.error("Failed to save performance report: %s", e)
 
     def show_about_dialog(self):
         from mage.resources import get_resource_path
@@ -848,6 +1066,11 @@ class XianApp(QWidget):
                 bubble._anchor_rect = anchor
                 bubble._position_near(anchor)
         else:
+            # In Familiar Mode the familiar's cast pose is the activity indicator
+            # on the default path, so skip the standalone "Translating…" popup.
+            if self._familiar_default_path(worker.action):
+                self.familiar.on_thinking()
+                return
             # Create a new bubble
             show_stop = self.dialogue_mode_active
             bubble = ResultBubble(
@@ -862,8 +1085,11 @@ class XianApp(QWidget):
                 self.cinematic_bubble = bubble
             else:
                 self._add_bubble(bubble)
-                
+
         self._active_bubbles[worker] = bubble
+
+        if getattr(self, "familiar", None) and self.familiar.isVisible():
+            self.familiar.on_thinking()
 
     def _on_inference_partial(self, text, action, worker):
         bubble = self._active_bubbles.get(worker)
@@ -965,6 +1191,10 @@ class XianApp(QWidget):
                     confidence=conf_display,
                     show_add_note=show_add_note,
                 )
+            elif self._familiar_default_path(action):
+                # Familiar Mode: the familiar's speech bubble (shown below) is
+                # the sole display; no standalone popup.
+                target_bubble = None
             else:
                 bubble = ResultBubble(
                     translation_combined if results else "No text detected in the selected region.",
@@ -1006,20 +1236,49 @@ class XianApp(QWidget):
 
         # Auto-speak if in Cinematic Mode, or if Auto-speak setting is checked
         auto_speak = self.settings.value(KEY_AUTO_SPEAK, "false")
+        spoke = False
         if action == "cinematic" or auto_speak == "true" or auto_speak is True:
             self._speak_text(translation_combined, source=False, voice_ref_bytes=getattr(worker, "audio_bytes", None))
+            spoke = True
+
+        # Familiar reacts to the finished translation. On the default path its
+        # speech bubble is the display; in dialogue/cinematic it only poses
+        # (those modes keep their dedicated bubbles).
+        familiar = getattr(self, "familiar", None)
+        if familiar and familiar.isVisible():
+            if self._familiar_default_path(action):
+                familiar.on_result(
+                    translation_combined if results else "No text detected.",
+                    original=original_combined if results else "",
+                    with_bubble=True,
+                )
+            elif results:
+                familiar.on_result(translation_combined, with_bubble=False)
+            fam_tts = self.settings.value(KEY_FAMILIAR_TTS, "false")
+            if (fam_tts == "true" or fam_tts is True) and not spoke and results and translation_combined.strip():
+                self._speak_text(translation_combined, source=False, voice_ref_bytes=getattr(worker, "audio_bytes", None))
 
     def _on_inference_error(self, msg, worker):
         anchor = worker.anchor_rect
         bubble = self._active_bubbles.pop(worker, None)
         if bubble:
             bubble.close()
+
+        # Familiar Mode: surface the error through the familiar instead of a
+        # standalone popup on the default path.
+        if self._familiar_default_path(getattr(worker, "action", None)):
+            self.familiar.on_error(str(msg))
+            return
+
         bubble = ResultBubble(
             f"⚠ Error: {msg}",
             anchor_rect=anchor,
             auto_close_ms=8000,
         )
         self._add_bubble(bubble)
+
+        if getattr(self, "familiar", None) and self.familiar.isVisible():
+            self.familiar.on_error(with_bubble=False)
 
     def _cleanup_worker(self, worker):
         try:
@@ -1116,13 +1375,8 @@ class XianApp(QWidget):
             base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
             base_url_no_v1 = base_url.removesuffix("/v1")
             
-            # Base voice defaults to English
-            voice_param = "af_heart"
             lang = self.settings.value(KEY_SOURCE_LANG if source else KEY_TARGET_LANG, constants.DEFAULT_SOURCE_LANG)
-            if lang == "Chinese":
-                voice_param = "zf_xiaoxiao"
-            elif lang == "Japanese":
-                voice_param = "jf_alpha"
+            voice_param = voice_for_language(lang)
                 
             temp_wav_path = None
             if voice_ref_bytes:
@@ -1772,6 +2026,10 @@ class XianApp(QWidget):
             new_leader = self.settings.value(KEY_LEADER_KEY, constants.DEFAULT_LEADER_KEY)
             if hasattr(self.hotkey_listener, "set_leader_key"):
                 self.hotkey_listener.set_leader_key(new_leader)
+
+            new_toggle = self.settings.value(KEY_OVERLAY_TOGGLE_KEY, constants.DEFAULT_OVERLAY_TOGGLE_KEY)
+            if hasattr(self.hotkey_listener, "set_overlay_toggle_key"):
+                self.hotkey_listener.set_overlay_toggle_key(new_toggle)
                 
             self._setup_window_binder()
             dev_val = self.settings.value("developer_options", "false")
@@ -1783,6 +2041,23 @@ class XianApp(QWidget):
             self.how_to_say_dialog.restore_geometry()
             if hasattr(self, "raid_window") and self.raid_window:
                 self.raid_window.restore_geometry()
+
+            # Sync the desktop familiar. It's gated behind Developer Mode while
+            # the art is in progress, so it only runs when BOTH Developer Mode
+            # and the familiar toggle are on. Toggling Developer Mode off tears
+            # down a running familiar even if its own checkbox stayed on.
+            dev_on = self._developer_mode()
+            self.familiar_action.setVisible(dev_on)
+            fam_enabled = self.settings.value(KEY_FAMILIAR_ENABLED, "false")
+            fam_enabled = fam_enabled == "true" or fam_enabled is True
+            want_familiar = dev_on and fam_enabled
+            if want_familiar and not getattr(self, "familiar", None):
+                self._create_familiar()
+            elif not want_familiar and getattr(self, "familiar", None):
+                self._destroy_familiar()
+            elif getattr(self, "familiar", None):
+                # Already running: switch species if the type changed.
+                self.familiar.set_species(self.settings.value(KEY_FAMILIAR_TYPE, "wizard"))
 
             self.apply_overlay_opacity()
             self.apply_overlay_text_size()
@@ -1807,6 +2082,51 @@ class XianApp(QWidget):
             overlays.append(self.raid_window)
         overlays.extend(self._bubbles)
         return overlays
+
+    def _collect_overlays(self):
+        """Return every live overlay widget (chrome + all bubbles), validated.
+
+        Single source of truth for the binder visibility loop, the periodic
+        promote tick, and the show/hide-all gesture.
+        """
+        raw = [
+            getattr(self, "osd", None),
+            getattr(self, "chat_sidebar", None),
+            getattr(self, "notes_sidebar", None),
+            getattr(self, "how_to_say_dialog", None),
+            getattr(self, "cinematic_bubble", None),
+            getattr(self, "raid_window", None),
+            getattr(self, "dialogue_bubble", None),
+            getattr(self, "familiar", None),
+        ]
+        raw.extend(self._bubbles)
+        raw.extend(self._active_bubbles.values())
+        seen = set()
+        overlays = []
+        for w in raw:
+            if w is None or id(w) in seen:
+                continue
+            if self._is_valid_widget(w):
+                seen.add(id(w))
+                overlays.append(w)
+        return overlays
+
+    def toggle_all_overlays(self):
+        """Show or hide every overlay at once (double-tap right shift gesture).
+
+        A user-initiated hide takes precedence over the window binder's
+        auto-show; toggling back hands control to the binder again.
+        """
+        self._overlays_hidden = not self._overlays_hidden
+        if self._overlays_hidden:
+            # MageOverlayWindow owns the suppression mode: it hides the current
+            # overlays AND captures any shown afterwards (e.g. a translation that
+            # finishes while hidden), so they all reappear together on un-hide.
+            MageOverlayWindow.hide_all_overlays(self._collect_overlays())
+            logger.info("Overlays hidden via toggle gesture")
+        else:
+            MageOverlayWindow.show_all_overlays()
+            logger.info("Overlays restored via toggle gesture")
 
     def toggle_layout_edit_mode(self):
         """Toggle UI Layout Edit Mode for all overlays."""
@@ -1899,6 +2219,20 @@ class XianApp(QWidget):
                 logger.debug("Failed to set transient parent for widget %s: %s", widget, e)
 
     def _track_target_window(self):
+        # Periodically re-assert "stay on top" for every visible overlay, even
+        # when no target window is bound. This keeps the HUD above a game that
+        # re-raises itself, without an expensive call on every 100ms tick.
+        if not self._overlays_hidden:
+            now_ts = time.monotonic()
+            if now_ts - self._last_promote_ts >= 0.75:
+                self._last_promote_ts = now_ts
+                for overlay in self._collect_overlays():
+                    if overlay.isVisible() and hasattr(overlay, "promote"):
+                        try:
+                            overlay.promote()
+                        except Exception as e:
+                            logger.debug("promote() failed for %s: %s", overlay, e)
+
         if not self.target_binder:
             return
 
@@ -1956,14 +2290,15 @@ class XianApp(QWidget):
                 if self._is_valid_widget(w):
                     overlays.append(w)
 
-            # Update visibility based on target active state
+            # Update visibility based on target active state. A user-initiated
+            # hide (toggle gesture) takes precedence over binder auto-show.
             for overlay in overlays:
                 if not target_should_be_visible:
                     # Hide overlay if visible and not already marked
                     if overlay.isVisible():
                         overlay.setVisible(False)
                         overlay._temp_hidden_by_binder = True
-                else:
+                elif not self._overlays_hidden:
                     # Restore visibility if temporarily hidden by binder
                     if getattr(overlay, "_temp_hidden_by_binder", False):
                         overlay.setVisible(True)

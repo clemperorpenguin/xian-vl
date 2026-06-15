@@ -22,6 +22,7 @@ Tracks a target window by title, retrieves its geometry, checks active status,
 and handles graceful fallback on non-supported platforms (like Wayland or macOS).
 """
 
+import atexit
 import logging
 import sys
 import ctypes
@@ -610,3 +611,216 @@ def set_bypass_compositor_hint_x11(win_id):
         logger.info("Set _NET_WM_BYPASS_COMPOSITOR to 2 on window XID: %s", win_id)
     except Exception as e:
         logger.debug("Failed to set _NET_WM_BYPASS_COMPOSITOR: %s", e)
+
+
+# --- _NET_WM_STATE_ABOVE structures and helper ---
+class _XClientMessageData(ctypes.Union):
+    _fields_ = [
+        ("b", ctypes.c_char * 20),
+        ("s", ctypes.c_short * 10),
+        ("l", c_long * 5),
+    ]
+
+
+class XClientMessageEvent(Structure):
+    _fields_ = [
+        ("type", c_int),
+        ("serial", c_ulong),
+        ("send_event", c_int),
+        ("display", c_void_p),
+        ("window", c_ulong),
+        ("message_type", c_ulong),
+        ("format", c_int),
+        ("data", _XClientMessageData),
+    ]
+
+
+_CLIENT_MESSAGE = 33
+_NET_WM_STATE_ADD = 1
+_SUBSTRUCTURE_NOTIFY = 1 << 19
+_SUBSTRUCTURE_REDIRECT = 1 << 20
+
+_above_state_display = None
+
+
+def _close_above_state_display():
+    """Close the dedicated _NET_WM_STATE display connection at interpreter exit."""
+    global _above_state_display
+    if _above_state_display and X11:
+        try:
+            X11.XCloseDisplay(_above_state_display)
+        except Exception:
+            pass
+    _above_state_display = None
+
+
+def set_above_state_x11(win_id):
+    """Add _NET_WM_STATE_ABOVE to a mapped window so the WM keeps it on top.
+
+    Uses an EWMH ClientMessage to the root window (the spec-correct way to update
+    _NET_WM_STATE on a mapped window). Does NOT take focus, so the overlay's
+    no-focus / click-through contract is preserved. No-op off X11.
+    """
+    global _above_state_display
+    if not sys.platform.startswith("linux"):
+        return
+    if not X11:
+        return
+
+    # Only run real X11 calls when Qt is actually using the xcb backend.
+    from PyQt6.QtGui import QGuiApplication
+    qt_platform = QGuiApplication.platformName() if QGuiApplication.instance() else None
+    if qt_platform != "xcb":
+        return
+
+    try:
+        if win_id is not None:
+            try:
+                win_id = int(win_id)
+            except (TypeError, ValueError):
+                return
+        if not win_id:
+            return
+
+        if _above_state_display is None:
+            _above_state_display = X11.XOpenDisplay(None)
+            if _above_state_display:
+                atexit.register(_close_above_state_display)
+        display = _above_state_display
+        if not display:
+            return
+
+        root = X11.XDefaultRootWindow(display)
+        wm_state_atom = X11.XInternAtom(display, b"_NET_WM_STATE", False)
+        above_atom = X11.XInternAtom(display, b"_NET_WM_STATE_ABOVE", False)
+
+        evt = XClientMessageEvent()
+        evt.type = _CLIENT_MESSAGE
+        evt.serial = 0
+        evt.send_event = 1
+        evt.display = display
+        evt.window = win_id
+        evt.message_type = wm_state_atom
+        evt.format = 32
+        evt.data.l[0] = _NET_WM_STATE_ADD
+        evt.data.l[1] = above_atom
+        evt.data.l[2] = 0
+        evt.data.l[3] = 1  # source indication: normal application
+        evt.data.l[4] = 0
+
+        X11.XSendEvent.argtypes = [c_void_p, c_ulong, c_int, c_long, c_void_p]
+        X11.XSendEvent.restype = c_int
+        X11.XSendEvent(
+            display,
+            root,
+            False,
+            _SUBSTRUCTURE_NOTIFY | _SUBSTRUCTURE_REDIRECT,
+            byref(evt),
+        )
+
+        if hasattr(X11, "XFlush"):
+            X11.XFlush.argtypes = [c_void_p]
+            X11.XFlush.restype = c_int
+            X11.XFlush(display)
+    except Exception as e:
+        logger.debug("Failed to set _NET_WM_STATE_ABOVE: %s", e)
+
+
+# XA_ATOM is a predefined X11 atom (value 4); used as the property type when
+# storing a list of atoms in _NET_WM_WINDOW_TYPE.
+_XA_ATOM = 4
+
+_window_type_display = None
+
+
+def _running_under_xwayland() -> bool:
+    """True only when Qt is on the xcb backend inside a Wayland session.
+
+    That is exactly the case our overlays are routed into by
+    ``_prefer_xwayland_on_wayland`` in main.py — and the only case where the
+    fullscreen-layer workaround below is both needed and safe. On native X11
+    (``XDG_SESSION_TYPE=x11``) the plain keep-above path already works and
+    notification-style window types can suppress input on some WMs, so we
+    leave that path untouched.
+    """
+    from PyQt6.QtGui import QGuiApplication
+    qt_platform = QGuiApplication.platformName() if QGuiApplication.instance() else None
+    if qt_platform != "xcb":
+        return False
+    import os
+    return os.environ.get("XDG_SESSION_TYPE") == "wayland"
+
+
+def set_overlay_window_type_x11(win_id):
+    """Promote an XWayland overlay above fullscreen windows on KWin.
+
+    A plain ``_NET_WM_STATE_ABOVE`` ("keep above") only reaches KWin's
+    *AboveLayer*, which sits BELOW the *ActiveLayer* a game is moved to while
+    it is fullscreen-and-focused — so a keep-above overlay still vanishes
+    behind a fullscreen game. KWin stacks a few window *types* in even higher
+    layers: critical-notification and on-screen-display both sit above the
+    active-fullscreen layer. We tag the overlay as a KDE critical notification
+    (with a generic ``_NET_WM_WINDOW_TYPE_NOTIFICATION`` fallback for other
+    EWMH compositors): that layer renders over fullscreen games *and*, unlike
+    an OSD, stays interactive, so the familiar keeps its click/drag.
+
+    Scoped to XWayland sessions (see ``_running_under_xwayland``); a no-op
+    everywhere else.
+    """
+    global _window_type_display
+    if not sys.platform.startswith("linux"):
+        return
+    if not X11:
+        return
+    if not _running_under_xwayland():
+        return
+
+    try:
+        if win_id is not None:
+            try:
+                win_id = int(win_id)
+            except (TypeError, ValueError):
+                return
+        if not win_id:
+            return
+
+        if _window_type_display is None:
+            _window_type_display = X11.XOpenDisplay(None)
+        display = _window_type_display
+        if not display:
+            return
+
+        type_atom = X11.XInternAtom(display, b"_NET_WM_WINDOW_TYPE", False)
+        crit_atom = X11.XInternAtom(
+            display, b"_KDE_NET_WM_WINDOW_TYPE_CRITICAL_NOTIFICATION", False
+        )
+        notif_atom = X11.XInternAtom(display, b"_NET_WM_WINDOW_TYPE_NOTIFICATION", False)
+
+        # Ordered most-specific first: KWin honours the critical-notification
+        # type; other EWMH WMs fall through to the generic notification type.
+        data = (c_ulong * 2)(crit_atom, notif_atom)
+
+        X11.XChangeProperty.argtypes = [
+            c_void_p, c_ulong, c_ulong, c_ulong, c_int, c_int, POINTER(c_ulong), c_int
+        ]
+        X11.XChangeProperty.restype = c_int
+        X11.XChangeProperty(
+            display,
+            win_id,
+            type_atom,
+            _XA_ATOM,
+            32,
+            0,  # PropModeReplace
+            data,
+            2,
+        )
+        if hasattr(X11, "XFlush"):
+            X11.XFlush.argtypes = [c_void_p]
+            X11.XFlush.restype = c_int
+            X11.XFlush(display)
+        logger.info(
+            "Set _NET_WM_WINDOW_TYPE=critical-notification on XID %s "
+            "(over-fullscreen layer)", win_id
+        )
+    except Exception as e:
+        logger.debug("Failed to set _NET_WM_WINDOW_TYPE: %s", e)

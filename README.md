@@ -90,10 +90,21 @@ uv run --package mage-client mage
 
 ### Controls
 - **Open Action Menu / OSD** — Double-Tap `Shift` (Default Leader Key)
+- **Show / Hide All Overlays** — Double-Tap `Right Shift` (configurable in Settings; also available from the tray menu)
 - **Trigger Screen Capture** — Action Menu `C` (select screen region, then Translate / Dialogue / Chat)
 - **Toggle Chat Sidebar** — Action Menu `A`
 - **Translate for Chat (Input)** — Action Menu `T`
 - **Settings Panel** — Action Menu `S`
+
+> **Always-on-top behaviour & Wayland note.** MAGE keeps its overlays above the
+> active game and brings each new translation to the front automatically. On
+> **X11** this is enforced via EWMH `_NET_WM_STATE_ABOVE` and works reliably
+> over fullscreen games. On **Wayland**, client-side window restacking is not
+> permitted by the compositor, so "always on top" depends on the compositor
+> honouring the stays-on-top hint — fronting may be less reliable there. The
+> global hotkeys and the **Show / Hide All Overlays** toggle still work on
+> Wayland; use that toggle (or the tray menu entry) if an overlay is ever
+> obscured.
 
 ---
 

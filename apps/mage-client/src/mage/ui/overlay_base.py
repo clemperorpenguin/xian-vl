@@ -20,14 +20,69 @@ import logging
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import Qt, QPoint, QRect
 from PyQt6.QtGui import QPainter, QColor, QPen
-from mage.utils.window_binder import set_bypass_compositor_hint_x11
+from mage.utils.window_binder import (
+    set_bypass_compositor_hint_x11,
+    set_above_state_x11,
+    set_overlay_window_type_x11,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class MageOverlayWindow(QWidget):
     """Base class for all draggable, always-on-top, and layout-persistent overlay windows."""
-    
+
+    # Global "hide all overlays" mode (driven by the toggle gesture / tray).
+    # While active, any overlay that tries to become visible is suppressed and
+    # queued here instead, then restored when the mode is turned off. This is
+    # the single chokepoint that makes a translation finishing *while hidden*
+    # queue up and reappear on un-hide, rather than popping over the game.
+    _overlays_suppressed = False
+    _suppressed_windows: list = []
+
+    @classmethod
+    def hide_all_overlays(cls, overlays):
+        """Enter hide-all mode and hide every currently-visible overlay.
+
+        Hidden windows are queued for restoration; any overlay shown later
+        (e.g. a new result bubble) is captured by ``setVisible`` while the mode
+        is active and joins the same queue.
+        """
+        cls._overlays_suppressed = True
+        for w in overlays:
+            if w.isVisible():
+                if w not in cls._suppressed_windows:
+                    cls._suppressed_windows.append(w)
+                # super(): bypass our own gate so it actually hides.
+                QWidget.setVisible(w, False)
+
+    @classmethod
+    def show_all_overlays(cls):
+        """Leave hide-all mode and restore every queued overlay."""
+        cls._overlays_suppressed = False
+        queued = cls._suppressed_windows
+        cls._suppressed_windows = []
+        for w in queued:
+            try:
+                from PyQt6 import sip
+                if sip.isdeleted(w):
+                    continue
+            except Exception:
+                pass
+            QWidget.setVisible(w, True)
+            if hasattr(w, "promote"):
+                w.promote()
+
+    def setVisible(self, visible):
+        # When the global hide-all mode is active, swallow show requests and
+        # remember the window so it can be restored on un-hide.
+        if visible and MageOverlayWindow._overlays_suppressed:
+            if self not in MageOverlayWindow._suppressed_windows:
+                MageOverlayWindow._suppressed_windows.append(self)
+            QWidget.setVisible(self, False)
+            return
+        super().setVisible(visible)
+
     def __init__(self, window_id: str, app=None, parent=None):
         super().__init__(parent)
         self.window_id = window_id
@@ -103,6 +158,25 @@ class MageOverlayWindow(QWidget):
             self.show()
         self.update()  # Repaint to show/hide dashed edit border
 
+    def promote(self):
+        """Force this overlay above the active window without taking focus.
+
+        Re-asserts the stays-on-top flag (some WMs drop it), restacks via
+        raise_(), and re-applies the EWMH _NET_WM_STATE_ABOVE hint. Never
+        activates the window, so focus stays with the game.
+        """
+        if not self.isVisible():
+            return
+        if not (self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint):
+            self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+            # WA_ShowWithoutActivating keeps this from stealing focus on re-show.
+            self.show()
+        self.raise_()
+        set_above_state_x11(self.winId())
+        # Under XWayland, keep-above alone loses to a fullscreen game; re-tag
+        # the overlay into KWin's over-fullscreen (critical-notification) layer.
+        set_overlay_window_type_x11(self.winId())
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and (self._edit_mode_active or not self._click_through):
             handle = self.windowHandle()
@@ -158,3 +232,9 @@ class MageOverlayWindow(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         set_bypass_compositor_hint_x11(self.winId())
+        set_above_state_x11(self.winId())
+        # XWayland-only: place the overlay in KWin's layer above fullscreen
+        # games. No-op on native X11 (keep-above already suffices there) and
+        # off-xcb. Re-applied here because Qt resets _NET_WM_WINDOW_TYPE
+        # whenever the native window is recreated (e.g. on a flags change).
+        set_overlay_window_type_x11(self.winId())

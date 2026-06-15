@@ -6,6 +6,8 @@
   "settings.label.target_language": "ターゲット言語:",
   "settings.label.mode": "モード:",
   "settings.label.leader_key": "リーダーキー:",
+  "settings.label.overlay_toggle_key": "オーバーレイ表示/非表示キー:",
+  "tray.menu.toggle_overlays": "👁 オーバーレイの表示/非表示",
   "settings.label.ui_language": "UI ラングエージ:",
   "settings.label.styles": "スタイル:",
   "settings.label.max_tokens": "最大トークン数:",
