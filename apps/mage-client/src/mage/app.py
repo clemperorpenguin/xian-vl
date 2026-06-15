@@ -40,7 +40,7 @@ from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap, QCursor
 from mage.ui.theme import accent_hex, accent_hover_hex
 
 from xian.pipeline import VLProcessor, VLConfig
-from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker, ChatTranslationWorker, RaidWorker
+from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker, ChatTranslationWorker, RaidWorker, voice_for_language
 from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
 from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.how_to_say import HowToSayDialog
@@ -440,8 +440,6 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_FAMILIAR_ENABLED, "true" if self.familiar_enabled_cb.isChecked() else "false")
         self.settings.setValue(KEY_FAMILIAR_TYPE, self.familiar_type_combo.currentData())
         self.settings.setValue(KEY_FAMILIAR_TTS, "true" if self.familiar_tts_cb.isChecked() else "false")
-        if getattr(self, "familiar", None):
-            self.familiar.set_species(self.familiar_type_combo.currentData())
         self.settings.setValue("live_voice_raid", "true" if self.live_voice_raid_cb.isChecked() else "false")
         self.settings.setValue("live_raid_lore_save", "true" if self.live_raid_lore_save_cb.isChecked() else "false")
         self.settings.setValue("overlay_opacity", self.opacity_slider.value())
@@ -1359,13 +1357,8 @@ class XianApp(QWidget):
             base_url = os.environ.get("LEMONADE_API_URL", self.processor.config.api_url)
             base_url_no_v1 = base_url.removesuffix("/v1")
             
-            # Base voice defaults to English
-            voice_param = "af_heart"
             lang = self.settings.value(KEY_SOURCE_LANG if source else KEY_TARGET_LANG, constants.DEFAULT_SOURCE_LANG)
-            if lang == "Chinese":
-                voice_param = "zf_xiaoxiao"
-            elif lang == "Japanese":
-                voice_param = "jf_alpha"
+            voice_param = voice_for_language(lang)
                 
             temp_wav_path = None
             if voice_ref_bytes:
@@ -2038,6 +2031,9 @@ class XianApp(QWidget):
                 self._create_familiar()
             elif not fam_enabled and getattr(self, "familiar", None):
                 self._destroy_familiar()
+            elif getattr(self, "familiar", None):
+                # Already running: switch species if the type changed.
+                self.familiar.set_species(self.settings.value(KEY_FAMILIAR_TYPE, "wizard"))
 
             self.apply_overlay_opacity()
             self.apply_overlay_text_size()

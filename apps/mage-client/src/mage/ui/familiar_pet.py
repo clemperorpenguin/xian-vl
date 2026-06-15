@@ -57,7 +57,7 @@ from PyQt6.QtWidgets import QWidget, QLabel, QMenu, QVBoxLayout, QApplication
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPixmap, QPolygon, QCursor, QGuiApplication,
-    QFont, QPainterPath,
+    QFont, QPainterPath, QTransform,
 )
 
 from mage.ui.overlay_base import MageOverlayWindow
@@ -115,6 +115,16 @@ class TransitPhase(Enum):
     ASCENDING = auto()   # travelling up
     PERCHED = auto()     # sitting at the top
     DESCENDING = auto()  # travelling back down
+
+
+# Transit phases that draw a travel pose, with the mood state whose frames they
+# fall back to when no dedicated travel art is installed. GROUNDED is absent: it
+# uses the current mood state directly.
+_TRANSIT_FRAME_FALLBACK = {
+    TransitPhase.ASCENDING: FamiliarState.WALK,
+    TransitPhase.PERCHED: FamiliarState.IDLE,
+    TransitPhase.DESCENDING: FamiliarState.WALK,
+}
 
 
 class FamiliarSpecies(Enum):
@@ -964,6 +974,7 @@ class FamiliarPet(MageOverlayWindow):
         # --- frames: real art if present, else vector placeholder ---
         self._frames: dict[FamiliarState, list[QPixmap]] = {}
         self._transit_frames: dict[TransitPhase, list[QPixmap]] = {}
+        self._flipped_cache: dict[int, QPixmap] = {}
         self._load_all_frames()
 
         self._bubble = FamiliarSpeechBubble(app=self.app, parent=self)
@@ -1056,6 +1067,7 @@ class FamiliarPet(MageOverlayWindow):
 
     # ----- asset loading ----------------------------------------------------
     def _load_all_frames(self):
+        self._flipped_cache.clear()
         for st in FamiliarState:
             self._frames[st] = self._load_frames(st.name.lower())
         # Optional dedicated travel poses (broom/wings/cling). Each falls back
@@ -1094,6 +1106,16 @@ class FamiliarPet(MageOverlayWindow):
             ))
             i += 1
         return frames
+
+    def _flipped(self, pm: QPixmap) -> QPixmap:
+        """Left-facing mirror of a frame, built once and cached. Frames are
+        immutable after load, so the mirror is reused across paints instead of
+        re-running a smooth transform every time the familiar faces left."""
+        cached = self._flipped_cache.get(id(pm))
+        if cached is None:
+            cached = pm.transformed(_FLIP_TRANSFORM, Qt.TransformationMode.SmoothTransformation)
+            self._flipped_cache[id(pm)] = cached
+        return cached
 
     # ----- public API (driven by the app's inference signals) ---------------
     def on_thinking(self):
@@ -1159,12 +1181,9 @@ class FamiliarPet(MageOverlayWindow):
         poses fall back to walk/idle frames, and ultimately to the empty list
         that makes ``paintEvent`` draw the vector placeholder instead.
         """
-        if self._transit == TransitPhase.ASCENDING:
-            return self._transit_frames.get(TransitPhase.ASCENDING) or self._frames.get(FamiliarState.WALK) or []
-        if self._transit == TransitPhase.PERCHED:
-            return self._transit_frames.get(TransitPhase.PERCHED) or self._frames.get(FamiliarState.IDLE) or []
-        if self._transit == TransitPhase.DESCENDING:
-            return self._transit_frames.get(TransitPhase.DESCENDING) or self._frames.get(FamiliarState.WALK) or []
+        fallback = _TRANSIT_FRAME_FALLBACK.get(self._transit)
+        if fallback is not None:
+            return self._transit_frames.get(self._transit) or self._frames.get(fallback) or []
         return self._frames.get(self._state) or []
 
     def _on_anim_tick(self):
@@ -1371,7 +1390,7 @@ class FamiliarPet(MageOverlayWindow):
             x = (self.width() - pm.width()) // 2
             y = (self.height() - pm.height()) // 2
             if self._facing < 0:
-                pm = pm.transformed(_flip_transform(), Qt.TransformationMode.SmoothTransformation)
+                pm = self._flipped(pm)
             painter.drawPixmap(x, y, pm)
         else:
             # Placeholder art is drawn in a 96px design box, then scaled up to
@@ -1482,6 +1501,4 @@ class FamiliarPet(MageOverlayWindow):
                 pass
 
 
-def _flip_transform():
-    from PyQt6.QtGui import QTransform
-    return QTransform().scale(-1, 1)
+_FLIP_TRANSFORM = QTransform().scale(-1, 1)

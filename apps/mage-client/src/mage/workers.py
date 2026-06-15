@@ -94,6 +94,15 @@ def whisper_language_hint(source_lang: str) -> str:
     return "en"
 
 
+def voice_for_language(language: str) -> str:
+    """Map a configured language to a Kokoro TTS voice, defaulting to English."""
+    if language == "Chinese":
+        return "zf_xiaoxiao"
+    if language == "Japanese":
+        return "jf_alpha"
+    return "af_heart"
+
+
 def _queue_put_drop_oldest(q: "asyncio.Queue", item) -> None:
     """Put *item* on a bounded queue, discarding the oldest entry if it is full.
 
@@ -657,11 +666,7 @@ class RaidWorker(QThread):
                 tts_model = self.processor.router.tts(active_model)
                 if not tts_model:
                     continue
-                voice_param = "af_heart"
-                if self.target_lang == "Chinese":
-                    voice_param = "zf_xiaoxiao"
-                elif self.target_lang == "Japanese":
-                    voice_param = "jf_alpha"
+                voice_param = voice_for_language(self.target_lang)
 
                 audio_bytes = await asyncio.wait_for(
                     client.tts(translation, voice=voice_param, model=tts_model),

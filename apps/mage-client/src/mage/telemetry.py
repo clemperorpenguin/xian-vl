@@ -103,6 +103,15 @@ def _find_first(data: Any, tokens: Iterable[str]) -> Optional[float]:
     return None
 
 
+def _normalize_vram(sample: ResourceSample) -> None:
+    """Heuristic: some backends report VRAM in bytes. Anything implausibly large
+    for a "MB" reading (> 512 GB) is almost certainly bytes, so rescale it."""
+    for attr in ("vram_used_mb", "vram_total_mb"):
+        v = getattr(sample, attr)
+        if v is not None and v > 512_000:
+            setattr(sample, attr, v / _MB)
+
+
 # --------------------------------------------------------------------------- #
 # Sample records
 # --------------------------------------------------------------------------- #
@@ -160,12 +169,7 @@ def parse_lemonade_resources(system_info: Any, stats: Any) -> ResourceSample:
             sample.vram_total_mb = _find_first(src, ("vram_total", "total_vram", "gpu_memory_total", "memory_total"))
         if sample.gpu_pct is None:
             sample.gpu_pct = _find_first(src, ("gpu_util", "gpu_load", "gpu_usage", "gpu_busy", "utilization"))
-    # Heuristic: Lemonade may report VRAM in bytes. Anything implausibly large
-    # for a "MB" reading (> 512 GB) is almost certainly bytes.
-    for attr in ("vram_used_mb", "vram_total_mb"):
-        v = getattr(sample, attr)
-        if v is not None and v > 512_000:
-            setattr(sample, attr, v / _MB)
+    _normalize_vram(sample)
     return sample
 
 
@@ -450,10 +454,7 @@ class TelemetrySampler:
             sample.vram_used_mb = _find_first(data, ("vram_used", "used_vram", "vram_total_used", "mem_used"))
             sample.vram_total_mb = _find_first(data, ("vram_total", "total_vram", "mem_total"))
             sample.gpu_pct = sample.gpu_pct or _find_first(data, ("gfx_activity", "gpu_use", "gpu_util", "usage"))
-            for attr in ("vram_used_mb", "vram_total_mb"):
-                v = getattr(sample, attr)
-                if v is not None and v > 512_000:
-                    setattr(sample, attr, v / _MB)
+            _normalize_vram(sample)
             if sample.vram_used_mb is not None:
                 return
         # Nothing usable; stop trying for the rest of the session.
