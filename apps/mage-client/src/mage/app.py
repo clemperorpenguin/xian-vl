@@ -94,11 +94,12 @@ class SettingsDialog(QDialog):
     
     layout_edit_requested = pyqtSignal()
 
-    def __init__(self, settings: QSettings, models: list, parent=None):
+    def __init__(self, settings: QSettings, models: list, parent=None, app=None):
         super().__init__(parent)
         self.setWindowTitle(t("settings.dialog.title"))
         self.setMinimumWidth(450)
         self.settings = settings
+        self.app = app
 
         main_layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -457,6 +458,13 @@ class SettingsDialog(QDialog):
         self.layout_edit_requested.emit()
         self.accept()
 
+    def _on_conjure_clicked(self):
+        """Settings 'Conjure…' button: generate via the app, then select custom."""
+        if self.app is not None and self.app.conjure_familiar():
+            idx = self.familiar_type_combo.findData("custom")
+            if idx >= 0:
+                self.familiar_type_combo.setCurrentIndex(idx)
+
     def _update_dev_visibility(self, checked):
         self.live_voice_raid_cb.setVisible(checked)
         self.live_raid_lore_save_cb.setVisible(checked)
@@ -673,13 +681,6 @@ class XianApp(QWidget):
             name = (recipe or {}).get("name", "")
             if name:
                 fam.on_result(f"✨ {name}", with_bubble=True)
-
-    def _on_conjure_clicked(self):
-        """Settings 'Conjure…' button: generate, then select the custom slot."""
-        if self.conjure_familiar():
-            idx = self.familiar_type_combo.findData("custom")
-            if idx >= 0:
-                self.familiar_type_combo.setCurrentIndex(idx)
 
     def _familiar_default_path(self, action) -> bool:
         """True when a visible familiar should be the sole display for this result.
@@ -1999,7 +2000,7 @@ class XianApp(QWidget):
     # Settings
     def _open_settings(self):
         self.hide_osd()
-        dlg = SettingsDialog(self.settings, self._available_models)
+        dlg = SettingsDialog(self.settings, self._available_models, app=self)
         
         def _handle_layout_edit():
             self.toggle_layout_edit_mode()
