@@ -2,7 +2,7 @@
 
 [العربية](docs/README.ar.md) | [Español](docs/README.es.md) | [हिन्दी](docs/README.hi.md) | [Русский](docs/README.ru.md) | [Tiếng Việt](docs/README.vi.md) | [简体中文](docs/README.zh.md)
 
-Xian-MAGE is a real-time, persistent desktop gaming HUD and assistant for Linux (Wayland). Powered by the **[Lemonade Server](https://lemonade-server.ai/)** backend, it overlays real-time OCR, translation, visual grounding clicking visualizers, and interactive conversational chat directly on top of active gaming environments.
+Xian-MAGE is a real-time, persistent desktop gaming HUD and assistant for Linux (Wayland). Powered by the **[Lemonade Server](https://lemonade-server.ai/)** backend, it overlays real-time OCR, translation, visual-grounding click targets, and interactive conversational chat directly on top of active gaming environments.
 
 Because inference is orchestrated via Lemonade, **MAGE supports Vulkan-accelerated execution, running smoothly on AMD Radeon™ GPUs and other accelerators.**
 
@@ -20,7 +20,7 @@ See it in action on YouTube: https://www.youtube.com/watch?v=Izu_8pql7cE
 - **Dialogue Mode (Autoplay VNs / Story RPGs)**: Lock onto a screen region, translate automatically, and advance/refresh translations inline with a simple mouse click.
 - **Visual Grounding Target Highlighting**: Ask the assistant *"where do I click?"* or *"where is the exit?"* and watch it highlight the exact physical coordinates on your screen.
 - **Cinematic Mode (Contextual Voice Translation)**: Seamlessly couples screen capture vision analysis with audio playback translation.
-- **Local CC-CEDICT Dictionary**: Instantly hover over any translation bubble and press `Alt` for a local thread-safe parsing breakdown of Chinese characters, pinyin, and definitions.
+- **Local CC-CEDICT Dictionary**: Instantly hover over any translation bubble and press `Alt` for a local, offline breakdown of Chinese characters, pinyin, and definitions.
 
 ---
 

@@ -117,10 +117,3 @@ it.
    next to the settings dropdown, and the dropdown now includes the `custom`
    slot so it round-trips. The Phase-1 dev cycle was removed; selecting
    "Conjure ✨" simply switches to the existing custom familiar.
-
-### Phase 1 dev affordance
-
-Until the dialog lands, selecting **Conjure ✨** in the right-click *Change
-familiar* menu switches to the custom slot; selecting it again **cycles through
-the bundled test recipes** (`TEST_RECIPE_ORDER` in `familiar_recipe.py`) so the
-renderer can be eyeballed across body shapes and transit styles.
