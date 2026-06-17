@@ -188,45 +188,6 @@ build_lemonade() {
     _install_lemonade_from_dir "${stage_dir}"
 }
 
-# ── Linux: build whisper.cpp from source ─────────────────────────────────────
-
-build_whisper() {
-    echo "── Building whisper.cpp locally to fix SIGILL issues… ──"
-    local build_dir="${REPO_DIR}/build/whispercpp-src"
-    
-    if [[ ! -d "${build_dir}" ]]; then
-        mkdir -p "${REPO_DIR}/build"
-        git clone -b v1.8.4 https://github.com/ggerganov/whisper.cpp "${build_dir}"
-    fi
-    
-    (
-        cd "${build_dir}"
-        echo "Configuring CMake for whisper.cpp (Vulkan)…"
-        # Using both WHISPER_ and GGML_ flags to cover whisper.cpp version variations
-        cmake -B build -DWHISPER_VULKAN=1 -DGGML_VULKAN=1 -DBUILD_SHARED_LIBS=ON
-        echo "Building whisper-server…"
-        cmake --build build --config Release -j --target whisper-server
-    )
-    
-    # lemonade expects the backend binary here
-    local out_dir="${HOME}/.cache/lemonade/bin/whispercpp/vulkan"
-    mkdir -p "${out_dir}"
-    
-    echo "Copying locally compiled whisper-server to ${out_dir}…"
-    # whisper.cpp executable output is usually in bin/
-    cp -f "${build_dir}/build/bin/whisper-server" "${out_dir}/" 2>/dev/null || \
-        cp -f "${build_dir}/build/examples/server/whisper-server" "${out_dir}/"
-    
-    # Copy ggml shared libraries if any were generated
-    cp -f "${build_dir}/build/bin/libggml*.so" "${out_dir}/" 2>/dev/null || true
-    cp -f "${build_dir}/build/src/libwhisper*.so" "${out_dir}/" 2>/dev/null || true
-    
-    # Write version.txt so lemond doesn't think the installation is corrupt and overwrite it
-    echo "v1.8.4" > "${out_dir}/version.txt"
-    
-    echo "✓ whisper.cpp locally built and installed to backend directory."
-}
-
 # ── macOS: download pre-built Lemonade from GitHub releases ──────────────────
 
 download_lemonade() {
@@ -395,7 +356,6 @@ DESKTOP
     # Build and install lemonade if requested
     if [[ "${BUILD_LEMONADE}" == "true" ]]; then
         install_build_deps
-        build_whisper
         build_lemonade
     fi
 }
@@ -596,7 +556,6 @@ case "${ACTION}" in
         ;;
     build)
         install_build_deps
-        build_whisper
         build_lemonade
         ;;
     *)
