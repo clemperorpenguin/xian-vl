@@ -164,12 +164,21 @@ class LemonadeClient:
         *,
         voice: str = "af_heart",
         model: str = "",
+        response_format: str = "wav",
     ) -> bytes:
         """Text-to-speech.  ``POST /v1/audio/speech``.
 
-        Returns raw audio bytes (WAV).
+        Returns raw audio bytes.  Defaults to ``wav`` because every caller
+        plays the result through a PCM player (pw-play/paplay/aplay) after
+        writing it to a ``.wav`` temp file — Lemonade otherwise defaults to
+        ``mp3`` (``audio/mpeg``), which those players cannot decode and play
+        back as raw noise.
         """
-        payload: dict[str, str] = {"input": text, "voice": voice}
+        payload: dict[str, str] = {
+            "input": text,
+            "voice": voice,
+            "response_format": response_format,
+        }
         if model:
             payload["model"] = model
         resp = await self._client.post("/v1/audio/speech", json=payload)

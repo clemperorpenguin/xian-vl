@@ -46,14 +46,15 @@ async def test_raid_worker_resilience(qapp):
     
     worker = RaidWorker(processor, target_lang="English", source_lang="Chinese", save_lore=False, audio_enabled=True)
     
-    # Mock ContinuousAudioStreamer
+    # Mock ContinuousAudioStreamer. Feed one chunk that fails transcription
+    # followed by one that succeeds; the worker is stopped from the audio_ready
+    # handler below, once the surviving chunk has flowed all the way through the
+    # decoupled TTS stage, so the run is deterministic rather than racing stop().
     mock_streamer = MagicMock()
     async def mock_read_chunks():
         yield b"chunk1"
         yield b"chunk2"
-        # stop worker to break the loop
-        worker.stop()
-        
+
     mock_streamer.read_chunks = mock_read_chunks
     mock_streamer.start = AsyncMock()
     mock_streamer.stop = AsyncMock()
@@ -89,24 +90,34 @@ async def test_raid_worker_resilience(qapp):
     with patch("mage.capture.audio.ContinuousAudioStreamer", return_value=mock_streamer), \
          patch("mage.workers.LemonadeClient", return_value=mock_lemonade_client):
          
-         # Connect signals to verify
+         # Connect signals to verify. The pipeline is decoupled: text reaches
+         # the UI via chunk_translated(transcript, translation) on the critical
+         # path, while synthesized speech arrives separately on audio_ready.
          progress_messages = []
          translations = []
-         
+         audio_payloads = []
+
          worker.progress.connect(progress_messages.append)
-         worker.chunk_translated.connect(lambda orig, trans, audio: translations.append((orig, trans, audio)))
-         
+         worker.chunk_translated.connect(lambda orig, trans: translations.append((orig, trans)))
+
+         def _on_audio(payload):
+             audio_payloads.append(payload)
+             worker.stop()  # surviving chunk is fully processed; end the run
+         worker.audio_ready.connect(_on_audio)
+
          # Run _run_async directly so we can await it
          await worker._run_async()
-         
+
          # Verify that the first chunk's failure didn't crash the loop
          # and the second chunk was successfully processed.
          assert len(translations) == 1
-         assert translations[0] == ("hello world", "Hello World", b"tts_audio_payload")
-         
+         assert translations[0] == ("hello world", "Hello World")
+
          # Verify we had "Transcription failed" progress message
          any_fail_msg = any("Transcription failed" in msg for msg in progress_messages)
          assert any_fail_msg
-         
-         # Verify TTS was called
+
+         # The off-critical-path TTS consumer should have synthesized and
+         # emitted the translated speech for the surviving chunk.
+         assert audio_payloads == [b"tts_audio_payload"]
          mock_tts.assert_called_once_with("Hello World", voice="af_heart", model="kokoro-v1")

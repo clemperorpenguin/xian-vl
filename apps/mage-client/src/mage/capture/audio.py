@@ -94,6 +94,10 @@ async def capture_system_audio(
         if recorder == "pw-record":
             cmd = [
                 "pw-record",
+                # Capture the default sink's monitor (what the speakers play),
+                # not the default source (the microphone). Mirrors parecord's
+                # @DEFAULT_MONITOR@ below.
+                "-P", "{ stream.capture.sink=true }",
                 "--rate", str(sample_rate),
                 "--channels", "1",
                 "--format", "s16",
@@ -166,7 +170,10 @@ class ContinuousAudioStreamer:
             raise RuntimeError("No audio recorder found.")
         
         if recorder == "pw-record":
-            cmd = ["pw-record", "--rate", str(self.sample_rate), "--channels", "1", "--format", "s16", "-"]
+            # -P '{ stream.capture.sink=true }' records the default sink's
+            # monitor (system audio), not the microphone — matching parecord's
+            # @DEFAULT_MONITOR@ device below.
+            cmd = ["pw-record", "-P", "{ stream.capture.sink=true }", "--rate", str(self.sample_rate), "--channels", "1", "--format", "s16", "-"]
         else:
             cmd = ["parecord", "--rate", str(self.sample_rate), "--channels", "1", "--format", "s16le", "--device", "@DEFAULT_MONITOR@", "-"]
             
