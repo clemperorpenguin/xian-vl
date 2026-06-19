@@ -35,6 +35,9 @@ class ClickableKeyLabel(QLabel):
         super().__init__(parent)
         self.action_id = action_id
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # This label is itself a click target, so it must not be hijacked by
+        # the OSD's drag-anywhere handling.
+        self.setProperty("mageNoDrag", True)
         self.setFixedSize(64, 64)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setFont(QFont("sans-serif", 24, QFont.Weight.Bold))
@@ -179,6 +182,10 @@ class CommandOSD(MageOverlayWindow):
         settings_layout.addWidget(self.model_combo)
 
         inner_layout.addLayout(settings_layout)
+
+        # Drag the OSD from anywhere on its body; the option keys, combo boxes
+        # and other controls keep their own mouse handling.
+        self.enable_drag_anywhere()
 
     def _create_option(self, key: str, label_text: str) -> QWidget:
         container = QWidget()

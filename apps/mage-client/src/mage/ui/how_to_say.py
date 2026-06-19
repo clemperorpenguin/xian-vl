@@ -155,6 +155,10 @@ class HowToSayDialog(MageOverlayWindow):
 
         inner_layout.addLayout(btn_layout)
 
+        # Drag the dialog from anywhere on its body; the text inputs, buttons
+        # and other controls keep their own mouse handling.
+        self.enable_drag_anywhere()
+
     def _on_translate(self):
         text = self.input_field.toPlainText().strip()
         if text:

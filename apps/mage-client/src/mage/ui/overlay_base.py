@@ -17,9 +17,18 @@
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
 import logging
-from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt, QPoint, QRect
-from PyQt6.QtGui import QPainter, QColor, QPen
+from PyQt6.QtWidgets import (
+    QWidget,
+    QAbstractButton,
+    QLineEdit,
+    QTextEdit,
+    QPlainTextEdit,
+    QComboBox,
+    QAbstractSlider,
+    QAbstractScrollArea,
+)
+from PyQt6.QtCore import Qt, QPoint, QRect, QEvent
+from PyQt6.QtGui import QPainter, QColor, QPen, QGuiApplication
 from mage.utils.window_binder import (
     set_bypass_compositor_hint_x11,
     set_above_state_x11,
@@ -92,6 +101,10 @@ class MageOverlayWindow(QWidget):
         self._system_moving = False
         self._click_through = False
         self._edit_mode_active = False
+        # When True, the window can be dragged by pressing (almost) anywhere on
+        # its surface, not just the thin background margin. See
+        # enable_drag_anywhere().
+        self._drag_anywhere = False
 
         # Apply default overlay flags
         self.setWindowFlags(
@@ -119,6 +132,10 @@ class MageOverlayWindow(QWidget):
                     self.setGeometry(geo_val)
                 elif isinstance(geo_val, (list, tuple)) and len(geo_val) == 4:
                     self.setGeometry(QRect(int(geo_val[0]), int(geo_val[1]), int(geo_val[2]), int(geo_val[3])))
+                # A geometry saved on a different monitor layout / resolution can
+                # land off the visible desktop, where the window is unreachable.
+                # Snap it back onto a real screen.
+                self._clamp_to_screen()
             except Exception as e:
                 logger.error("Failed to restore geometry for %s under preset %s: %s", self.window_id, preset, e)
 
@@ -130,6 +147,111 @@ class MageOverlayWindow(QWidget):
         key = f"layout/{preset}/{self.window_id}"
         geo = self.geometry()
         self.app.settings.setValue(key, [geo.x(), geo.y(), geo.width(), geo.height()])
+
+    # ------------------------------------------------------------------
+    # On-screen clamping
+    # ------------------------------------------------------------------
+    def _screen_for_rect(self, rect: QRect):
+        """Return the screen this rect overlaps the most.
+
+        Falls back to the screen under the rect's centre, then the primary
+        screen, so a rect that is entirely off the desktop still resolves to a
+        sane target to be clamped onto.
+        """
+        best = None
+        best_area = 0
+        for screen in QGuiApplication.screens():
+            inter = screen.availableGeometry().intersected(rect)
+            area = inter.width() * inter.height()
+            if area > best_area:
+                best_area = area
+                best = screen
+        if best is None:
+            best = QGuiApplication.screenAt(rect.center()) or QGuiApplication.primaryScreen()
+        return best
+
+    def _clamp_to_screen(self):
+        """Keep the window fully within the available area of its screen.
+
+        Restored or dragged windows can end up partly (or entirely) off-screen
+        where they become unreachable. We pin the window back inside the
+        available geometry of whichever screen it best belongs to. If the
+        window is larger than that screen, it is anchored to the top-left
+        corner so its controls stay reachable.
+        """
+        screen = self._screen_for_rect(self.frameGeometry())
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        w, h = self.width(), self.height()
+        # Largest valid top-left so the window's far edge stays on screen.
+        max_x = max(avail.left(), avail.right() - w + 1)
+        max_y = max(avail.top(), avail.bottom() - h + 1)
+        new_x = min(max(self.x(), avail.left()), max_x)
+        new_y = min(max(self.y(), avail.top()), max_y)
+        if new_x != self.x() or new_y != self.y():
+            self.move(new_x, new_y)
+
+    # ------------------------------------------------------------------
+    # Drag-anywhere support
+    # ------------------------------------------------------------------
+    # Controls whose own mouse handling we must not hijack for window dragging.
+    _NON_DRAGGABLE = (
+        QAbstractButton,
+        QLineEdit,
+        QTextEdit,
+        QPlainTextEdit,
+        QComboBox,
+        QAbstractSlider,
+        QAbstractScrollArea,
+    )
+
+    def enable_drag_anywhere(self):
+        """Allow the window to be dragged by pressing anywhere on its body.
+
+        Child widgets (labels especially) consume mouse-press events before
+        they reach our own ``mousePressEvent``, so a bubble that is mostly text
+        feels 'stuck' — only its thin background margin can start a drag. We
+        install an event filter on every descendant so a left-press that isn't
+        on an interactive control (buttons, inputs, sliders, scroll areas)
+        moves the whole window instead.
+
+        Custom clickable widgets that aren't one of the excluded types can opt
+        out individually with ``widget.setProperty("mageNoDrag", True)``.
+        """
+        self._drag_anywhere = True
+        self._refresh_drag_filter()
+
+    def _refresh_drag_filter(self):
+        """(Re)install the drag event filter on all current descendants."""
+        if not self._drag_anywhere:
+            return
+        for child in self.findChildren(QWidget):
+            child.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if self._drag_anywhere and isinstance(obj, QWidget):
+            et = event.type()
+            draggable_now = self._edit_mode_active or not self._click_through
+            if (et == QEvent.Type.MouseButtonPress
+                    and event.button() == Qt.MouseButton.LeftButton
+                    and draggable_now
+                    and not isinstance(obj, self._NON_DRAGGABLE)
+                    and not obj.property("mageNoDrag")):
+                self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                self._is_dragging = True
+                return True
+            if et == QEvent.Type.MouseMove and self._is_dragging and (event.buttons() & Qt.MouseButton.LeftButton):
+                self.move(event.globalPosition().toPoint() - self._drag_position)
+                return True
+            if (et == QEvent.Type.MouseButtonRelease
+                    and self._is_dragging
+                    and event.button() == Qt.MouseButton.LeftButton):
+                self._is_dragging = False
+                self._clamp_to_screen()
+                self.save_geometry()
+                return True
+        return super().eventFilter(obj, event)
 
     def set_click_through(self, click_through: bool):
         """Toggles window click-through state (WA_TransparentForMouseEvents)."""
@@ -203,11 +325,13 @@ class MageOverlayWindow(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             if self._system_moving:
                 self._system_moving = False
+                self._clamp_to_screen()
                 self.save_geometry()
                 event.accept()
                 return
             if self._is_dragging:
                 self._is_dragging = False
+                self._clamp_to_screen()
                 self.save_geometry()
                 event.accept()
                 return
@@ -231,6 +355,12 @@ class MageOverlayWindow(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # Guarantee the window is on a visible screen every time it appears
+        # (covers fresh shows, monitor hot-plug, and resolution changes).
+        self._clamp_to_screen()
+        # Pick up any descendants added since the last show so the whole body
+        # stays draggable.
+        self._refresh_drag_filter()
         set_bypass_compositor_hint_x11(self.winId())
         set_above_state_x11(self.winId())
         # XWayland-only: place the overlay in KWin's layer above fullscreen

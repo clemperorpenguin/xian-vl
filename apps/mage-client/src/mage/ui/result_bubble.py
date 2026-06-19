@@ -193,6 +193,10 @@ class ResultBubble(MageOverlayWindow):
         footer.addStretch()
         layout.addLayout(footer)
 
+        # The bubble is mostly text label, which would otherwise swallow drags
+        # and leave the bubble feeling stuck. Let any non-button area move it.
+        self.enable_drag_anywhere()
+
         # --- sizing & positioning --------------------------------------------
         self.adjustSize()
         # Clamp width
