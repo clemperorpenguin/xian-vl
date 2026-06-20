@@ -6,6 +6,8 @@ Xian-MAGE is a real-time, persistent desktop gaming HUD and assistant for Linux 
 
 Because inference is orchestrated via Lemonade, **MAGE supports Vulkan-accelerated execution, running smoothly on AMD Radeon™ GPUs and other accelerators.**
 
+<img width="500" height="110" alt="badge" style="border-radius: 10px;" src="https://github.com/user-attachments/assets/4f7c8980-90ce-42d4-b7ef-dcef77b4efbe" />
+
 See it in action on YouTube: https://www.youtube.com/watch?v=Izu_8pql7cE
 
 <img width="400" height="340" alt="mage" src="https://github.com/user-attachments/assets/bb51b2c6-378f-4a3e-b25d-05ad284e374b" />
