@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
     QFileDialog
 )
 from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, pyqtSignal
-from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap, QCursor
+from PyQt6.QtGui import QIcon, QCursor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
 
@@ -2387,6 +2387,36 @@ class XianApp(QWidget):
             )
 
     def closeEvent(self, event):
+        # Stop periodic timers first so nothing new is dispatched mid-teardown.
+        for timer_attr in ("_telemetry_timer", "dialogue_timer", "osd_timer", "window_tracking_timer"):
+            timer = getattr(self, timer_attr, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except Exception as e:
+                    logger.error("Error stopping timer %s on close: %s", timer_attr, e)
+
+        # Stop the continuous raid loop (it uses a _running flag, not quit()).
+        try:
+            self.stop_raid_mode()
+        except Exception as e:
+            logger.error("Error stopping raid mode on close: %s", e)
+
+        # Stop the named single-instance workers.
+        for worker_attr in ("_status_worker", "_pull_worker", "_prewarm_worker"):
+            self._safe_stop_worker(worker_attr)
+
+        # Interrupt and join every tracked worker so no QThread outlives the app
+        # (Qt aborts with "QThread: Destroyed while thread is still running").
+        for worker in list(getattr(self, "_workers", [])):
+            try:
+                if worker.isRunning():
+                    worker.requestInterruption()
+                    worker.quit()
+                    worker.wait(2000)
+            except Exception as e:
+                logger.error("Error stopping worker on close: %s", e)
+
         if hasattr(self, "target_binder") and self.target_binder:
             try:
                 self.target_binder.close()
@@ -2402,4 +2432,13 @@ class XianApp(QWidget):
                 self.mouse_listener.stop()
             except Exception as e:
                 logger.error("Error stopping mouse listener on close: %s", e)
+
+        # Finally, tear down the async engine (cancels pending tasks, closes the
+        # OpenAI client). Done last so worker shutdown can still use the loop.
+        if hasattr(self, "processor") and getattr(self.processor, "engine", None):
+            try:
+                self.processor.engine.shutdown()
+            except Exception as e:
+                logger.error("Error shutting down async engine on close: %s", e)
+
         super().closeEvent(event)

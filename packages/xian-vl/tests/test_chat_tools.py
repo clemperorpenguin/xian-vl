@@ -21,7 +21,6 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from PIL import Image
 from xian.pipeline import VLProcessor, VLConfig
-from xian.tools import OMNI_TOOLS
 
 @pytest.mark.anyio
 async def test_process_chat_symbolic_paths(tmp_path):

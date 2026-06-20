@@ -15,3 +15,27 @@ members = [
     "packages/shared-types",
     "packages/localize",
 ]
+
+[tool.pytest.ini_options]
+# Explicit paths so collection is deterministic and doesn't import stray
+# script-style "test_*.py" files (e.g. lore-client's test_scrape.py).
+testpaths = [
+    "packages/xian-vl/tests",
+    "apps/mage-client",
+]
+addopts = "-q --import-mode=importlib"
+asyncio_mode = "auto"
+# The ad-hoc client tests live next to source as test_*.py; only pick those up,
+# not the runnable scripts.
+python_files = ["test_*.py"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = ["lemonade", "familiar", "*.ipynb"]
+
+[tool.ruff.lint]
+# Start conservative: pyflakes (F) catches real bugs (undefined names, unused
+# imports, f-strings without placeholders). Widen the rule set over time.
+select = ["F"]
+

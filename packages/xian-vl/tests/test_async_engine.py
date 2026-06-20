@@ -24,7 +24,7 @@ import asyncio
 import time
 from PIL import Image, ImageDraw
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from xian.async_engine import AsyncEngine
 from xian.pipeline import VLProcessor, VLConfig

@@ -17,7 +17,6 @@
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
 import logging
-import asyncio
 import re
 import io
 import os
@@ -25,9 +24,9 @@ from PIL import Image
 from html import escape as html_escape
 from html.parser import HTMLParser
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushButton, QHBoxLayout, QTextBrowser
+    QVBoxLayout, QLineEdit, QPushButton, QHBoxLayout, QTextBrowser
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QRect, QSettings, QBuffer, QIODevice, QPoint
+from PyQt6.QtCore import pyqtSignal, QThread, QRect, QSettings, QBuffer, QIODevice
 from PyQt6.QtGui import QGuiApplication
 from mage.ui.grounding import GroundingHighlight
 from mage.ui.theme import accent_hex, accent_hover_hex

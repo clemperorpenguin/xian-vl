@@ -16,7 +16,6 @@
 #
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
-import hashlib
 import logging
 import pathlib
 import threading

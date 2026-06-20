@@ -30,7 +30,7 @@ See it in action on YouTube: https://www.youtube.com/watch?v=Izu_8pql7cE
 
 ### Requirements
 
-- **Linux**: Wayland or X11. To capture global hotkeys, your user must be in the `input` group (`sudo usermod -aG input $USER` followed by a log out/in).
+- **Linux**: Wayland or X11. To capture global hotkeys, your user must be in the `input` group (`sudo usermod -aG input $USER` followed by a log out/in). The `evdev` dependency is built from source, so you also need a C compiler and the Python headers — on Debian/Ubuntu: `sudo apt install build-essential python3-dev`. For system-audio capture (Cinematic/Raid modes), install PipeWire (`pw-record`) or PulseAudio (`parec`) utilities.
 - **macOS**: Accessibility API permissions (granted when prompted on launch for input capturing).
 - **Lemonade Server**: A running Lemonade Server instance (accessible at `http://localhost:13305` by default), unless using a bundled/embedded setup.
 

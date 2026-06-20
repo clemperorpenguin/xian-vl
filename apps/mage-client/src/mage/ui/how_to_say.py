@@ -17,9 +17,8 @@
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
 import logging
-import os
-from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QFrame, QTextEdit, QHBoxLayout, QPushButton, QApplication
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint
+from PyQt6.QtWidgets import QLabel, QVBoxLayout, QFrame, QTextEdit, QHBoxLayout, QPushButton, QApplication
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QGuiApplication, QFont, QKeyEvent, QCursor
 
 from mage.ui.theme import accent_hex, accent_hover_hex

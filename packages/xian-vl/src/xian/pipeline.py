@@ -998,17 +998,23 @@ class VLProcessor:
             logger.warning("Query translation failed: %s. Using original.", e)
         return query
 
-    async def process_chat(self, message: str, source_lang: str = "zh-CN") -> str:
-        """Process a contextual chat message using the sliding window context via OmniRouter."""
-        if not self.client:
-            raise RuntimeError("Engine not initialized. Call init_engine() first.")
-
+    @staticmethod
+    def sanitize_tool_tags(message: str) -> str:
+        """Strip XML-like tool-call patterns from untrusted text (prompt-injection guard)."""
         # Strip all XML-like tool-call patterns from user input
         sanitized = re.sub(r'</?(?:tool_call|function|parameter)\b[^>]*>', '', message)
         # Also strip the <function=name> variant used in text-based tool calls
         sanitized = re.sub(r'<function=[^>]*>', '', sanitized)
         # Strip any remaining angle-bracket patterns that look like tool syntax
         sanitized = re.sub(r'<parameter=[^>]*>', '', sanitized)
+        return sanitized
+
+    async def process_chat(self, message: str, source_lang: str = "zh-CN") -> str:
+        """Process a contextual chat message using the sliding window context via OmniRouter."""
+        if not self.client:
+            raise RuntimeError("Engine not initialized. Call init_engine() first.")
+
+        sanitized = self.sanitize_tool_tags(message)
         logger.info("Processing chat message (%d chars)", len(sanitized))
 
         # Add user message to context manager

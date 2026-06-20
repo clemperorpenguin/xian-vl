@@ -16,7 +16,6 @@
 #
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
-import os
 import subprocess
 import shutil
 import tempfile

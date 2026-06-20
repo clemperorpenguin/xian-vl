@@ -18,7 +18,7 @@
 
 import logging
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QFrame, QComboBox
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QGuiApplication, QFont, QCursor
 
 from mage.ui.theme import accent_hex
@@ -152,18 +152,18 @@ class CommandOSD(MageOverlayWindow):
 
         for cb in (self.source_lang_combo, self.target_lang_combo, self.model_combo):
             cb.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
-            cb.setStyleSheet(f"""
-                QComboBox {{
+            cb.setStyleSheet("""
+                QComboBox {
                     background-color: #2A2A2A;
                     color: #DDD;
                     border: 1px solid #444;
                     border-radius: 0px;
                     padding: 4px 8px;
                     font-size: 12px;
-                }}
-                QComboBox::drop-down {{
+                }
+                QComboBox::drop-down {
                     border: none;
-                }}
+                }
             """)
 
         lbl_style = "color: #999; font-size: 12px; font-weight: bold;"

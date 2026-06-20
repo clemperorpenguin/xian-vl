@@ -114,8 +114,9 @@ def main() -> None:
     # Start embeddable lemonade if it exists in the bundle
     start_lemond_if_embedded()
 
-    xian = XianApp()
-    
+    # Bound to a name so the app object isn't garbage-collected during exec().
+    xian = XianApp()  # noqa: F841
+
     exit_code = app.exec()
     
     # Gracefully stop the server on exit

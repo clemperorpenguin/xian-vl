@@ -108,32 +108,37 @@ if sys.platform == "linux":
         def _find_devices(self):
             """Find all keyboard and pointer devices in /dev/input/ and initialize them."""
             try:
+                with self._lock:
+                    known_paths = {d.path for d in self.devices}
                 for path in evdev.list_devices():
-                    if any(d.path == path for d in self.devices):
+                    if path in known_paths:
                         continue
                     try:
                         device = evdev.InputDevice(path)
                     except Exception:
                         continue
-                    
+
                     is_interesting = False
                     caps = device.capabilities()
-                    
+
                     if evdev.ecodes.EV_KEY in caps:
                         if evdev.ecodes.KEY_A in caps[evdev.ecodes.EV_KEY]:
                             is_interesting = True
-                            
+
                     if evdev.ecodes.EV_REL in caps:
                         if evdev.ecodes.REL_X in caps[evdev.ecodes.EV_REL] and evdev.ecodes.REL_Y in caps[evdev.ecodes.EV_REL]:
                             is_interesting = True
-                            
+
                     if evdev.ecodes.EV_ABS in caps:
                         if evdev.ecodes.ABS_X in caps[evdev.ecodes.EV_ABS] and evdev.ecodes.ABS_Y in caps[evdev.ecodes.EV_ABS]:
                             is_interesting = True
-                            
+
                     if is_interesting:
-                        self.devices.append(device)
+                        # Append the device, register its modifier state, and (if
+                        # already running) spawn its listener thread atomically so a
+                        # concurrent _listen_device cleanup can't race the list.
                         with self._lock:
+                            self.devices.append(device)
                             self.modifiers[device.path] = {
                                 'super': False,
                                 'shift': False,
@@ -141,11 +146,11 @@ if sys.platform == "linux":
                                 'alt': False
                             }
                             self.mod_clean[device.path] = True
+                            if self.running:
+                                thread = threading.Thread(target=self._listen_device, args=(device,), daemon=True)
+                                thread.start()
+                                self._threads.append((device.path, thread))
                         logger.info("EvdevListener: Found device - %s at %s", device.name, device.path)
-                        if self.running:
-                            thread = threading.Thread(target=self._listen_device, args=(device,), daemon=True)
-                            thread.start()
-                            self._threads.append((device.path, thread))
                     else:
                         try:
                             device.close()
@@ -183,17 +188,14 @@ if sys.platform == "linux":
             return False
 
         def _monitor_devices_loop(self):
-            """Periodically check for new input devices while running."""
+            """Periodically rescan for hot-plugged input devices while running."""
             while self.running:
                 for _ in range(50):
                     if not self.running:
                         return
                     time.sleep(0.1)
-                self.mouse_x = 0
-            self.mouse_y = 0
-            self.screen_width = 1920
-            self.screen_height = 1080
-            self._find_devices()
+                # Every ~5s, pick up newly connected keyboards/mice.
+                self._find_devices()
 
         def start(self):
             """Start listening threads for all keyboards."""

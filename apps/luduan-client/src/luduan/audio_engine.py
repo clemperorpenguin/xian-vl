@@ -25,7 +25,6 @@ directly.  All speech synthesis now goes through Lemonade's
 
 from __future__ import annotations
 
-import asyncio
 import io
 import logging
 import struct

@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import json
+import time
 
 import httpx
 
@@ -159,11 +160,20 @@ class InferenceWorker(QThread):
                 self.processor.process_chat(self.chat_message)
             )
             try:
-                # Poll the future and check for interruption
+                # Poll the future and check for interruption / overall deadline.
+                deadline = time.monotonic() + CHAT_TIMEOUT_SECONDS
                 while not future.done():
                     if self.isInterruptionRequested():
                         future.cancel()
                         logger.info("InferenceWorker chat cancelled by user")
+                        return
+                    if time.monotonic() > deadline:
+                        future.cancel()
+                        logger.warning(
+                            "InferenceWorker chat timed out after %.0fs",
+                            CHAT_TIMEOUT_SECONDS,
+                        )
+                        self.error.emit(f"Chat timed out after {CHAT_TIMEOUT_SECONDS:.0f}s")
                         return
                     self.msleep(100)
                 response = future.result()
@@ -195,6 +205,7 @@ class InferenceWorker(QThread):
         stream_future = self.processor.engine.submit(_stream_to_queue())
 
         timeout = vision_timeout_for_mode(self.mode)
+        deadline = time.monotonic() + timeout
         try:
             final_data = None
             while True:
@@ -202,6 +213,13 @@ class InferenceWorker(QThread):
                     stream_future.cancel()
                     logger.info("InferenceWorker stream cancelled by user")
                     break
+                if time.monotonic() > deadline:
+                    stream_future.cancel()
+                    logger.warning(
+                        "InferenceWorker stream timed out after %.0fs (mode=%s)",
+                        timeout, self.mode,
+                    )
+                    raise TimeoutError(f"Vision inference timed out after {timeout:.0f}s")
                 try:
                     item = asyncio.run_coroutine_threadsafe(
                         q.get(), engine_loop

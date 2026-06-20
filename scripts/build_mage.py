@@ -131,8 +131,7 @@ def build(include_lemonade: bool, lemonade_dir: Path | None):
     
     # Determine the actual app directory where our executable lives
     bundle_dir = dist_dir / "mage-client"
-    root_app = bundle_dir
-        
+
     if include_lemonade:
         if not lemonade_dir or not lemonade_dir.exists():
             print(f"Error: Lemonade directory {lemonade_dir} does not exist.")

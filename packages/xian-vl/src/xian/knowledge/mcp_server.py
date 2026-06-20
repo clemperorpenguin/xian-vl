@@ -22,7 +22,6 @@ This allows Cursor, Lemonade, or any MCP-compatible client to query the database
 
 Requires: pip install xian-vl[mcp]
 """
-import sys
 import logging
 from mcp.server.fastmcp import FastMCP
 from xian.knowledge.tools import query_jx3_database

@@ -20,7 +20,7 @@
 
 import logging
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QPushButton, QHBoxLayout, QApplication
-from PyQt6.QtCore import Qt, QTimer, QRect, QPoint, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QRect, pyqtSignal
 from PyQt6.QtGui import QFont, QGuiApplication, QCursor
 from mage.ui.theme import accent_hex
 from mage.ui.overlay_base import MageOverlayWindow
