@@ -77,10 +77,13 @@ This endpoint returns details such as:
 ### B. MAGE Client Debug Logs
 After each visual translation or chat inference run, the `InferenceWorker` automatically polls the stats endpoint in a fire-and-forget background task and logs the results.
 To view these:
-1. Configure MAGE to run with `DEBUG` level logging.
+1. Launch MAGE with `DEBUG` logging via the `XIAN_LOG_LEVEL` environment variable (the default is `INFO`, which keeps the console readable):
+   ```bash
+   XIAN_LOG_LEVEL=DEBUG ./mage.sh
+   ```
 2. Scan the logs for the following message prefix:
    ```text
-   DEBUG [mage.workers] Lemonade stats post-inference: {...}
+   DEBUG - mage.workers - Lemonade stats post-inference: {...}
    ```
 
 ### C. System and Hardware Diagnostics

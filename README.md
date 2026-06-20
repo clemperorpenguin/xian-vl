@@ -23,6 +23,7 @@ See it in action on YouTube: https://www.youtube.com/watch?v=Izu_8pql7cE
 - **Visual Grounding Target Highlighting**: Ask the assistant *"where do I click?"* or *"where is the exit?"* and watch it highlight the exact physical coordinates on your screen.
 - **Cinematic Mode (Contextual Voice Translation)**: Seamlessly couples screen capture vision analysis with audio playback translation.
 - **Local CC-CEDICT Dictionary**: Instantly hover over any translation bubble and press `Alt` for a local, offline breakdown of Chinese characters, pinyin, and definitions.
+- **Desktop Familiars (Conjure)**: An optional animated companion that perches at the top of your screen — five built-in species plus **"Conjure…"**, where you describe a creature in natural language and a local Lemonade LLM authors a live, vector-rendered familiar (no diffusion, no VRAM contention with translation).
 
 ---
 
@@ -123,6 +124,7 @@ The monorepo contains the core production-ready MAGE client as well as experimen
 │   └── luduan-client/    # 🦤 EPUB translation & audiobook CLI (Experimental)
 └── packages/
     ├── xian-vl/          # ⚙️ Core LLM/ASR orchestration engine & context managers
+    ├── localize/         # 🌐 XUAN — automated UI-string localization CLI (`uv run xuan`)
     └── shared-types/     # 📦 Canonical models, constants, and shared types
 ```
 

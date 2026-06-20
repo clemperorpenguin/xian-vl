@@ -16,7 +16,6 @@ This document outlines the planned milestones, upcoming features, and long-term 
 
 ### 1. High-Priority MAGE Desktop Features
 * [x] **Raid Mode UI Integration**: Draggable overlay window (`RaidWindow`), custom slide switches, status LEDs, and real-time speech logs integrated into the MAGE HUD.
-=======
 * [x] **Static Translations** Static translations on mouseover, eg tooltips for toolbar buttons - implemented in dev branch.
 * [x] **Windows Support** Lightly tested.
 * [x] **Mac Support** Lightly tested.
@@ -25,9 +24,9 @@ This document outlines the planned milestones, upcoming features, and long-term 
 * [ ] **Perfect Window Focus** Perfect window focus means the overlay is either up or down. I need to unify this behavior across platforms, there is some weirdness on wayland.
 
 ### 2. Expansion of UI Target Locales
-* **Approach**: Adding additional languages is straightforward. New strings can be appended to the reference [en.json](file:///packages/shared-types/locales/en.json) with description contexts, followed by running:
+* **Approach**: Adding additional languages is straightforward. New strings can be appended to the reference [en.json](../packages/shared-types/locales/en.json) with description contexts, followed by running:
   ```bash
-  uv run -m localize.cli
+  uv run --package xuan xuan
   ```
   This automatically translates new strings into targeted locale files (`zh.json`, `ja.json`, etc.) using the Lemonade model.
 
