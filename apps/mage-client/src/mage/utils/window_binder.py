@@ -608,7 +608,9 @@ def set_bypass_compositor_hint_x11(win_id):
         )
         if hasattr(X11, "XFlush"):
             X11.XFlush(display)
-        logger.info("Set _NET_WM_BYPASS_COMPOSITOR to 2 on window XID: %s", win_id)
+        # DEBUG: re-applied on every overlay show and ~every 0.75s by the
+        # keep-on-top promote() tick — far too frequent for INFO.
+        logger.debug("Set _NET_WM_BYPASS_COMPOSITOR to 2 on window XID: %s", win_id)
     except Exception as e:
         logger.debug("Failed to set _NET_WM_BYPASS_COMPOSITOR: %s", e)
 
@@ -818,7 +820,9 @@ def set_overlay_window_type_x11(win_id):
             X11.XFlush.argtypes = [c_void_p]
             X11.XFlush.restype = c_int
             X11.XFlush(display)
-        logger.info(
+        # DEBUG: re-applied ~every 0.75s by the keep-on-top promote() tick for
+        # every visible overlay — the single noisiest line at INFO.
+        logger.debug(
             "Set _NET_WM_WINDOW_TYPE=critical-notification on XID %s "
             "(over-fullscreen layer)", win_id
         )

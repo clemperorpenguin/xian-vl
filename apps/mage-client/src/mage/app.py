@@ -577,6 +577,7 @@ class XianApp(QWidget):
         self._workers: list = []
         self._status_worker = None
         self._pull_worker = None
+        self._pull_log_state: tuple = (None, -1)  # (file, 25%-bucket) for throttled pull logging
         self._bubbles: list = []
         self._active_bubbles: dict[InferenceWorker, ResultBubble] = {}
 
@@ -1987,7 +1988,16 @@ class XianApp(QWidget):
         gpu_util = self.settings.value(KEY_GPU_UTIL, constants.DEFAULT_GPU_MEMORY_UTILIZATION)
         self._pull_worker = ModelPullWorker(api_url, model_name, gpu_util)
         self._pull_worker.pull_done.connect(self._on_pull_done)
+        self._pull_worker.pull_progress.connect(self._on_pull_progress)
         self._pull_worker.start()
+
+    def _on_pull_progress(self, file_name: str, percent: float):
+        # Log coarsely (every 25%) so a long multi-GB download shows life
+        # without flooding the console; the signal itself stays fine-grained.
+        bucket = int(percent // 25)
+        if (file_name, bucket) != self._pull_log_state:
+            self._pull_log_state = (file_name, bucket)
+            logger.info("[Pull] %s — %.0f%% (%s)", self._pull_worker.model_name if self._pull_worker else "", percent, file_name)
 
     def _on_pull_done(self, success: bool, message: str):
         if success:

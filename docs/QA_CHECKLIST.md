@@ -63,6 +63,12 @@ catch on a GUI/Wayland/audio app. Copy this into an issue per release and tick b
 - [ ] 🟢 Point API URL at a wrong port → graceful error, no crash; fix it → recovers.
 - [ ] 🟡 Performance Report exports valid Markdown; opt-in JSONL writes only when enabled.
 
+### Model pull (SSE — exercises `ModelPullWorker`)
+- [ ] 🟢 Select a model that isn't downloaded → pull starts, `[Pull] … %` lines appear (~every 25%), completes, models list refreshes. (Lemonade streams progress as `text/event-stream`; the worker must parse SSE, **not** `resp.json()`.)
+- [ ] 🟢 No `Model pull failed: Expecting value: line 1 column 1 (char 0)` in logs — that's the regressed JSON-on-SSE bug.
+- [ ] 🟡 Quit mid-pull (tray → Quit while downloading) → worker cancels cleanly, no orphaned thread, no traceback.
+- [ ] 🟡 Re-pull an already-downloaded model → fast `event: complete`, `pull_done(True)`, no re-download.
+
 ## 8. Lifecycle & resources
 - [ ] 🟢 Clean quit (tray → Quit) leaves no orphaned threads/subprocesses.
 - [ ] 🟢 No Python tracebacks in logs during a normal session.

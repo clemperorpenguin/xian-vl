@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 
 from shared_types.constants import APPLICATION_NAME, ORGANIZATION_NAME
-from xian.logging_config import setup_logger
+from xian.logging_config import resolve_log_level, setup_logger
 
 
 import signal
@@ -75,15 +75,18 @@ def _prefer_xwayland_on_wayland() -> None:
 
 def main() -> None:
     """Launch the MAGE Gaming HUD."""
-    setup_logger(level=logging.DEBUG)
+    # Default to INFO for readable runs; XIAN_LOG_LEVEL=DEBUG opts into the
+    # full firehose. Both the 'xian' and 'mage' namespaces share this level.
+    log_level = resolve_log_level()
+    setup_logger(level=log_level)
     _prefer_xwayland_on_wayland()
-    
+
     # Configure logging for the 'mage' namespace so logs print to console
     mage_logger = logging.getLogger("mage")
-    mage_logger.setLevel(logging.DEBUG)
+    mage_logger.setLevel(log_level)
     if not mage_logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
-        handler.setLevel(logging.DEBUG)
+        handler.setLevel(log_level)
         formatter = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             datefmt='%H:%M:%S'

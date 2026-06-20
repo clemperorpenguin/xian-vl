@@ -737,9 +737,20 @@ class StatusWorker(QThread):
 
 
 class ModelPullWorker(QThread):
-    """Pull (download) a model via the Lemonade POST /v1/pull endpoint."""
+    """Pull (download) a model via the Lemonade POST /v1/pull endpoint.
+
+    Lemonade streams pull progress as Server-Sent Events
+    (``Content-Type: text/event-stream``): a series of ``event: progress`` /
+    ``data: {...}`` frames terminated by ``event: complete`` (or ``event:
+    error``). We consume that stream incrementally — both to surface download
+    progress and because the periodic frames keep the read alive on a multi-GB
+    download instead of risking one long blocking read. Older builds that reply
+    with a single JSON body are still handled via a fallback.
+    """
 
     pull_done = pyqtSignal(bool, str)
+    # (file being downloaded, percent 0-100) — throttled to whole-percent steps.
+    pull_progress = pyqtSignal(str, float)
 
     def __init__(self, api_url: str, model_name: str, gpu_memory_utilization: str = "Default"):
         super().__init__()
@@ -758,20 +769,77 @@ class ModelPullWorker(QThread):
                     logger.warning("Invalid gpu_memory_utilization value: %s", self.gpu_memory_utilization)
 
             with httpx.Client(timeout=600.0) as client:
-                resp = client.post(f"{base_url}/pull", json=payload)
-                resp.raise_for_status()
-                body = resp.json()
-                status = body.get("status", "unknown")
-                message = body.get("message", "")
-                if status == "success":
-                    logger.info("Model pull succeeded: %s", message)
-                    self.pull_done.emit(True, message)
-                else:
-                    logger.warning("Model pull returned status=%s: %s", status, message)
-                    self.pull_done.emit(False, message)
+                with client.stream("POST", f"{base_url}/pull", json=payload) as resp:
+                    resp.raise_for_status()
+                    content_type = resp.headers.get("content-type", "")
+                    if "text/event-stream" in content_type:
+                        self._consume_sse(resp)
+                    else:
+                        # Legacy / non-streaming Lemonade: a single JSON body.
+                        body = json.loads(resp.read().decode("utf-8"))
+                        self._finish_from_status(body)
         except Exception as e:
             logger.error("Model pull failed: %s", e)
             self.pull_done.emit(False, str(e))
+
+    def _consume_sse(self, resp) -> None:
+        """Parse the SSE pull stream, emitting progress and a terminal result."""
+        event = "message"
+        last_pct = -1.0
+        for line in resp.iter_lines():
+            if self.isInterruptionRequested():
+                logger.info("Model pull interrupted: %s", self.model_name)
+                self.pull_done.emit(False, "Cancelled")
+                return
+            if not line:
+                event = "message"  # blank line terminates an SSE frame
+                continue
+            if line.startswith("event:"):
+                event = line[len("event:"):].strip()
+                continue
+            if not line.startswith("data:"):
+                continue
+            raw = line[len("data:"):].strip()
+            try:
+                data = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                logger.debug("Skipping unparseable pull frame: %r", raw)
+                continue
+
+            if event == "error":
+                message = data.get("message") or data.get("error") or "Pull failed"
+                logger.warning("Model pull error for %s: %s", self.model_name, message)
+                self.pull_done.emit(False, message)
+                return
+            if event == "complete":
+                logger.info("Model pull complete: %s", self.model_name)
+                self.pull_done.emit(True, self.model_name)
+                return
+            # event == "progress"
+            pct = data.get("percent")
+            if isinstance(pct, (int, float)):
+                whole = float(int(pct))
+                if whole != last_pct:
+                    last_pct = whole
+                    fname = data.get("file", "")
+                    self.pull_progress.emit(fname, float(pct))
+                    logger.debug("Pull progress %s: %s%% (%s)", self.model_name, whole, fname)
+
+        # Stream ended without an explicit terminal event — assume success if
+        # the server closed cleanly after progress frames.
+        logger.info("Model pull stream ended for %s (no terminal event)", self.model_name)
+        self.pull_done.emit(True, self.model_name)
+
+    def _finish_from_status(self, body: dict) -> None:
+        """Resolve a single-shot (non-streamed) JSON pull response."""
+        status = body.get("status", "unknown")
+        message = body.get("message", "") or body.get("model_name", "")
+        if status == "success":
+            logger.info("Model pull succeeded: %s", message)
+            self.pull_done.emit(True, message)
+        else:
+            logger.warning("Model pull returned status=%s: %s", status, message)
+            self.pull_done.emit(False, message)
 
 
 class PrewarmWorker(QThread):
