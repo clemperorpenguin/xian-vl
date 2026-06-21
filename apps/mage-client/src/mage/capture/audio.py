@@ -171,11 +171,15 @@ class ContinuousAudioStreamer:
         
         if recorder == "pw-record":
             # -P '{ stream.capture.sink=true }' records the default sink's
-            # monitor (system audio), not the microphone — matching parecord's
-            # @DEFAULT_MONITOR@ device below.
+            # monitor (system audio), not the microphone — matching the
+            # @DEFAULT_MONITOR@ device below. pw-record treats "-" as stdout.
             cmd = ["pw-record", "-P", "{ stream.capture.sink=true }", "--rate", str(self.sample_rate), "--channels", "1", "--format", "s16", "-"]
         else:
-            cmd = ["parecord", "--rate", str(self.sample_rate), "--channels", "1", "--format", "s16le", "--device", "@DEFAULT_MONITOR@", "-"]
+            # Use `parec` (raw PCM to stdout), NOT `parecord`: read_chunks consumes
+            # raw s16le, and parecord would (a) wrap output in a WAV header and
+            # (b) treat a trailing "-" as a filename — littering a "-" file in the
+            # CWD instead of streaming. parec ships alongside parecord.
+            cmd = ["parec", "--rate", str(self.sample_rate), "--channels", "1", "--format", "s16le", "--device", "@DEFAULT_MONITOR@"]
             
         self._proc = await asyncio.create_subprocess_exec(
             *cmd,

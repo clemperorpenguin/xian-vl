@@ -20,8 +20,8 @@ import logging
 import datetime
 from html import escape as html_escape
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QTextEdit, QSizePolicy, QAbstractButton
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QSize, QPropertyAnimation, QRectF, pyqtProperty, QTimer
-from PyQt6.QtGui import QGuiApplication, QFont, QCursor, QPainter, QColor, QBrush, QPen, QRadialGradient
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPropertyAnimation, QRectF, pyqtProperty, QTimer
+from PyQt6.QtGui import QGuiApplication, QFont, QCursor, QPainter, QColor, QBrush, QRadialGradient
 
 from mage.ui.theme import accent_hex, accent_hover_hex, accent_qcolor
 from mage.ui.overlay_base import MageOverlayWindow

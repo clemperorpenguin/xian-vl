@@ -32,7 +32,7 @@ graph TD
 
 ### Key Architectural Benefits
 * **Unified Interface**: The local Lemonade instance exposes a single, OpenAI-compatible REST API. The MAGE client utilizes a standard `AsyncOpenAI` client pointing to `http://localhost:13305/v1`, eliminating custom payload serialization and protocol mismatch.
-* **Omni Model Discovery**: At startup, MAGE's [OmniModelRouter](file:///home/clem/src/cursor/xian-vl/packages/xian-vl/src/xian/omni_router.py) queries `GET /v1/models?show_all=true` to discover installed Omni Models. When it finds a model with `recipe: "collection.omni"` (or an `LMX-Omni-` prefixed ID), it decomposes the virtual bundle into its individual component models and builds a per-modality routing table. This means the user selects a single "Omni" model in the MAGE settings, and the system automatically resolves the correct sub-model for each task — vision, chat, ASR, TTS — without manual configuration.
+* **Omni Model Discovery**: At startup, MAGE's [OmniModelRouter](./packages/xian-vl/src/xian/omni_router.py) queries `GET /v1/models?show_all=true` to discover installed Omni Models. When it finds a model with `recipe: "collection.omni"` (or an `LMX-Omni-` prefixed ID), it decomposes the virtual bundle into its individual component models and builds a per-modality routing table. This means the user selects a single "Omni" model in the MAGE settings, and the system automatically resolves the correct sub-model for each task — vision, chat, ASR, TTS — without manual configuration.
 * **Concurrent Model Orchestration**: MAGE routes tasks representing different modalities to different component models within the Omni collection:
   * **Vision-Language Models (VLMs)** (e.g., Qwen-VL) for visual translation and OCR via `/v1/chat/completions`.
   * **Text Large Language Models (LLMs)** (e.g., Qwen3.5-Instruct, Qwen3.6-35B) for contextual game-lore explanation, chat, and in-game text translation.
@@ -57,7 +57,7 @@ The naming follows the convention `LMX-Omni-<total params>-<class>`, where `Halo
 
 ### Client-Side Omni Decomposition via OmniModelRouter
 
-MAGE implements its own [OmniModelRouter](file:///home/clem/src/cursor/xian-vl/packages/xian-vl/src/xian/omni_router.py) to decompose Omni bundles into per-modality routing decisions. At startup:
+MAGE implements its own [OmniModelRouter](./packages/xian-vl/src/xian/omni_router.py) to decompose Omni bundles into per-modality routing decisions. At startup:
 
 1. The router queries `GET /v1/models?show_all=true` (Omni models are hidden from the default listing; the `show_all` flag surfaces them).
 2. It scans the response for any model with `recipe: "collection.omni"` or an `LMX-Omni-` prefixed ID.
@@ -67,21 +67,21 @@ MAGE implements its own [OmniModelRouter](file:///home/clem/src/cursor/xian-vl/p
    * `transcription` / `asr` labels → **ASR** modality
    * `tts` / `text-to-speech` labels → **TTS** modality
    * `image` / `edit` labels → **Image generation/editing** modality
-4. The [VLProcessor](file:///home/clem/src/cursor/xian-vl/packages/xian-vl/src/xian/pipeline.py#L108) then calls `router.vision()` for OCR tasks, `router.llm()` for chat/translation, and `router.asr()` for transcription — each resolving transparently to the correct component model ID.
+4. The [VLProcessor](./packages/xian-vl/src/xian/pipeline.py) then calls `router.vision()` for OCR tasks, `router.llm()` for chat/translation, and `router.asr()` for transcription — each resolving transparently to the correct component model ID.
 
 This means the user selects **one model** (e.g., `LMX-Omni-5.5B-Lite`) in the MAGE settings dialog, and the system automatically fans out to `Qwen3.5-4B-MTP-GGUF` for vision/chat, `Whisper-Tiny` for speech recognition, and `kokoro-v1` for text-to-speech — all served from the same Lemonade process on port 13305.
 
 ### Lemonade-Specific API Surface
 
-Beyond the standard OpenAI-compatible endpoints, MAGE uses Lemonade's proprietary APIs (wrapped by [LemonadeClient](file:///home/clem/src/cursor/xian-vl/packages/xian-vl/src/xian/lemonade_client.py)) for model lifecycle and multimodal tool calls:
+Beyond the standard OpenAI-compatible endpoints, MAGE uses Lemonade's proprietary APIs (wrapped by [LemonadeClient](./packages/xian-vl/src/xian/lemonade_client.py)) for model lifecycle and multimodal tool calls:
 
 | Endpoint | Purpose | MAGE Usage |
 |---|---|---|
 | `POST /v1/chat/completions` | LLM / VLM inference | Visual translation, chat, query translation |
 | `POST /v1/audio/transcriptions` | Speech-to-text (ASR) | Cinematic Mode audio capture, Raid Mode live voice |
 | `POST /v1/audio/speech` | Text-to-speech (TTS) | "Speak" button on translation bubbles |
-| `POST /v1/pull` | Download/activate a model | Prewarming models at startup |
-| `POST /v1/load` / `POST /v1/unload` | VRAM lifecycle | Dynamic model swapping |
+| `POST /v1/pull` | Download a model | On-demand model downloads (`ModelPullWorker`, streamed as SSE progress) |
+| `POST /v1/load` / `POST /v1/unload` | VRAM lifecycle | Prewarming the target model into VRAM at startup; dynamic model swapping |
 | `GET /v1/models?show_all=true` | Discovery (incl. Omni) | OmniModelRouter population |
 | `GET /v1/stats` | Inference telemetry | Post-inference diagnostics logging |
 
@@ -95,7 +95,7 @@ To achieve near-zero frame stuttering during active gameplay, MAGE offloads proc
   * **AMD Radeon GPUs**: Leveraged via Vulkan / ROCm acceleration.
   * **Ryzen AI NPUs**: Leveraged via ONNX Runtime / Ryzen AI NPU drivers for energy-efficient, low-power laptop inference.
   * **Ryzen CPUs**: Falls back to optimized AVX2/AVX512 instruction sets when GPU/NPU limits are exceeded.
-* **VRAM Prewarming**: To prevent runtime performance spikes, MAGE calls a prewarming routine during initialization. The [PrewarmWorker](file:///home/clem/src/cursor/xian-vl/apps/mage-client/src/mage/workers.py#L588) triggers a `/v1/pull` configuration call, loading the target Omni Model's components fully into VRAM before translation commands are issued.
+* **VRAM Prewarming**: To prevent runtime performance spikes, MAGE calls a prewarming routine during initialization. The [PrewarmWorker](./apps/mage-client/src/mage/workers.py) delegates to `VLProcessor.prewarm_model()`, which issues a `/v1/load` call (falling back to a throwaway inference if explicit load is unsupported) to bring the target Omni Model's components fully into VRAM before translation commands are issued.
 
 ---
 

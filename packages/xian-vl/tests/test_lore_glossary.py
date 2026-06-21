@@ -21,7 +21,6 @@ import shutil
 import tempfile
 import pytest
 from xian.pipeline import VLProcessor, VLConfig
-from xian.context_manager import FrameContext
 
 @pytest.fixture
 def temp_wiki_dir():

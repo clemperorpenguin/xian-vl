@@ -16,8 +16,6 @@
 #
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
-import os
-import sys
 from unittest.mock import patch
 
 def test_clean_subprocess_env_not_frozen():

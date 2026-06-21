@@ -27,7 +27,6 @@ Migrated from the original Luduan repository.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 

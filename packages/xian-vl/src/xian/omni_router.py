@@ -45,6 +45,9 @@ class OmniModelRouter:
         self._omni_detected = False
         self._omni_model_id: str | None = None
         self._active_model: str | None = None
+        # Last logged routing signature, so a rebuild that produces an
+        # identical table doesn't re-emit the same lines on every inference.
+        self._last_logged_signature: tuple | None = None
 
     @property
     def active_model(self) -> str | None:
@@ -76,7 +79,6 @@ class OmniModelRouter:
             if recipe == "collection.omni" or m_id.startswith("LMX-Omni-"):
                 self._omni_detected = True
                 self._omni_model_id = m_id
-                logger.info("Omni model detected: %s", m_id)
                 break
 
         # Map labels to modalities globally first
@@ -150,8 +152,14 @@ class OmniModelRouter:
                 if "vision" not in self._models and ("chat" in self._models or "tool-calling" in self._models):
                     self._models["vision"] = self._models.get("tool-calling") or self._models.get("chat")
 
-        # Print routing table for debugging
-        logger.debug("OmniModelRouter mapped labels: %s", self._models)
+        # Only log when the resolved routing actually changes — this rebuild
+        # runs on every inference, so unconditional logging floods the console.
+        signature = (self._omni_model_id, tuple(sorted(self._models.items())))
+        if signature != self._last_logged_signature:
+            self._last_logged_signature = signature
+            if self._omni_detected:
+                logger.info("Omni model detected: %s", self._omni_model_id)
+            logger.debug("OmniModelRouter mapped labels: %s", self._models)
 
     def discover_sync(self) -> None:
         """Synchronously query the Lemonade server and update the routing table."""

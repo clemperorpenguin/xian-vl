@@ -35,9 +35,8 @@ import typer
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.table import Table
-from rich.status import Status
 
-from shared_types.constants import DEFAULT_API_URL, DEFAULT_MODEL
+from shared_types.constants import DEFAULT_API_URL
 
 from openai import AsyncOpenAI
 

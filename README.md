@@ -6,6 +6,8 @@ Xian-MAGE is a real-time, persistent desktop gaming HUD and assistant for Linux 
 
 Because inference is orchestrated via Lemonade, **MAGE supports Vulkan-accelerated execution, running smoothly on AMD Radeon™ GPUs and other accelerators.**
 
+<img width="500" height="110" alt="badge" style="border-radius: 10px;" src="https://github.com/user-attachments/assets/4f7c8980-90ce-42d4-b7ef-dcef77b4efbe" />
+
 See it in action on YouTube: https://www.youtube.com/watch?v=Izu_8pql7cE
 
 <img width="400" height="340" alt="mage" src="https://github.com/user-attachments/assets/bb51b2c6-378f-4a3e-b25d-05ad284e374b" />
@@ -21,6 +23,7 @@ See it in action on YouTube: https://www.youtube.com/watch?v=Izu_8pql7cE
 - **Visual Grounding Target Highlighting**: Ask the assistant *"where do I click?"* or *"where is the exit?"* and watch it highlight the exact physical coordinates on your screen.
 - **Cinematic Mode (Contextual Voice Translation)**: Seamlessly couples screen capture vision analysis with audio playback translation.
 - **Local CC-CEDICT Dictionary**: Instantly hover over any translation bubble and press `Alt` for a local, offline breakdown of Chinese characters, pinyin, and definitions.
+- **Desktop Familiars (Conjure)**: An optional animated companion that perches at the top of your screen — five built-in species plus **"Conjure…"**, where you describe a creature in natural language and a local Lemonade LLM authors a live, vector-rendered familiar (no diffusion, no VRAM contention with translation).
 
 ---
 
@@ -28,7 +31,7 @@ See it in action on YouTube: https://www.youtube.com/watch?v=Izu_8pql7cE
 
 ### Requirements
 
-- **Linux**: Wayland or X11. To capture global hotkeys, your user must be in the `input` group (`sudo usermod -aG input $USER` followed by a log out/in).
+- **Linux**: Wayland or X11. To capture global hotkeys, your user must be in the `input` group (`sudo usermod -aG input $USER` followed by a log out/in). The `evdev` dependency is built from source, so you also need a C compiler and the Python headers — on Debian/Ubuntu: `sudo apt install build-essential python3-dev`. For system-audio capture (Cinematic/Raid modes), install PipeWire (`pw-record`) or PulseAudio (`parec`) utilities.
 - **macOS**: Accessibility API permissions (granted when prompted on launch for input capturing).
 - **Lemonade Server**: A running Lemonade Server instance (accessible at `http://localhost:13305` by default), unless using a bundled/embedded setup.
 
@@ -121,6 +124,7 @@ The monorepo contains the core production-ready MAGE client as well as experimen
 │   └── luduan-client/    # 🦤 EPUB translation & audiobook CLI (Experimental)
 └── packages/
     ├── xian-vl/          # ⚙️ Core LLM/ASR orchestration engine & context managers
+    ├── localize/         # 🌐 XUAN — automated UI-string localization CLI (`uv run xuan`)
     └── shared-types/     # 📦 Canonical models, constants, and shared types
 ```
 

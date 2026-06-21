@@ -21,9 +21,9 @@ from typing import ClassVar
 
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton
 from PyQt6.QtCore import Qt, QRect, QPoint, QBuffer, QIODevice, pyqtSignal
-from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent, QPixmap, QImage, QGuiApplication
+from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent, QPixmap, QImage
 from mage.capture.screen import ScreenCapture
-from mage.ui.theme import accent_hex, accent_hover_hex, accent_qcolor
+from mage.ui.theme import accent_hex, accent_qcolor
 from mage.utils.window_binder import set_bypass_compositor_hint_x11
 from shared_types.state import t
 
@@ -204,7 +204,10 @@ class LensOverlayWindow(QWidget):
         dim_color = QColor(0, 0, 0, 150)
         
         if self.selecting or not self.selected_rect.isEmpty():
-            rect = QRect(self.start_pos, self.current_pos).normalized() if self.selecting else self.selected_rect
+            # Copy before translating: aliasing self.selected_rect here would
+            # mutate the stored selection on every repaint (visible as the box
+            # drifting on multi-monitor setups with a non-zero desktop origin).
+            rect = QRect(self.start_pos, self.current_pos).normalized() if self.selecting else QRect(self.selected_rect)
             # Translate to window coordinates
             rect.translate(-self.total_geo.left(), -self.total_geo.top())
             

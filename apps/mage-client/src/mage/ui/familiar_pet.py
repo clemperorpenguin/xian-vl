@@ -53,11 +53,11 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from html import escape as html_escape
 
-from PyQt6.QtWidgets import QWidget, QLabel, QMenu, QVBoxLayout, QApplication
+from PyQt6.QtWidgets import QLabel, QMenu, QVBoxLayout
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPixmap, QPolygon, QCursor, QGuiApplication,
-    QFont, QPainterPath, QTransform,
+    QPainterPath, QTransform,
 )
 
 from mage.ui.overlay_base import MageOverlayWindow

@@ -22,11 +22,11 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-from PyQt6.QtCore import Qt, QPoint
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QScrollArea, QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
+    QScrollArea, QTextEdit, QVBoxLayout, QWidget,
 )
 from PyQt6.QtCore import QStandardPaths
 
@@ -196,12 +196,12 @@ class NotesSidebar(MageOverlayWindow):
 
     def _make_card(self, note: dict) -> QWidget:
         card = QFrame()
-        card.setStyleSheet(f"""
-            QFrame {{
+        card.setStyleSheet("""
+            QFrame {
                 background-color: rgba(40, 40, 40, 200);
                 border: 1px solid #444;
                 border-radius: 0px;
-            }}
+            }
         """)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(8, 6, 8, 6)

@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
     QFileDialog
 )
 from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, pyqtSignal
-from PyQt6.QtGui import QIcon, QAction, QImage, QPixmap, QCursor
+from PyQt6.QtGui import QIcon, QCursor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
 
@@ -577,6 +577,7 @@ class XianApp(QWidget):
         self._workers: list = []
         self._status_worker = None
         self._pull_worker = None
+        self._pull_log_state: tuple = (None, -1)  # (file, 25%-bucket) for throttled pull logging
         self._bubbles: list = []
         self._active_bubbles: dict[InferenceWorker, ResultBubble] = {}
 
@@ -1987,7 +1988,16 @@ class XianApp(QWidget):
         gpu_util = self.settings.value(KEY_GPU_UTIL, constants.DEFAULT_GPU_MEMORY_UTILIZATION)
         self._pull_worker = ModelPullWorker(api_url, model_name, gpu_util)
         self._pull_worker.pull_done.connect(self._on_pull_done)
+        self._pull_worker.pull_progress.connect(self._on_pull_progress)
         self._pull_worker.start()
+
+    def _on_pull_progress(self, file_name: str, percent: float):
+        # Log coarsely (every 25%) so a long multi-GB download shows life
+        # without flooding the console; the signal itself stays fine-grained.
+        bucket = int(percent // 25)
+        if (file_name, bucket) != self._pull_log_state:
+            self._pull_log_state = (file_name, bucket)
+            logger.info("[Pull] %s — %.0f%% (%s)", self._pull_worker.model_name if self._pull_worker else "", percent, file_name)
 
     def _on_pull_done(self, success: bool, message: str):
         if success:
@@ -2387,6 +2397,36 @@ class XianApp(QWidget):
             )
 
     def closeEvent(self, event):
+        # Stop periodic timers first so nothing new is dispatched mid-teardown.
+        for timer_attr in ("_telemetry_timer", "dialogue_timer", "osd_timer", "window_tracking_timer"):
+            timer = getattr(self, timer_attr, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except Exception as e:
+                    logger.error("Error stopping timer %s on close: %s", timer_attr, e)
+
+        # Stop the continuous raid loop (it uses a _running flag, not quit()).
+        try:
+            self.stop_raid_mode()
+        except Exception as e:
+            logger.error("Error stopping raid mode on close: %s", e)
+
+        # Stop the named single-instance workers.
+        for worker_attr in ("_status_worker", "_pull_worker", "_prewarm_worker"):
+            self._safe_stop_worker(worker_attr)
+
+        # Interrupt and join every tracked worker so no QThread outlives the app
+        # (Qt aborts with "QThread: Destroyed while thread is still running").
+        for worker in list(getattr(self, "_workers", [])):
+            try:
+                if worker.isRunning():
+                    worker.requestInterruption()
+                    worker.quit()
+                    worker.wait(2000)
+            except Exception as e:
+                logger.error("Error stopping worker on close: %s", e)
+
         if hasattr(self, "target_binder") and self.target_binder:
             try:
                 self.target_binder.close()
@@ -2402,4 +2442,13 @@ class XianApp(QWidget):
                 self.mouse_listener.stop()
             except Exception as e:
                 logger.error("Error stopping mouse listener on close: %s", e)
+
+        # Finally, tear down the async engine (cancels pending tasks, closes the
+        # OpenAI client). Done last so worker shutdown can still use the loop.
+        if hasattr(self, "processor") and getattr(self.processor, "engine", None):
+            try:
+                self.processor.engine.shutdown()
+            except Exception as e:
+                logger.error("Error shutting down async engine on close: %s", e)
+
         super().closeEvent(event)

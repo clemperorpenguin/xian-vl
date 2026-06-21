@@ -42,6 +42,11 @@ data/
 *.log
 .DS_Store
 
+# Stray capture artifact: parecord/pw-record writing to a literal "-" file
+# (see ContinuousAudioStreamer). Guarded here so it can never be committed again.
+/-
+apps/mage-client/-
+
 # Node / WXT / Extension
 node_modules/
 .wxt/

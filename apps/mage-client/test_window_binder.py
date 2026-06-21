@@ -16,9 +16,7 @@
 #
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
-import sys
-from unittest.mock import MagicMock, patch
-import pytest
+from unittest.mock import patch
 
 def test_window_binder_fallback_and_api():
     # Verify WindowBinder can be imported and instantiated without side effects

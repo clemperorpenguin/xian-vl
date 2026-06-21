@@ -19,7 +19,6 @@
 import sys
 import threading
 import logging
-import time
 from PyQt6.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger(__name__)

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint & Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    env:
+      # PyQt6 widgets need a display; run headless.
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # evdev compiles a C extension (no wheels) -> needs Python headers + a
+      # compiler. PyQt6 needs the usual X/GL runtime libs even when offscreen.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3-dev \
+            libegl1 libgl1 libxkbcommon0 libdbus-1-3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Lint (ruff)
+        run: uv run --with ruff ruff check .
+
+      - name: Run tests
+        run: uv run --with pytest --with pytest-asyncio --with pytest-mock python -m pytest
