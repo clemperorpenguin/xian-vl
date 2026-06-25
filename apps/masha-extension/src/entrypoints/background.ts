@@ -18,57 +18,70 @@
  * Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
  */
 
-import { normalizeLemonadeBaseUrl } from '../utils/lemonadeUrl';
+/*
+ * Background service worker (WXT). Owns the platform pieces that must live off
+ * the page: the context-menu trigger and the Lemonade HTTP call. Routing the
+ * fetch through here (not the content script) is what lets it reach a local
+ * http:// Lemonade node from an https:// page without mixed-content blocking —
+ * the same reason it works in Firefox as well as Chrome.
+ */
 
-const DEFAULT_LEMONADE_URL = 'http://localhost:13305/v1';
+import { getConfig } from '../utils/config';
+import { translate } from '../core/translator';
+import { SelectionContext } from '../platform/bridge';
 
-async function getLemonadeUrl(): Promise<string> {
-  const result = await chrome.storage.local.get(['serverUrl']);
-  return normalizeLemonadeBaseUrl(result.serverUrl || DEFAULT_LEMONADE_URL);
+const MENU_ID = 'masha-translate';
+
+/** Fired by the content script: a captured selection to translate. */
+interface TranslateMessage {
+  type: 'MASHA_TRANSLATE';
+  payload: SelectionContext;
 }
 
-async function translateText(text: string, targetLanguage: string = 'English'): Promise<string> {
-  const url = await getLemonadeUrl();
-  const endpoint = `${url}/chat/completions`;
-  
-  const systemPrompt = `You are MASHA, a highly capable text translator. Translate the following text to ${targetLanguage}. Maintain the original context, tone, and formatting. Return ONLY the translated text without any conversational filler or explanations.`;
-  
-  const payload = {
-    model: 'xian-vl',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: text }
-    ],
-    max_tokens: 1024,
-    temperature: 0.3
-  };
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+async function handleTranslate(payload: SelectionContext): Promise<string> {
+  const config = await getConfig();
+  return translate(fetch as any, config, {
+    selection: payload.text,
+    context: payload.context,
+    sourceLang: config.sourceLang,
+    targetLang: config.targetLang,
+    styles: config.styles,
   });
-
-  if (!response.ok) throw new Error(`Lemonade API Error: ${response.statusText}`);
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content;
-  return (typeof content === 'string' ? content : '').trim();
 }
 
 export default defineBackground(() => {
-  console.log('MASHA background script initialized.');
-
-  chrome.runtime.onMessage.addListener((message: any, sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void) => {
-    if (sender.id !== chrome.runtime.id) {
-      sendResponse({ success: false, error: 'Invalid sender' });
-      return;
-    }
-
-    if (message.type === 'TRANSLATE_TEXT') {
-      translateText(message.payload.text, message.payload.targetLanguage || 'English')
-        .then(translation => sendResponse({ success: true, translation }))
-        .catch(error => sendResponse({ success: false, error: error.message }));
-      return true; // Keep channel open for async response
-    }
+  // Register the right-click trigger (shown only when text is selected).
+  chrome.runtime.onInstalled.addListener(() => {
+    chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({
+        id: MENU_ID,
+        title: 'Translate with MASHA',
+        contexts: ['selection'],
+      });
+    });
   });
+
+  // Context-menu click → ask the page's content script to capture + render.
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId !== MENU_ID || !tab?.id) return;
+    chrome.tabs.sendMessage(tab.id, { type: 'MASHA_TRIGGER' }).catch(() => {
+      // No content script (e.g. chrome:// page or not yet injected) — ignore.
+    });
+  });
+
+  // Content script asks us to run the model call.
+  chrome.runtime.onMessage.addListener(
+    (message: TranslateMessage, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id) {
+        sendResponse({ success: false, error: 'Invalid sender' });
+        return;
+      }
+      if (message.type === 'MASHA_TRANSLATE') {
+        handleTranslate(message.payload)
+          .then((translation) => sendResponse({ success: true, translation }))
+          .catch((error) => sendResponse({ success: false, error: String(error?.message || error) }));
+        return true; // async response
+      }
+    },
+  );
 });

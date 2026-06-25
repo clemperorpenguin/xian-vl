@@ -28,7 +28,11 @@ export default defineConfig({
     name: "MASHA Translate",
     description: "Multilingual Access & Site Handling Assistant",
     version: "1.0.0",
-    permissions: ["storage"],
-    host_permissions: ["<all_urls>"]
+    permissions: ["storage", "contextMenus"],
+    host_permissions: ["<all_urls>"],
+    // Firefox refuses to install an unsigned MV3 extension without an explicit id.
+    browser_specific_settings: {
+      gecko: { id: "masha@pendragon.systems", strict_min_version: "121.0" }
+    }
   }
 });

@@ -18,237 +18,212 @@
  * Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
  */
 
+/*
+ * Content script (WXT). Realizes the page-facing half of PlatformBridge:
+ * selection + page-context capture, the non-destructive overlay, and
+ * replace-in-place for editable inputs. The model call itself is delegated to
+ * the background worker (see background.ts).
+ */
+
+import { SelectionContext } from '../platform/bridge';
+
+const BLOCK_SELECTOR = 'p, li, blockquote, td, th, article, section, main, div';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
   main() {
-    console.log('MASHA content script loaded.');
+    let activeOverlay: HTMLElement | null = null;
 
-    let activeBtn: HTMLButtonElement | null = null;
-    let lastMouseUpEvent: MouseEvent | null = null;
-
-    // Track mouseup coordinates as a fallback position
-    document.addEventListener('mouseup', (e) => {
-      lastMouseUpEvent = e;
-      
-      // Delay slightly to allow the browser selection to update
-      setTimeout(() => {
-        handleSelection();
-      }, 10);
-    });
-
-    document.addEventListener('mousedown', (e) => {
-      // Remove button if user clicks elsewhere
-      if (activeBtn && !activeBtn.contains(e.target as Node)) {
-        removeButton();
+    /** The editable element holding the current selection, if any. */
+    function editableTarget(): HTMLInputElement | HTMLTextAreaElement | null {
+      const el = document.activeElement;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+        const input = el as HTMLInputElement | HTMLTextAreaElement;
+        if (input.selectionStart !== null && input.selectionStart !== input.selectionEnd) {
+          return input;
+        }
       }
-    });
-
-    function removeButton() {
-      if (activeBtn) {
-        activeBtn.remove();
-        activeBtn = null;
-      }
+      return null;
     }
 
-    function handleSelection() {
-      let selectedText = '';
-      let isInput = false;
-      const activeEl = document.activeElement;
-
-      // 1. Detect selection within an input or textarea
-      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
-        const input = activeEl as HTMLInputElement | HTMLTextAreaElement;
-        const start = input.selectionStart;
-        const end = input.selectionEnd;
-        if (start !== null && end !== null && start !== end) {
-          selectedText = input.value.substring(start, end).trim();
-          isInput = true;
-        }
+    /** Walk up from a node to the nearest meaningful block container. */
+    function nearestBlock(node: Node | null): Element | null {
+      let el = node instanceof Element ? node : node?.parentElement ?? null;
+      while (el && el !== document.body) {
+        if (el.matches?.(BLOCK_SELECTOR)) return el;
+        el = el.parentElement;
       }
-
-      // 2. Standard DOM selection
-      if (!selectedText) {
-        const selection = window.getSelection();
-        selectedText = selection?.toString().trim() || '';
-      }
-
-      if (!selectedText) {
-        return; // No text selected
-      }
-
-      createFloatingButton(selectedText, isInput, activeEl);
+      return document.body;
     }
 
-    function createFloatingButton(text: string, isInput: boolean, activeEl: Element | null) {
-      removeButton(); // Remove previous button if any
-
-      const btn = document.createElement('button');
-      activeBtn = btn;
-
-      // Premium visual styling
-      btn.style.position = 'absolute';
-      btn.style.zIndex = '999999';
-      btn.style.background = 'linear-gradient(135deg, #6366f1, #a855f7)';
-      btn.style.color = '#ffffff';
-      btn.style.border = 'none';
-      btn.style.borderRadius = '9999px';
-      btn.style.padding = '8px 16px';
-      btn.style.fontFamily = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-      btn.style.fontSize = '13px';
-      btn.style.fontWeight = '600';
-      btn.style.cursor = 'pointer';
-      btn.style.boxShadow = '0 10px 25px -5px rgba(99, 102, 241, 0.4), 0 8px 10px -6px rgba(168, 85, 247, 0.3)';
-      btn.style.display = 'flex';
-      btn.style.alignItems = 'center';
-      btn.style.gap = '6px';
-      btn.style.transition = 'transform 0.15s ease, opacity 0.15s ease, background 0.2s ease';
-      btn.style.transform = 'scale(0.95)';
-      btn.style.opacity = '0';
-      
-      // Inject self-contained spinner animation
-      const styleTag = document.createElement('style');
-      styleTag.innerHTML = `
-        @keyframes masha-spin {
-          to { transform: rotate(360deg); }
-        }
-        .masha-spinner {
-          width: 14px;
-          height: 14px;
-          border: 2px solid rgba(255,255,255,0.3);
-          border-radius: 50%;
-          border-top-color: #ffffff;
-          animation: masha-spin 0.6s linear infinite;
-        }
-      `;
-      btn.appendChild(styleTag);
-
-      const iconSpan = document.createElement('span');
-      iconSpan.innerText = '✨';
-      const textSpan = document.createElement('span');
-      textSpan.innerText = 'Translate & Replace';
-      btn.appendChild(iconSpan);
-      btn.appendChild(textSpan);
-
-      // Positioning logic
-      let left = 0;
-      let top = 0;
+    /** Capture the selection plus surrounding page context (title + section). */
+    function getSelectionContext(): SelectionContext | null {
+      const input = editableTarget();
+      if (input) {
+        const text = input.value.substring(input.selectionStart!, input.selectionEnd!).trim();
+        if (!text) return null;
+        return { text, context: input.value.trim(), isEditable: true };
+      }
 
       const selection = window.getSelection();
-      if (!isInput && selection && selection.rangeCount > 0) {
-        const range = selection.getRangeAt(0);
-        const rect = range.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          left = rect.left + window.scrollX + (rect.width / 2) - 80;
-          top = rect.top + window.scrollY - 40;
+      const text = selection?.toString().trim() || '';
+      if (!text) return null;
+
+      let context = document.title ? `${document.title}\n` : '';
+      if (selection && selection.rangeCount > 0) {
+        const block = nearestBlock(selection.getRangeAt(0).commonAncestorContainer);
+        const blockText = (block as HTMLElement)?.innerText?.trim() || '';
+        if (blockText && blockText !== text) context += blockText;
+      }
+      return { text, context: context.trim(), isEditable: false };
+    }
+
+    function removeOverlay() {
+      activeOverlay?.remove();
+      activeOverlay = null;
+    }
+
+    /** Anchor a freshly created box near the current selection/caret. */
+    function anchorBox(box: HTMLElement) {
+      const selection = window.getSelection();
+      let left = window.scrollX + 80;
+      let top = window.scrollY + 80;
+      if (selection && selection.rangeCount > 0) {
+        const rect = selection.getRangeAt(0).getBoundingClientRect();
+        if (rect.width || rect.height) {
+          left = rect.left + window.scrollX;
+          top = rect.bottom + window.scrollY + 8;
         }
       }
+      box.style.left = `${Math.max(8, Math.min(left, window.innerWidth - 360))}px`;
+      box.style.top = `${Math.max(8, top)}px`;
+    }
 
-      // Fallback to cursor location (for text inputs / textareas)
-      if (left <= 0 || top <= 0) {
-        if (lastMouseUpEvent) {
-          left = lastMouseUpEvent.pageX - 80;
-          top = lastMouseUpEvent.pageY - 45;
+    function baseBox(): HTMLElement {
+      removeOverlay();
+      const box = document.createElement('div');
+      activeOverlay = box;
+      box.style.cssText = [
+        'position:absolute',
+        'z-index:2147483647',
+        'max-width:340px',
+        'padding:12px 14px',
+        'background:#0f172a',
+        'color:#f8fafc',
+        'border:1px solid #334155',
+        'border-radius:12px',
+        'box-shadow:0 10px 30px -10px rgba(0,0,0,0.6)',
+        'font:13px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif',
+      ].join(';');
+      anchorBox(box);
+      // Dismiss on outside click.
+      setTimeout(() => {
+        document.addEventListener(
+          'mousedown',
+          (e) => {
+            if (activeOverlay && !activeOverlay.contains(e.target as Node)) removeOverlay();
+          },
+          { once: true },
+        );
+      }, 0);
+      document.body.appendChild(box);
+      return box;
+    }
+
+    function showLoading() {
+      const box = baseBox();
+      box.innerHTML =
+        '<div style="display:flex;align-items:center;gap:8px;color:#cbd5e1">' +
+        '<span style="width:14px;height:14px;border:2px solid rgba(255,255,255,0.25);' +
+        'border-top-color:#a855f7;border-radius:50%;display:inline-block;' +
+        'animation:masha-spin 0.6s linear infinite"></span> Translating…</div>' +
+        '<style>@keyframes masha-spin{to{transform:rotate(360deg)}}</style>';
+    }
+
+    function showError(message: string) {
+      const box = baseBox();
+      box.style.borderColor = '#ef4444';
+      box.textContent = `⚠️ ${message}`;
+    }
+
+    function showOverlay(selection: string, translation: string) {
+      const box = baseBox();
+
+      const body = document.createElement('div');
+      body.textContent = translation;
+      body.style.whiteSpace = 'pre-wrap';
+
+      const bar = document.createElement('div');
+      bar.style.cssText =
+        'margin-top:10px;padding-top:8px;border-top:1px solid #1e293b;' +
+        'display:flex;gap:14px;font-size:11px;color:#94a3b8';
+
+      let showingOriginal = false;
+      const toggle = document.createElement('button');
+      const copy = document.createElement('button');
+      for (const b of [toggle, copy]) {
+        b.style.cssText = 'background:none;border:none;color:#a5b4fc;cursor:pointer;padding:0;font:inherit';
+      }
+      toggle.textContent = 'Show original';
+      toggle.onclick = () => {
+        showingOriginal = !showingOriginal;
+        body.textContent = showingOriginal ? selection : translation;
+        toggle.textContent = showingOriginal ? 'Show translation' : 'Show original';
+      };
+      copy.textContent = 'Copy';
+      copy.onclick = () => {
+        navigator.clipboard?.writeText(translation).then(() => {
+          copy.textContent = 'Copied!';
+          setTimeout(() => (copy.textContent = 'Copy'), 1200);
+        });
+      };
+
+      bar.append(toggle, copy);
+      box.append(body, bar);
+    }
+
+    /** Replace the selection inside an editable input (composition mode). */
+    function replaceSelection(text: string) {
+      const input = editableTarget();
+      if (!input) return;
+      const { selectionStart: start, selectionEnd: end, value } = input;
+      input.value = value.substring(0, start!) + text + value.substring(end!);
+      input.selectionStart = input.selectionEnd = start! + text.length;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.focus();
+    }
+
+    async function runTranslation() {
+      const captured = getSelectionContext();
+      if (!captured) {
+        showError('Select some text first.');
+        return;
+      }
+      showLoading();
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'MASHA_TRANSLATE',
+          payload: captured,
+        });
+        if (!response?.success) {
+          showError(response?.error || 'Translation failed.');
+          return;
+        }
+        if (captured.isEditable) {
+          replaceSelection(response.translation);
+          removeOverlay();
         } else {
-          left = 100;
-          top = 100;
+          showOverlay(captured.text, response.translation);
         }
-      }
-
-      // Keep button on screen
-      left = Math.max(10, Math.min(left, window.innerWidth - 180));
-      top = Math.max(10, top);
-
-      btn.style.left = `${left}px`;
-      btn.style.top = `${top}px`;
-
-      // Smooth hover styles
-      btn.onmouseover = () => {
-        btn.style.transform = 'scale(1.03)';
-        btn.style.background = 'linear-gradient(135deg, #4f46e5, #9333ea)';
-      };
-      btn.onmouseout = () => {
-        btn.style.transform = 'scale(1)';
-        btn.style.background = 'linear-gradient(135deg, #6366f1, #a855f7)';
-      };
-
-      btn.onclick = async (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-
-        // 1. Set Loading state
-        btn.disabled = true;
-        btn.style.background = '#4b5563';
-        btn.style.boxShadow = 'none';
-        btn.style.cursor = 'not-allowed';
-        textSpan.innerText = 'Translating...';
-        iconSpan.innerHTML = '<div class="masha-spinner"></div>';
-
-        try {
-          const response = await chrome.runtime.sendMessage({
-            type: 'TRANSLATE_TEXT',
-            payload: { text }
-          });
-
-          if (response && response.success && response.translation) {
-            replaceText(response.translation, isInput, activeEl);
-            removeButton();
-          } else {
-            showErrorState(response?.error || 'Translation failed');
-          }
-        } catch (err) {
-          showErrorState('Connection error');
-        }
-      };
-
-      document.body.appendChild(btn);
-
-      // Trigger appearance animation
-      requestAnimationFrame(() => {
-        btn.style.transform = 'scale(1)';
-        btn.style.opacity = '1';
-      });
-
-      function showErrorState(msg: string) {
-        console.error('MASHA error:', msg);
-        btn.style.background = '#ef4444';
-        btn.style.boxShadow = '0 10px 25px -5px rgba(239, 68, 68, 0.4)';
-        textSpan.innerText = 'Error';
-        iconSpan.innerText = '⚠️';
-        
-        setTimeout(() => {
-          if (activeBtn === btn) {
-            removeButton();
-          }
-        }, 2000);
+      } catch {
+        showError('Could not reach the extension background.');
       }
     }
 
-    function replaceText(translatedText: string, isInput: boolean, activeEl: Element | null) {
-      if (isInput && activeEl) {
-        const input = activeEl as HTMLInputElement | HTMLTextAreaElement;
-        const start = input.selectionStart;
-        const end = input.selectionEnd;
-        if (start !== null && end !== null) {
-          const val = input.value;
-          input.value = val.substring(0, start) + translatedText + val.substring(end);
-          input.selectionStart = input.selectionEnd = start + translatedText.length;
-          
-          // Send inputs so modern frontend frameworks update their bounds/state
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-          input.focus();
-        }
-      } else {
-        const selection = window.getSelection();
-        if (selection && selection.rangeCount > 0) {
-          const range = selection.getRangeAt(0);
-          range.deleteContents();
-          const textNode = document.createTextNode(translatedText);
-          range.insertNode(textNode);
-          selection.removeAllRanges();
-        }
-      }
-    }
-  }
+    // Trigger relayed from the background context-menu click.
+    chrome.runtime.onMessage.addListener((message: { type?: string }) => {
+      if (message?.type === 'MASHA_TRIGGER') runTranslation();
+    });
+  },
 });
