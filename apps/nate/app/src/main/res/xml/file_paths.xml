@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  NATE — Lemonade-powered camera translator (Android).
+  Copyright (C) 2026  Clementine Pendragon <clem@pendragon.systems>
+  Licensed under the GNU General Public License v3.0 or later.
+-->
+<paths>
+    <cache-path name="captures" path="captures/" />
+</paths>

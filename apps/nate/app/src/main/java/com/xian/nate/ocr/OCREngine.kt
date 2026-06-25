@@ -1,5 +1,5 @@
 /*
- * MAGE Companion — Android OCR and local dictionary client.
+ * NATE — Lemonade-powered camera translator (Android).
  * Copyright (C) 2026  Clementine Pendragon <clem@pendragon.systems>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,14 +20,15 @@
 
 package com.xian.nate.ocr
 
-import android.graphics.Bitmap
+import android.graphics.Rect
 
-interface OCREngine {
-    suspend fun processImage(bitmap: Bitmap): List<OCRResult>
-}
-
-data class OCRResult(
-    val text: String,
-    val confidence: Float,
-    val boundingBox: List<Int>
+/**
+ * One detected text region: its pixel rectangle in the source image, the source
+ * text, and the translation. Bounding boxes arrive from the model normalized to
+ * 0–1000 and are converted to pixels by [VisionTranslator].
+ */
+data class TextRegion(
+    val rect: Rect,
+    val original: String,
+    val translated: String,
 )

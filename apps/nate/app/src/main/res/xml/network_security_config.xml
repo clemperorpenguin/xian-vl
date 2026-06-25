@@ -19,8 +19,10 @@
   Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 -->
 <network-security-config>
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">localhost</domain>
-        <domain includeSubdomains="false">127.0.0.1</domain>
-    </domain-config>
+    <!--
+      NATE talks to a user-supplied Lemonade node over plain HTTP on the local
+      network (e.g. http://192.168.x.x:13305), so cleartext is permitted. The
+      node is a LAN endpoint, not a public service.
+    -->
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

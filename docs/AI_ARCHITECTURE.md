@@ -273,3 +273,60 @@ require a separate PyFalkon plugin. The `core/` + `PlatformBridge` split is
 precisely what makes that future port a *reimplementation of one interface* (in
 Python, able to `import xian` for the prompt) rather than a rewrite; the contract
 is documented in [apps/masha-extension/docs/FALKON.md](./apps/masha-extension/docs/FALKON.md).
+
+---
+
+## 7. NATE: On-Device Camera Translation via a Kotlin Omni-Router
+
+NATE ([apps/nate](./apps/nate)) is the Android spoke: photograph text and have the
+translation **inpainted back onto the image**, Google-Translate-camera style. Like
+MASHA it is non-Python and therefore **mirrors** the core rather than importing
+it — but its defining move is that it reimplements the **`OmniModelRouter` itself**
+in Kotlin (`NateOmniRouter`). The device runs **no models**; all OCR and
+translation happen on the Lemonade node.
+
+```mermaid
+graph TD
+    Photo["Take / pick a photo"] --> Disc["NateOmniRouter.discover()\nGET /v1/models?show_all=true"]
+    Disc -->|"pick model with label 'vision'"| Vision["e.g. Gemma-4-31B-it-GGUF"]
+    Photo --> Req["VisionTranslator\nPOST /v1/chat/completions (image + prompt)"]
+    Vision -.->|"resolved model id"| Req
+    Req --> JSON["JSON: [{box 0-1000, original, translated}]\n(strip ```json fences / reasoning)"]
+    JSON --> Map["Map boxes → pixels"]
+    Map --> Inpaint["Inpainter (Canvas):\nfill box w/ sampled bg + refit text"]
+    Inpaint --> Out["Translated image overlay"]
+```
+
+### Why a Client-Side Router Is Mandatory Here
+
+NATE cannot trust the server's Omni bundle to route vision. On the test node,
+`LMX-Omni-5.5B-Lite` **refuses image input** ("I don't have the capability to
+analyze images") because its Lite collection has no vision LLM component, whereas
+the discrete, `vision`-labelled `Gemma-4-31B-it-GGUF` performs OCR correctly. So
+`NateOmniRouter` queries `GET /v1/models?show_all=true` and selects the
+`vision`-labelled model itself — the same discovery logic as the Python
+[OmniModelRouter](./packages/xian-vl/src/xian/omni_router.py), narrowed to the one
+modality NATE needs. This is the general lesson the spoke apps share: **model
+selection is a client responsibility**.
+
+### OCR-as-Grounding and the Inpaint
+
+The vision call does OCR, translation, **and** localization in one shot: the
+prompt requests a JSON array of `{"box":[x1,y1,x2,y2],"original","translated"}`
+with boxes normalized 0–1000 over the image — the same coordinate convention
+MAGE uses for visual grounding. The model used (Gemma vision) is a reasoning
+model, so chain-of-thought arrives in a separate `reasoning_content` field and
+the JSON answer (often ```json-fenced) in `content`; NATE strips both. Boxes map
+to pixels, and `Inpainter` performs an MVP **flat-fill inpaint** — cover each
+source region with its sampled background colour, then redraw the translation
+fitted to the box. This reuses the same OCR engine concept as MAGE's game-frame
+path, retargeted from a live overlay to a still photograph.
+
+### Accuracy vs. Latency
+
+Box accuracy depends on the model's reasoning pass, which costs ~20–40 s per
+photo — acceptable for a deliberate "snap and wait" flow, unlike MAGE's real-time
+overlay. Disabling reasoning roughly halves latency but degrades box placement,
+so NATE keeps it on. The trade-off is a property of the chosen vision model, and
+because selection is client-side, a node offering a faster grounding-capable VLM
+would be picked up automatically.
