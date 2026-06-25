@@ -59,6 +59,7 @@ This document outlines the planned milestones, upcoming features, and long-term 
   * Block selection translation.
   * Full-page DOM translation leveraging the LLM's context window.
   * In-context rendering of translated paragraphs, preserving webpage layout while utilizing local Lemonade inference models.
+  * **Document export / print**: export the translated page as a self-contained document (PDF / printable HTML) via the browser's print pipeline (`window.print()` → "Save as PDF"), so a fully translated article can be saved or printed offline. Stretch: a clean reader-mode export that strips page chrome and keeps only the translated body + title.
 
 ---
 

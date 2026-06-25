@@ -172,3 +172,104 @@ CONFIDENCE:
 [Float Score 0.0 - 1.0]
 ```
 The client parses this structure using high-performance regular expressions. A semi-transparent `ResultBubble` widget is overlayed near the user's selected region (`anchor_rect`) using global desktop coordinates. If the model confidence falls below a set threshold, the UI highlights the border in orange to warn the user of speculative translations.
+
+---
+
+## 5. Luduan: The Document Translation & Narration Pipeline
+
+Luduan ([apps/luduan-client](./apps/luduan-client)) is a CLI spoke that applies the
+same Local Omnirouter foundation to **long-form documents** instead of live game
+frames: it translates a book into a target language and narrates it as an
+audiobook. It reuses the shared core wholesale — the same
+[OmniModelRouter](./packages/xian-vl/src/xian/omni_router.py) for per-modality
+resolution and the same [LemonadeClient](./packages/xian-vl/src/xian/lemonade_client.py)
+for the audio endpoints — so no new inference machinery is introduced.
+
+```mermaid
+graph LR
+    EPUB["EPUB (ebooklib + BeautifulSoup)"] --> Parsed["ParsedBook\n(paragraphs + chapter index)"]
+    Parsed -->|"router.llm()"| Trans["DocumentTranslator\nPOST /v1/chat/completions"]
+    Trans --> MD["Translated Markdown + JSON"]
+    Trans -->|"router.tts() = kokoro-v1"| TTS["AudioEngine\nPOST /v1/audio/speech"]
+    TTS --> SF["soundfile: decode float WAV →\nconcat → encode Ogg/Opus"]
+    SF --> OPUS[".opus audiobook"]
+    SF --> MAN["KOReader .audio.json\n(per-passage offsets)"]
+```
+
+### Pipeline Stages
+
+1. **Parse** — `parser.py` extracts headings and paragraphs into a `ParsedBook`, skipping the navigation/TOC document so it is not mistaken for a chapter.
+2. **Translate** — `DocumentTranslator` issues `/v1/chat/completions` calls through an `AsyncOpenAI` client pointed at the resolved `router.llm()` component, with a bounded concurrency limit (`asyncio.Semaphore`, default 8). The system prompt mirrors MAGE's framing — web-novel register (wuxia/xianxia/xuanhuan), preserve proper nouns, output only the translation — and disables reasoning via `extra_body={"chat_template_kwargs": {"enable_thinking": False}}`.
+3. **Narrate** — `AudioEngine` calls `router.tts()` (resolves to `kokoro-v1`) via `LemonadeClient.tts()` against `/v1/audio/speech`, requesting one WAV per paragraph.
+4. **Assemble** — see the WAV note below: segments are concatenated and encoded to a single `.opus`.
+5. **Sync manifest** — `encoder.py` emits a KOReader `.audio.json` sidecar mapping each passage to its audio offset/duration for synchronised read-along on e-ink devices.
+
+### The Float-WAV / Opus Assembly Detail
+
+Lemonade's `kokoro-v1` returns **32-bit float WAV (format code 3), mono 24 kHz,
+with a streamed `0xFFFFFFFF` data-chunk size** — which Python's stdlib `wave`
+module rejects (`unknown format: 3`) and which defeats any header-trusting
+duration math. Luduan resolves this with **`soundfile`** (whose pip wheel bundles
+libsndfile 1.2.2 *with Opus*): it decodes the float WAV into NumPy, concatenates
+exactly, and writes Ogg/Opus directly — **no `ffmpeg`/`opusenc` and no system
+libraries required**. The CLI encoders remain a fallback when present.
+
+### Planned Format Expansion (Vision Reuse)
+
+The roadmap extends Luduan beyond EPUB to **PDF and comics (CBZ/CBR)**. Text
+formats (EPUB, text PDF) converge on the same `ParsedBook → translate → narrate`
+path. Image formats (scanned PDF, comic panels) carry no extractable text, so
+they route page images through the existing
+[VLProcessor](./packages/xian-vl/src/xian/pipeline.py) vision path — the **same
+OCR+translate engine MAGE uses on game frames** — before rejoining the narration
+pipeline. This keeps the OCR logic single-sourced across the ecosystem.
+
+---
+
+## 6. MASHA: Context-Aware Browser Translation
+
+MASHA ([apps/masha-extension](./apps/masha-extension)) is the browser spoke: a
+WXT (Chrome MV3 / Firefox MV2) extension that translates selected web text. It is
+the one component **not** written in Python, so rather than importing the `xian`
+core it **mirrors** it in TypeScript — the same default model
+(`LMX-Omni-5.5B-Lite`), the same `<think>`-stripping, and the same prompt framing
+as [pipeline.py](./packages/xian-vl/src/xian/pipeline.py)'s `create_prompt`. The
+existing `lemonadeUrl.ts` ↔ `lemonade_url.py` mirror established this precedent.
+
+```mermaid
+graph TD
+    Sel["Select text → right-click\n'Translate with MASHA'"] --> BG1["Background: contextMenus.onClicked"]
+    BG1 -->|"tabs.sendMessage"| CS["Content script"]
+    CS --> Cap["Capture selection +\npage context (title + section)"]
+    Cap -->|"runtime.sendMessage"| BG2["Background: core/translator"]
+    BG2 -->|"POST /v1/chat/completions"| Lem["Lemonade :13305/v1"]
+    Lem --> BG2
+    BG2 -->|"strip &lt;think&gt;, clean"| CS
+    CS --> Out{"editable?"}
+    Out -->|"no"| Overlay["Non-destructive overlay\n(Show original / Copy)"]
+    Out -->|"yes"| Replace["Replace-in-place\n(inputs/textareas)"]
+```
+
+### Architectural Seams
+
+* **Browser-free `core/`**: `constants`, `prompt`, and `translator` contain zero `chrome.*`/`browser.*` calls — the translation logic (build messages → POST → strip reasoning → clean) is pure and unit-testable. The HTTP call is parameterized on a `fetch`-shaped function.
+* **`PlatformBridge` interface**: every browser-specific capability (config storage, the context-menu trigger, selection/context capture, overlay, replace) sits behind one ~6-method interface. The WXT realization splits it across the background worker (context menu + the Lemonade `fetch`) and the content script (capture + render).
+* **Background-routed inference**: the `/v1/chat/completions` call runs in the background service worker, not the page. This is deliberate — a page-context `fetch` to a local `http://` node from an `https://` page is mixed-content-blocked, so routing through the background is what makes it work on both Chrome and Firefox.
+
+### Context-Awareness (the edge over snippet translators)
+
+MASHA's differentiator is that it sends the **surrounding page context** (title +
+enclosing section) to the model as *reference only*, with the prompt locking
+translation to the selection alone. This lets the model disambiguate homographs,
+pronouns, honorifics, and domain terms that snippet-in-isolation translators
+cannot (e.g. Spanish *banco* → "bench" in a park sentence, "bank" in a finance
+sentence). It is the browser analogue of MAGE's glossary/lore RAG injection.
+
+### Cross-Browser & the Falkon Boundary
+
+Chrome and Firefox build from one codebase. **Falkon (QtWebEngine) does not
+implement the WebExtensions API at all**, so MASHA cannot load there — it would
+require a separate PyFalkon plugin. The `core/` + `PlatformBridge` split is
+precisely what makes that future port a *reimplementation of one interface* (in
+Python, able to `import xian` for the prompt) rather than a rewrite; the contract
+is documented in [apps/masha-extension/docs/FALKON.md](./apps/masha-extension/docs/FALKON.md).
