@@ -11,6 +11,8 @@ dependencies = [
     "shared-types",
     "ebooklib>=0.18",
     "beautifulsoup4>=4.12.0",
+    "soundfile>=0.13",
+    "numpy>=1.24",
 ]
 
 [project.scripts]

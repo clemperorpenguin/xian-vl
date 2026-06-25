@@ -2,20 +2,34 @@
 
 <img width="1024" height="1024" alt="luduan" src="https://github.com/user-attachments/assets/2785f66a-ce56-48c7-a37b-240fcc11ed42" />
 
-> [!CAUTION]
-> **Experimental / Untested**: The Luduan CLI client is currently an experimental tool and is **not fully tested or verified**. It is provided as-is as a work-in-progress scaffold.
-
-Luduan is a CLI tool for EPUB-to-Robobook translation and narration. It allows you to translate EPUB files and generate audiobooks using the Lemonade Server.
+Luduan is a CLI that translates books into another language and narrates them as
+an audiobook, powered by the **[Lemonade Server](https://lemonade-server.ai/)**.
+Translation and narration are verified working end to end against a live
+Lemonade node (chat model for translation, `kokoro-v1` for TTS).
 
 ## Features
 
-- **EPUB Translation**: Translate EPUB files from one language to another.
-- **Narration**: Generate audiobooks from translated text using TTS engines.
-- **Batch Processing**: Process multiple EPUB files in a directory.
+- **Translation**: translate a book from one language to another (defaults Chinese → English, tuned for web novels — wuxia/xianxia/xuanhuan).
+- **Narration**: generate an audiobook from the translated text via Lemonade TTS.
+- **Opus output, no system tools required**: audio is encoded to `.opus` via `soundfile` (bundles libsndfile + libopus), so no `ffmpeg`/`opusenc` install is needed. If those CLIs *are* present they're used as a fallback.
+- **KOReader sync manifest**: a `.audio.json` sidecar maps each passage to its audio offset for synchronised playback on e-readers.
+- **Batch Processing**: process every book in a directory.
+
+## Input formats
+
+| Format | Status | How |
+| --- | --- | --- |
+| **EPUB** (`.epub`) | ✅ Working | text extraction via `ebooklib` + BeautifulSoup |
+| **PDF — text** (`.pdf`) | 🔜 Planned | direct text extraction (`pypdf`/`pdfminer`) → same translate/narrate path |
+| **PDF — scanned** (`.pdf`) | 🔜 Planned | page images routed through the Xian **vision OCR pipeline** (the MAGE OCR+translate engine) |
+| **Comics** (`.cbz`, `.cbr`, `.cb7`) | 🔜 Planned | archive of page images → vision OCR per panel/page → translated text → narration |
+
+Text formats (EPUB, text PDF) are deterministic and cheap. Image formats
+(scanned PDF, comics) reuse the existing `xian` vision pipeline, so dialogue is
+OCR'd and translated with the same prompt logic as MAGE. See the roadmap entry
+in [docs/ROADMAP.md](../../docs/ROADMAP.md).
 
 ## Usage
-
-To run Luduan from the monorepo root:
 
 ```bash
 uv run luduan --help
@@ -23,10 +37,12 @@ uv run luduan --help
 
 ### Commands
 
-- `translate`: Translate an EPUB file.
-- `robobook`: Full pipeline: translate → narrate → encode to Robobook.
-- `batch`: Batch-process all EPUBs in a directory.
+- `translate`: Translate a book, saving Markdown + structured JSON.
+- `robobook`: Full pipeline — translate → narrate → encode to `.opus` (+ manifest).
+- `batch`: Batch-process all books in a directory.
 
-## Status
+Example:
 
-Note: The pipeline is currently a scaffold and some features are not yet fully wired up. In particular, any audiobook narration features relying on Lemonade audio/ASR capabilities are impacted by the backend server limitations.
+```bash
+uv run luduan robobook mybook.epub --source Chinese --target English --voice af_heart -o ./out
+```

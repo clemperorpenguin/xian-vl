@@ -36,19 +36,37 @@ from xian.omni_router import OmniModelRouter
 
 logger = logging.getLogger(__name__)
 
+# soundfile (bundling libsndfile) decodes the 32-bit *float* WAV that Lemonade's
+# kokoro TTS returns — which Python's stdlib ``wave`` module rejects ("unknown
+# format: 3") — and concatenates without trusting the streamed 0xFFFFFFFF data
+# size in the header. Falls back to the stdlib path if it is unavailable.
+try:
+    import numpy as np
+    import soundfile as sf
+
+    _HAVE_SF = True
+except Exception:  # pragma: no cover - optional accel path
+    _HAVE_SF = False
+
 
 def get_wav_duration_ms(wav_bytes: bytes) -> float:
-    """Parse format parameters from WAV header and calculate duration in ms."""
+    """Return the duration of a WAV chunk in milliseconds."""
+    if _HAVE_SF:
+        try:
+            info = sf.info(io.BytesIO(wav_bytes))
+            if info.samplerate > 0:
+                return (info.frames / info.samplerate) * 1000.0
+        except Exception as e:
+            logger.debug("soundfile duration probe failed, using header math: %s", e)
+
     if len(wav_bytes) > 44:
         try:
-            # WAV header fields:
-            # Channels is at bytes 22-23 (16-bit integer)
-            # Sample rate is at bytes 24-27 (32-bit integer)
-            # Bits per sample is at bytes 34-35 (16-bit integer)
+            # Stdlib fallback. WAV header fields:
+            # Channels at bytes 22-23, sample rate at 24-27, bits at 34-35.
             channels = struct.unpack("<H", wav_bytes[22:24])[0]
             sample_rate = struct.unpack("<I", wav_bytes[24:28])[0]
             bits_per_sample = struct.unpack("<H", wav_bytes[34:36])[0]
-            
+
             bytes_per_second = sample_rate * channels * (bits_per_sample // 8)
             data_size = len(wav_bytes) - 44
             if bytes_per_second > 0:
@@ -59,14 +77,30 @@ def get_wav_duration_ms(wav_bytes: bytes) -> float:
 
 
 def concatenate_wavs(wav_datas: list[bytes]) -> bytes:
-    """Concatenate multiple WAV byte chunks into a single valid WAV byte chunk.
-
-    Uses Python's built-in wave module to correctly merge headers and audio data.
-    """
+    """Concatenate multiple WAV byte chunks into a single valid WAV byte chunk."""
     if not wav_datas:
         return b""
     if len(wav_datas) == 1:
         return wav_datas[0]
+
+    if _HAVE_SF:
+        try:
+            blocks = []
+            sample_rate = None
+            for data in wav_datas:
+                samples, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=False)
+                if sample_rate is None:
+                    sample_rate = sr
+                elif sr != sample_rate:
+                    logger.warning("WAV sample-rate mismatch: %s vs %s", sr, sample_rate)
+                blocks.append(samples)
+            merged = np.concatenate(blocks)
+            out_io = io.BytesIO()
+            # Emit standard 16-bit PCM so every downstream consumer can read it.
+            sf.write(out_io, merged, int(sample_rate or 24000), format="WAV", subtype="PCM_16")
+            return out_io.getvalue()
+        except Exception as e:
+            logger.warning("soundfile concatenation failed (%s); falling back to stdlib.", e)
 
     try:
         # Read parameters from the first WAV chunk

@@ -43,7 +43,17 @@ This document outlines the planned milestones, upcoming features, and long-term 
 * **Goal**: Focus the scope of the mobile companion specifically on serving as a **highly efficient, high-performance dictionary tool**.
 * **Features**: Mobile OCR scanner, rapid CC-CEDICT parsing, and local/clipboard history sync with the main MAGE client.
 
-### 2. Masha (Browser Extension)
+### 2. Luduan (Book Translation & Narration)
+* **Goal**: Grow Luduan from an EPUB tool into a general **book/comic translate-and-narrate** pipeline.
+* **Status**: EPUB translation + Opus narration verified working (pip-only Opus via `soundfile`; no `ffmpeg` required).
+* **Input-format expansion** (all converge on the same `ParsedBook` → translate → narrate path):
+  * [x] **EPUB** — text extraction via `ebooklib`.
+  * [ ] **PDF (text)**: direct text extraction (`pypdf`/`pdfminer`).
+  * [ ] **PDF (scanned)**: page images through the `xian` **vision OCR pipeline** (the MAGE OCR+translate engine).
+  * [ ] **Comics (`.cbz`, `.cbr`, `.cb7`)**: unpack the image archive, OCR + translate each page/panel via the vision pipeline, then narrate the translated dialogue.
+* **Note**: comics and scanned PDFs are a vision-OCR effort (reuse of the MAGE VLM path), not plain text extraction — staged behind the text formats.
+
+### 3. Masha (Browser Extension)
 * **Goal**: Transition MASHA into a **high-quality, context-aware full-page or partial-page translator**.
 * **Features**:
   * Block selection translation.

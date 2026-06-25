@@ -57,10 +57,23 @@ def encode_opus(
 ) -> bool:
     """Encode a WAV file to Opus.
 
-    Tries ``opusenc`` first, then ``ffmpeg`` as fallback.
+    Prefers ``soundfile`` (bundles libsndfile+libopus, no system dependency),
+    then falls back to the ``opusenc`` / ``ffmpeg`` CLIs if present.
 
     Returns ``True`` on success.
     """
+    # 1. Pure-pip path: soundfile -> Ogg/Opus. Works with no external binaries.
+    try:
+        import soundfile as sf
+
+        if "OPUS" in sf.available_subtypes():
+            data, samplerate = sf.read(str(wav_path), dtype="float32")
+            sf.write(str(output_path), data, samplerate, format="OGG", subtype="OPUS")
+            return True
+        logger.debug("soundfile present but libsndfile lacks Opus; trying CLI encoders.")
+    except Exception as e:
+        logger.debug("soundfile Opus encode unavailable (%s); trying CLI encoders.", e)
+
     if shutil.which("opusenc"):
         cmd = [
             "opusenc",

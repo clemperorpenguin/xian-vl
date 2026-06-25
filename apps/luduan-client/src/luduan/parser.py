@@ -85,8 +85,14 @@ def parse_epub(path: Path) -> ParsedBook:
 
     chapter_idx = 0
     for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        # Skip the navigation/TOC document — otherwise its title heading gets
+        # parsed as a phantom chapter.
+        if getattr(item, "is_chapter", lambda: True)() is False:
+            continue
         content = item.get_content().decode("utf-8", errors="replace")
         soup = BeautifulSoup(content, "html.parser")
+        if soup.find("nav") is not None:
+            continue
 
         for tag in soup.find_all(["p", "h1", "h2", "h3", "h4"]):
             text = tag.get_text(strip=True)
