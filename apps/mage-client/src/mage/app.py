@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
     QFileDialog
 )
 from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, QStandardPaths, pyqtSignal
-from PyQt6.QtGui import QIcon, QCursor
+from PyQt6.QtGui import QIcon, QCursor, QColor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
 
@@ -67,7 +67,7 @@ from mage.settings_keys import (
     KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG,
     KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS, KEY_FAMILIAR_TYPE,
     KEY_FAMILIAR_CUSTOM_RECIPE, KEY_MEMORY_ENABLED, KEY_MEMORY_RETENTION_DAYS,
-    KEY_BACKEND_PREFERENCE, KEY_NPU_POWER_MODE,
+    KEY_BACKEND_PREFERENCE, KEY_NPU_POWER_MODE, KEY_LIVE_INTERVAL_MS,
 )
 from mage.utils.window_binder import WindowBinder
 from shared_types.state import state, t
@@ -304,6 +304,16 @@ class SettingsDialog(QDialog):
         self.auto_speak_cb.setChecked(speak_val == "true" or speak_val is True)
         features_layout.addRow(self.auto_speak_cb)
 
+        self.live_interval_spin = QSpinBox()
+        self.live_interval_spin.setRange(200, 5000)
+        self.live_interval_spin.setSingleStep(100)
+        self.live_interval_spin.setSuffix(" ms")
+        self.live_interval_spin.setValue(int(settings.value(
+            KEY_LIVE_INTERVAL_MS, constants.DEFAULT_LIVE_INTERVAL_MS
+        )))
+        self.live_interval_spin.setToolTip(t("settings.tooltip.live_interval"))
+        features_layout.addRow(t("settings.label.live_interval"), self.live_interval_spin)
+
         self.memory_enabled_cb = QCheckBox(t("settings.checkbox.memory_enabled"))
         self.memory_enabled_cb.setToolTip(t("settings.tooltip.memory_enabled"))
         self.memory_enabled_cb.setChecked(_is_true(settings.value(KEY_MEMORY_ENABLED, "true")))
@@ -494,6 +504,7 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
+        self.settings.setValue(KEY_LIVE_INTERVAL_MS, self.live_interval_spin.value())
         self.settings.setValue(KEY_MEMORY_ENABLED, "true" if self.memory_enabled_cb.isChecked() else "false")
         self.settings.setValue(KEY_MEMORY_RETENTION_DAYS, self.memory_retention_spin.value())
         self.settings.setValue(KEY_FAMILIAR_ENABLED, "true" if self.familiar_enabled_cb.isChecked() else "false")
@@ -643,6 +654,10 @@ class XianApp(QWidget):
         self.osd_timer.timeout.connect(self.hide_osd)
 
         self._init_session_memory()
+
+        # Live (inpainted) translation state.
+        self._live_lens_worker = None
+        self.inpaint_overlay = None
 
         self.chat_sidebar = ChatSidebar(self.processor, parent=self)
         self.notes_sidebar = NotesSidebar(self)
@@ -805,6 +820,101 @@ class XianApp(QWidget):
         except Exception as e:
             logger.warning("Session memory unavailable: %s", e)
             self.session_store = None
+
+    # ── Live (inpainted) translation ─────────────────────────────────
+
+    def start_live_lens(self, rect: QRect):
+        """Continuously translate a region, painting over the original text."""
+        if not self._ensure_model_ready():
+            return
+        self.stop_live_lens()
+
+        from mage.live_lens import LiveLensWorker
+        from mage.ui.inpaint_overlay import InpaintOverlay
+
+        LensOverlayWindow._last_rect = rect
+
+        self.inpaint_overlay = InpaintOverlay()
+        self.inpaint_overlay.bind_to_rect(rect)
+        self.inpaint_overlay.show()
+
+        self._live_lens_worker = LiveLensWorker(
+            self.processor,
+            rect,
+            source_lang=self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG),
+            target_lang=self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG),
+            interval_ms=int(self.settings.value(KEY_LIVE_INTERVAL_MS, constants.DEFAULT_LIVE_INTERVAL_MS)),
+            session_recorder=lambda orig, trans: self.processor.record_event("inpaint", orig, trans),
+        )
+        self._live_lens_worker.regions_ready.connect(self._on_live_regions)
+        self._live_lens_worker.overlay_hide.connect(self._on_live_overlay_hide)
+        self._live_lens_worker.error.connect(self._on_live_lens_error)
+        self._workers.append(self._live_lens_worker)
+        self._live_lens_worker.start()
+
+        bubble = ResultBubble(t("live_lens.status.started"), anchor_rect=rect, auto_close_ms=3000)
+        self._add_bubble(bubble)
+        logger.info("Live lens started on %s", rect)
+
+    def stop_live_lens(self):
+        """Tear down the live translation loop and its overlay."""
+        worker = getattr(self, "_live_lens_worker", None)
+        if worker is not None:
+            try:
+                worker.stop()
+                worker.requestInterruption()
+                worker.wait(2000)
+            except Exception as e:
+                logger.error("Error stopping live lens: %s", e)
+            self._cleanup_worker(worker)
+            self._live_lens_worker = None
+
+        overlay = getattr(self, "inpaint_overlay", None)
+        if overlay is not None and self._is_valid_widget(overlay):
+            overlay.close()
+            overlay.deleteLater()
+        self.inpaint_overlay = None
+
+    def _on_live_regions(self, regions, rect: QRect):
+        """Paint newly translated regions in place."""
+        overlay = getattr(self, "inpaint_overlay", None)
+        if overlay is None or not self._is_valid_widget(overlay):
+            return
+
+        from mage.ui.inpaint_overlay import InpaintRegion, contrasting_text_color
+
+        # Boxes arrive in captured device pixels; Qt paints in logical
+        # coordinates, so divide by the display's scale factor or every box
+        # lands too far right and low on a HiDPI screen.
+        ratio = overlay.devicePixelRatioF() or 1.0
+        painted = []
+        for region in regions:
+            left, top, right, bottom = region.box
+            local = QRect(
+                int(left / ratio), int(top / ratio),
+                int((right - left) / ratio), int((bottom - top) / ratio),
+            )
+            fill = QColor(*region.fill)
+            painted.append(InpaintRegion(
+                rect=local,
+                text=region.translated,
+                fill=fill,
+                text_color=contrasting_text_color(fill),
+            ))
+
+        overlay.bind_to_rect(rect)
+        overlay.set_regions(painted)
+        overlay.show()
+        overlay.promote()
+
+    def _on_live_overlay_hide(self):
+        """Briefly clear the overlay so the next capture sees clean pixels."""
+        overlay = getattr(self, "inpaint_overlay", None)
+        if overlay is not None and self._is_valid_widget(overlay):
+            overlay.clear_regions()
+
+    def _on_live_lens_error(self, message: str):
+        logger.warning("Live lens error: %s", message)
 
     def clear_session_memory(self):
         """Erase all stored play history and start a fresh session."""
@@ -1072,6 +1182,18 @@ class XianApp(QWidget):
             bubble = ResultBubble(t("dialogue.status.activated"), anchor_rect=rect, auto_close_ms=3000)
             self._add_bubble(bubble)
             logger.info("Dialogue Mode Activated via Lens")
+            return
+
+        if action == "live":
+            # Choosing Live again is how the user turns it off; there is no
+            # stop button on a click-through overlay.
+            if getattr(self, "_live_lens_worker", None) is not None:
+                self.stop_live_lens()
+                self._add_bubble(ResultBubble(
+                    t("live_lens.status.stopped"), anchor_rect=rect, auto_close_ms=2500
+                ))
+            else:
+                self.start_live_lens(rect)
             return
 
         if action == "chat":
@@ -2568,6 +2690,12 @@ class XianApp(QWidget):
             self.stop_raid_mode()
         except Exception as e:
             logger.error("Error stopping raid mode on close: %s", e)
+
+        # Stop the continuous live-translation loop and drop its overlay.
+        try:
+            self.stop_live_lens()
+        except Exception as e:
+            logger.error("Error stopping live lens on close: %s", e)
 
         # Flush pending session-memory writes before the writer thread dies.
         self._close_session_memory()

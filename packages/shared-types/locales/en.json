@@ -279,6 +279,30 @@
     "value": "Dialogue",
     "context": "Lens action button for dialogue translation"
   },
+  "lens.button.live": {
+    "value": "Live",
+    "context": "Lens action button that starts continuous in-place translation of the selected region"
+  },
+  "lens.tooltip.live": {
+    "value": "Continuously translate this region, drawing the translation over the original text. Press the leader key and choose Live again to stop.",
+    "context": "Tooltip for the Live lens action button explaining continuous in-place translation"
+  },
+  "live_lens.status.started": {
+    "value": "Live translation active",
+    "context": "Status message shown when continuous in-place translation begins"
+  },
+  "live_lens.status.stopped": {
+    "value": "Live translation stopped",
+    "context": "Status message shown when continuous in-place translation ends"
+  },
+  "settings.label.live_interval": {
+    "value": "Live refresh interval",
+    "context": "Label for the spin box choosing how often live translation re-checks the screen region"
+  },
+  "settings.tooltip.live_interval": {
+    "value": "How often live translation looks at the region. Lower values react faster but re-check more often; the actual update speed is limited by how long the vision model takes.",
+    "context": "Tooltip explaining the live translation refresh interval and its practical limit"
+  },
   "lens.button.explain": {
     "value": "Explain",
     "context": "Lens action button to explain selected text"

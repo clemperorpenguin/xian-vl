@@ -65,10 +65,50 @@ This document outlines the planned milestones, upcoming features, and long-term 
 
 ## 🌌 Long-Term Vision (6+ Months)
 
-### 1. Contextual Game State and Memory
-* Keep a sliding window of historical screen actions to build contextual game-state understanding.
-* Enable the VLM to remember past conversation logs, quest journals, and in-game decisions, providing context-aware advice when the user asks: *"What should I do next?"*.
+### 1. Contextual Game State and Memory — ✅ shipped
+Everything MAGE translates is now logged to a local SQLite database (`session/sessions.db`
+under the app data directory) and fed back into both the OCR and chat prompts, so the
+assistant can answer *"What should I do next?"* from the actual playthrough.
 
-### 2. Direct On-Device NPU Acceleration
-* Fully leverage Ryzen AI NPUs (NPU driver hooks) for all OCR/VLM operations to minimize GPU usage, preserving power and hardware resources for heavy gaming frames.
-* Direct memory sharing between screen capture frames and NPU hardware buffers.
+* A rolling digest — scene, active objectives, named entities, decisions, open threads — is
+  re-summarized by the text LLM as events accumulate, so an hour-old session still fits in
+  a prompt.
+* Retrieval is FTS5 keyword search with a recency tilt. CJK is segmented per character on
+  the way into the index; without that, `unicode61` swallows a whole clause as one token
+  and Chinese search silently returns nothing.
+* Remaining: semantic retrieval via embeddings (a natural fit for FastFlowLM's `--embed`
+  once the NPU path is validated), and importing historical raid transcripts.
+
+### 2. Direct On-Device NPU Acceleration — ⚠️ partially shipped
+The honest state of Ryzen AI on Linux, as of Lemonade v10:
+
+* **What works today.** Lemonade serves NPU models through the FastFlowLM (`flm`) recipe,
+  which covers text LLMs, Whisper ASR, and embeddings. Chat, translation, session
+  summarization, and raid-mode speech can all be routed there via
+  **Settings → Backend → Inference backend**. Run `./mage.sh --doctor-npu` to check the
+  prerequisites.
+* **What does not exist.** There is no NPU *vision* backend on Linux, so the VLM — and
+  therefore OCR — stays on the GPU. Routing text work to the NPU frees the GPU; it does
+  not make OCR faster. ONNX Runtime's VitisAI execution provider currently falls back to
+  CPU on Linux x86-64, so a bespoke NPU OCR path is a spike, not a plan.
+* **Hard requirements.** XDNA 2 only (Ryzen AI 300/400 series — XDNA 1 parts are not
+  supported), the `amdxdna` driver, and NPU firmware ≥ 1.1.0.0.
+* **On "direct memory sharing".** The client talks to `lemond` over HTTP with base64 data
+  URLs, which can never be zero-copy. What is achievable — and what the capture path now
+  does — is removing the redundant encode/decode round trips between screen capture and
+  inference. True dmabuf→NPU buffer import would require in-process inference and is out
+  of scope at the frame rates this runs at.
+
+### 3. Live In-Place Translation — ✅ shipped (VLM path)
+The **Live** lens action continuously translates a locked region and paints each
+translation over the original text — Google Lens / DeepL style — instead of showing a
+bubble beside it.
+
+* A perceptual-hash change gate skips inference on unchanged frames, and the worker
+  recognizes its *own* overlay in the next capture, so the display does not flicker at
+  steady state the way dialogue mode does.
+* Latency is bounded by the vision model: expect roughly 2–5 s per changed frame with a 4B
+  VLM.
+* Remaining: a local ONNX text-detection pass to supply boxes (sub-second end to end, with
+  the LLM only translating the recognized lines), which would make this genuinely
+  real-time.

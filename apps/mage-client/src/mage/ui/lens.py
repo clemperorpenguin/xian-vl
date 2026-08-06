@@ -65,11 +65,16 @@ class ActionBarWidget(QWidget):
         btn_dialogue = QPushButton(t("lens.button.dialogue"))
         btn_dialogue.clicked.connect(lambda: self._on_click("dialogue"))
         
+        btn_live = QPushButton(t("lens.button.live"))
+        btn_live.setToolTip(t("lens.tooltip.live"))
+        btn_live.clicked.connect(lambda: self._on_click("live"))
+
         btn_chat = QPushButton(t("lens.button.chat_context"))
         btn_chat.clicked.connect(lambda: self._on_click("chat"))
-        
+
         layout.addWidget(btn_translate)
         layout.addWidget(btn_dialogue)
+        layout.addWidget(btn_live)
         layout.addWidget(btn_chat)
         
         self.selected_rect = QRect()

@@ -80,3 +80,9 @@ GAME_STATE_OCR_TOKEN_BUDGET = 300
 
 # Days of play history kept before purging.
 DEFAULT_MEMORY_RETENTION_DAYS = 30
+
+# ── Live translation ─────────────────────────────────────────────────
+# How often the live overlay looks at its region. Below the vision model's
+# own latency there is nothing to gain — the change gate skips the work but
+# the captures still cost.
+DEFAULT_LIVE_INTERVAL_MS = 700

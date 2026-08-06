@@ -22,6 +22,9 @@ See it in action on YouTube: https://www.youtube.com/watch?v=Izu_8pql7cE
 - **Click-Through Desktop Overlay**: Transparent PyQt6 overlay windows that display translated text directly over game HUDs and dialogue while remaining completely invisible to mouse inputs.
 - **Wayland Global Hotkey & Command OSD**: Trigger translation, OSD configurations, and sidebars seamlessly using customizable system-wide leader hotkeys.
 - **Dialogue Mode (Autoplay VNs / Story RPGs)**: Lock onto a screen region, translate automatically, and advance/refresh translations inline with a simple mouse click.
+- **Live In-Place Translation**: Lock onto a region and let MAGE paint translations directly over the original text — Google Lens style — refreshing as the screen changes, with no bubbles in the way.
+- **Session Memory**: MAGE remembers the text it has translated, the dialogue you have read, and the questions you have asked, so you can ask *"what do I do next?"* and get an answer grounded in your actual playthrough rather than generic wiki knowledge.
+- **NPU Offload (Ryzen AI)**: On XDNA 2 hardware, chat, translation, and speech can run on the NPU via Lemonade's FastFlowLM backend, leaving the GPU to the vision model. Check your machine with `./mage.sh --doctor-npu`.
 - **Visual Grounding Target Highlighting**: Ask the assistant *"where do I click?"* or *"where is the exit?"* and watch it highlight the exact physical coordinates on your screen.
 - **Cinematic Mode (Contextual Voice Translation)**: Seamlessly couples screen capture vision analysis with audio playback translation.
 - **Local CC-CEDICT Dictionary**: Instantly hover over any translation bubble and press `Alt` for a local, offline breakdown of Chinese characters, pinyin, and definitions.
