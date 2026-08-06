@@ -295,6 +295,26 @@
     "value": "Live translation stopped",
     "context": "Status message shown when continuous in-place translation ends"
   },
+  "settings.label.live_backend": {
+    "value": "Live text detection",
+    "context": "Label for the drop-down choosing how live translation finds text on screen"
+  },
+  "settings.tooltip.live_backend": {
+    "value": "Local OCR is much faster but needs the optional OCR models installed (uv sync --extra ocr). The vision model works everywhere but takes a few seconds per update.",
+    "context": "Tooltip explaining the trade-off between local OCR and the vision model for live translation"
+  },
+  "settings.option.live_backend.auto": {
+    "value": "Auto",
+    "context": "Live text detection option: use local OCR when installed, otherwise the vision model"
+  },
+  "settings.option.live_backend.ocr": {
+    "value": "Local OCR (fast)",
+    "context": "Live text detection option: use the locally installed OCR models"
+  },
+  "settings.option.live_backend.vlm": {
+    "value": "Vision model (accurate)",
+    "context": "Live text detection option: use the vision-language model to find and translate text"
+  },
   "settings.label.live_interval": {
     "value": "Live refresh interval",
     "context": "Label for the spin box choosing how often live translation re-checks the screen region"

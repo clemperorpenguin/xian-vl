@@ -68,6 +68,7 @@ from mage.settings_keys import (
     KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS, KEY_FAMILIAR_TYPE,
     KEY_FAMILIAR_CUSTOM_RECIPE, KEY_MEMORY_ENABLED, KEY_MEMORY_RETENTION_DAYS,
     KEY_BACKEND_PREFERENCE, KEY_NPU_POWER_MODE, KEY_LIVE_INTERVAL_MS,
+    KEY_LIVE_BACKEND,
 )
 from mage.utils.window_binder import WindowBinder
 from shared_types.state import state, t
@@ -314,6 +315,17 @@ class SettingsDialog(QDialog):
         self.live_interval_spin.setToolTip(t("settings.tooltip.live_interval"))
         features_layout.addRow(t("settings.label.live_interval"), self.live_interval_spin)
 
+        self.live_backend_combo = QComboBox()
+        for backend in constants.LIVE_BACKENDS:
+            self.live_backend_combo.addItem(t(f"settings.option.live_backend.{backend}"), backend)
+        lb_idx = self.live_backend_combo.findData(
+            settings.value(KEY_LIVE_BACKEND, constants.DEFAULT_LIVE_BACKEND)
+        )
+        if lb_idx >= 0:
+            self.live_backend_combo.setCurrentIndex(lb_idx)
+        self.live_backend_combo.setToolTip(t("settings.tooltip.live_backend"))
+        features_layout.addRow(t("settings.label.live_backend"), self.live_backend_combo)
+
         self.memory_enabled_cb = QCheckBox(t("settings.checkbox.memory_enabled"))
         self.memory_enabled_cb.setToolTip(t("settings.tooltip.memory_enabled"))
         self.memory_enabled_cb.setChecked(_is_true(settings.value(KEY_MEMORY_ENABLED, "true")))
@@ -505,6 +517,7 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
         self.settings.setValue(KEY_LIVE_INTERVAL_MS, self.live_interval_spin.value())
+        self.settings.setValue(KEY_LIVE_BACKEND, self.live_backend_combo.currentData())
         self.settings.setValue(KEY_MEMORY_ENABLED, "true" if self.memory_enabled_cb.isChecked() else "false")
         self.settings.setValue(KEY_MEMORY_RETENTION_DAYS, self.memory_retention_spin.value())
         self.settings.setValue(KEY_FAMILIAR_ENABLED, "true" if self.familiar_enabled_cb.isChecked() else "false")
@@ -844,6 +857,7 @@ class XianApp(QWidget):
             source_lang=self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG),
             target_lang=self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG),
             interval_ms=int(self.settings.value(KEY_LIVE_INTERVAL_MS, constants.DEFAULT_LIVE_INTERVAL_MS)),
+            backend=self.settings.value(KEY_LIVE_BACKEND, constants.DEFAULT_LIVE_BACKEND),
             session_recorder=lambda orig, trans: self.processor.record_event("inpaint", orig, trans),
         )
         self._live_lens_worker.regions_ready.connect(self._on_live_regions)

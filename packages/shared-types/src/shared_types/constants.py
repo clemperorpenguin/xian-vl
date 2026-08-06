@@ -86,3 +86,9 @@ DEFAULT_MEMORY_RETENTION_DAYS = 30
 # own latency there is nothing to gain — the change gate skips the work but
 # the captures still cost.
 DEFAULT_LIVE_INTERVAL_MS = 700
+
+# Where the live overlay gets its text boxes. "auto" uses the local ONNX OCR
+# models when installed (roughly 10x faster end to end) and falls back to the
+# vision model otherwise.
+LIVE_BACKENDS = ("auto", "ocr", "vlm")
+DEFAULT_LIVE_BACKEND = "auto"
