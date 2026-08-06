@@ -127,6 +127,10 @@ class RollingSummarizer:
         self.store = store
         self.processor = processor
         self._running = threading.Event()
+        # maybe_summarize() is called from several worker threads, so the
+        # "is it already running?" test and the claim have to be atomic —
+        # an Event alone lets two threads both pass the check.
+        self._claim_lock = threading.Lock()
 
     def should_summarize(self) -> bool:
         _, last_id = self.store.get_digest()
@@ -143,10 +147,19 @@ class RollingSummarizer:
             return
         if not self.should_summarize():
             return
-        self._running.set()
+
+        with self._claim_lock:
+            if self._running.is_set():
+                return
+            self._running.set()
+
+        coro = self._summarize()
         try:
-            self.processor.engine.submit(self._summarize())
+            self.processor.engine.submit(coro)
         except Exception as exc:
+            # The coroutine was never handed to a loop, so close it explicitly
+            # instead of leaving an un-awaited coroutine for the GC to warn on.
+            coro.close()
             self._running.clear()
             logger.debug("Could not schedule session summary: %s", exc)
 

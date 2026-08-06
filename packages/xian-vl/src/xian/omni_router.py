@@ -358,12 +358,21 @@ class OmniModelRouter:
 
         # Falling back to the LLM must not pick up an NPU model: FastFlowLM
         # has no vision path, so such a request would fail at the server.
+        # Every candidate below is re-checked, because the label map and the
+        # downloaded list both contain NPU models on a machine that has them.
+        npu_ids = set(self.npu_model_ids())
         fallback = self.llm(active_model)
-        if fallback and fallback in self.npu_model_ids():
-            return (self._models.get("tool-calling")
-                    or self._models.get("chat")
-                    or (self._downloaded_models[0]["id"] if self._downloaded_models else ""))
-        return fallback
+        if fallback and fallback not in npu_ids:
+            return fallback
+
+        for candidate in (self._models.get("tool-calling"), self._models.get("chat")):
+            if candidate and candidate not in npu_ids:
+                return candidate
+        for m in self._downloaded_models:
+            model_id = m.get("id")
+            if model_id and model_id not in npu_ids:
+                return model_id
+        return ""
 
     def asr(self, active_model: str | None = None) -> str:
         """Returns the best speech-to-text (ASR) model id."""

@@ -123,10 +123,15 @@ class ScreenCapture:
                 capture_output=True, env=clean_subprocess_env(), timeout=5,
             )
             if result.returncode == 0 and result.stdout:
-                if not ScreenCapture._is_image_empty(result.stdout):
-                    logger.debug("Captured region %s via grim", geometry)
-                    return result.stdout
-                logger.debug("grim region capture returned empty/black image")
+                # No all-black check here, unlike the full-desktop path. That
+                # heuristic exists because some compositors return a black
+                # frame instead of failing; grim reports failure with a
+                # non-zero exit code. Applying it to regions would reject
+                # legitimately dark HUD panels and silently drop every frame
+                # back to a full-desktop capture — losing the fast path
+                # continuous translation depends on.
+                logger.debug("Captured region %s via grim", geometry)
+                return result.stdout
         except FileNotFoundError:
             logger.debug("grim not installed; region capture unavailable")
         except Exception as e:

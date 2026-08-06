@@ -18,11 +18,21 @@
 
 """ONNX Runtime text detection and recognition.
 
-Execution providers are tried in preference order and the one actually chosen
-is reported rather than assumed.  That matters on Linux: ONNX Runtime will
-happily accept ``VitisAIExecutionProvider`` and then silently run every node on
-the CPU when the Ryzen AI user-space pieces are missing, so a claim of "running
-on the NPU" has to be checked, not trusted.
+The execution provider actually in use is read back from the live session
+rather than assumed.  That matters on Linux, where ONNX Runtime will accept
+``VitisAIExecutionProvider`` and then silently run every node on the CPU when
+the Ryzen AI user-space pieces are missing — a claim of "running on the NPU"
+has to be checked, not trusted.
+
+**On NPU execution:** the models come from ``rapidocr-onnxruntime``, which
+builds its own provider list and only understands CPU, CUDA, and DirectML.
+There is no way to request Vitis AI (the Ryzen AI NPU) through it, so OCR runs
+on the CPU here regardless of what the machine has.  That is not the
+bottleneck — a mobile-sized detector is tens of milliseconds on CPU, against a
+translation call measured in hundreds — so this is reported honestly rather
+than worked around.  Moving detection onto the NPU means driving the ONNX
+sessions directly, which is only worth doing once Vitis AI actually offloads
+nodes on Linux.
 """
 
 from __future__ import annotations
@@ -36,20 +46,17 @@ from xian.ocr.engine import OcrLine, merge_adjacent_lines
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["OnnxOcrEngine", "available_providers", "select_providers"]
+__all__ = ["OnnxOcrEngine", "available_providers", "npu_provider_available"]
 
-#: Preference order. VitisAI is the NPU; ROCm the GPU; CPU always works and is
-#: already fast enough for a small detector at these frame rates.
-PROVIDER_PREFERENCE = (
-    "VitisAIExecutionProvider",
-    "ROCMExecutionProvider",
-    "CPUExecutionProvider",
-)
+#: The NPU execution provider, when the Ryzen AI stack is installed.
+NPU_PROVIDER = "VitisAIExecutionProvider"
 
 #: Human-readable name for each provider, for status text and logs.
 PROVIDER_LABELS = {
-    "VitisAIExecutionProvider": "NPU (Vitis AI)",
+    NPU_PROVIDER: "NPU (Vitis AI)",
     "ROCMExecutionProvider": "GPU (ROCm)",
+    "CUDAExecutionProvider": "GPU (CUDA)",
+    "DmlExecutionProvider": "GPU (DirectML)",
     "CPUExecutionProvider": "CPU",
 }
 
@@ -63,15 +70,14 @@ def available_providers() -> list[str]:
     return list(onnxruntime.get_available_providers())
 
 
-def select_providers(prefer_npu: bool = True) -> list[str]:
-    """Providers to request, most preferred first."""
-    available = set(available_providers())
-    order = [p for p in PROVIDER_PREFERENCE if p in available]
-    if not prefer_npu:
-        order = [p for p in order if p != "VitisAIExecutionProvider"]
-    if "CPUExecutionProvider" not in order:
-        order.append("CPUExecutionProvider")
-    return order
+def npu_provider_available() -> bool:
+    """Whether ONNX Runtime exposes the Ryzen AI provider at all.
+
+    Note this says nothing about whether OCR *uses* it — see the module
+    docstring; RapidOCR cannot be asked for it. It is here so diagnostics can
+    tell "no NPU runtime installed" apart from "installed but unreachable".
+    """
+    return NPU_PROVIDER in available_providers()
 
 
 class OnnxOcrEngine:
@@ -81,10 +87,9 @@ class OnnxOcrEngine:
     recognition), which ships them via pip so there is nothing to host.
     """
 
-    def __init__(self, prefer_npu: bool = True, text_score: float = 0.5):
+    def __init__(self, text_score: float = 0.5):
         self._lock = threading.Lock()
         self._text_score = text_score
-        self._providers = select_providers(prefer_npu)
         self._reader = None
         self._provider = "unavailable"
         self._init_reader()
@@ -100,18 +105,16 @@ class OnnxOcrEngine:
 
         self._reader = RapidOCR()
         self._provider = self._detect_active_provider()
-        logger.info(
-            "Local OCR ready on %s (requested: %s)",
-            PROVIDER_LABELS.get(self._provider, self._provider),
-            ", ".join(self._providers),
-        )
-        if "VitisAIExecutionProvider" in self._providers and self._provider != "VitisAIExecutionProvider":
-            # Worth stating plainly: this is the common Linux outcome, and a
-            # silent CPU fallback would otherwise look like the NPU working.
-            logger.warning(
-                "NPU execution was requested but ONNX Runtime assigned the models to %s. "
-                "OCR still works; it is just not using the NPU.",
-                PROVIDER_LABELS.get(self._provider, self._provider),
+        logger.info("Local OCR ready on %s", self.provider_label)
+
+        if npu_provider_available() and self._provider != NPU_PROVIDER:
+            # The machine has the Ryzen AI runtime but OCR is not using it.
+            # Say so rather than let the NPU setting imply otherwise.
+            logger.info(
+                "An NPU execution provider is installed, but the OCR models run on %s: "
+                "RapidOCR selects its own providers and does not support Vitis AI. "
+                "This is not the live-translation bottleneck.",
+                self.provider_label,
             )
 
     def _detect_active_provider(self) -> str:

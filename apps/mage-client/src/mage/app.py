@@ -874,13 +874,23 @@ class XianApp(QWidget):
         """Tear down the live translation loop and its overlay."""
         worker = getattr(self, "_live_lens_worker", None)
         if worker is not None:
+            still_running = True
             try:
                 worker.stop()
                 worker.requestInterruption()
-                worker.wait(2000)
+                # The loop only checks its stop flag between ticks, so a vision
+                # call already in flight can outlive this wait by tens of
+                # seconds.  Dropping the last reference then would destroy a
+                # running QThread and abort the process, so hand cleanup to
+                # finished() instead and keep the worker in _workers meanwhile.
+                still_running = not worker.wait(2000)
             except Exception as e:
                 logger.error("Error stopping live lens: %s", e)
-            self._cleanup_worker(worker)
+            if still_running:
+                logger.info("Live lens still finishing; deferring cleanup to its finished signal")
+                worker.finished.connect(lambda w=worker: self._cleanup_worker(w))
+            else:
+                self._cleanup_worker(worker)
             self._live_lens_worker = None
 
         overlay = getattr(self, "inpaint_overlay", None)
@@ -889,7 +899,7 @@ class XianApp(QWidget):
             overlay.deleteLater()
         self.inpaint_overlay = None
 
-    def _on_live_regions(self, regions, rect: QRect):
+    def _on_live_regions(self, regions, rect: QRect, scale: float = 1.0):
         """Paint newly translated regions in place."""
         overlay = getattr(self, "inpaint_overlay", None)
         if overlay is None or not self._is_valid_widget(overlay):
@@ -897,10 +907,11 @@ class XianApp(QWidget):
 
         from mage.ui.inpaint_overlay import InpaintRegion, contrasting_text_color
 
-        # Boxes arrive in captured device pixels; Qt paints in logical
-        # coordinates, so divide by the display's scale factor or every box
-        # lands too far right and low on a HiDPI screen.
-        ratio = overlay.devicePixelRatioF() or 1.0
+        # Boxes arrive in capture pixels; Qt paints in logical coordinates.
+        # The worker measures the ratio from the frame it actually captured —
+        # the display's devicePixelRatio would be wrong for the PyQt capture
+        # path, which already composites in logical pixels.
+        ratio = scale if scale and scale > 0 else 1.0
         painted = []
         for region in regions:
             left, top, right, bottom = region.box
@@ -945,11 +956,25 @@ class XianApp(QWidget):
         except Exception as e:
             logger.error("Error clearing session memory: %s", e)
 
+    def _reload_session_memory(self):
+        """Re-apply the memory settings after the settings dialog closes.
+
+        Covers both directions: turning memory off must detach the store
+        immediately, and turning it on (or changing the retention window)
+        should take effect without a restart.
+        """
+        self._close_session_memory()
+        self._init_session_memory()
+
     def _close_session_memory(self):
         """Flush and close the session log on shutdown."""
         store = getattr(self, "session_store", None)
         if store is None:
             return
+        try:
+            self.processor.attach_session_store(None)
+        except Exception as e:
+            logger.error("Error detaching session memory: %s", e)
         try:
             store.end_session()
             store.close()
@@ -2322,7 +2347,12 @@ class XianApp(QWidget):
             )
             # Re-run health check
             self._run_health_check()
-            
+
+            # Session memory must follow the checkbox immediately: leaving the
+            # store attached after the user unticks "Remember this play
+            # session" keeps recording everything they see until restart.
+            self._reload_session_memory()
+
             self._safe_stop_worker("_prewarm_worker")
             self._start_prewarm()
             

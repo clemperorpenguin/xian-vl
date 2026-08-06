@@ -95,9 +95,11 @@ async def test_only_the_newest_turn_carries_a_screenshot(tmp_path):
     processor, mock_client = _make_processor(tmp_path)
 
     old_frame = processor.context_manager.add_frame(Image.new("RGB", (8, 8), "red"))
-    processor.context_manager.update_last_frame_data(
-        "ORIGINAL: 前往城門\nTRANSLATED: Head to the city gate\nCONFIDENCE: 0.9", []
-    )
+    # Exactly what stream_frame stores: the parsed source lines joined, NOT a
+    # raw ORIGINAL:/TRANSLATED: response. Feeding the raw form here hid a bug
+    # where the placeholder re-parsed already-parsed text and always came back
+    # empty.
+    processor.context_manager.update_last_frame_data("前往城門", [])
     processor.context_manager.add_user_message("where do I go?")
     processor.context_manager.add_assistant_message("To the gate.")
     processor.context_manager.add_frame(Image.new("RGB", (8, 8), "blue"))

@@ -423,8 +423,12 @@ class VLProcessor:
         frame = None
         if frame_id is not None:
             frame = self.context_manager.get_frame_by_id(frame_id)
-        if frame is not None and frame.extracted_text:
-            original, _, _ = self.parse_response(frame.extracted_text)
+        if frame is not None:
+            # ``extracted_text`` is already the parsed source text (see
+            # update_last_frame_data), so it must not be run through
+            # parse_response again — that expects a raw model response and
+            # would return "" for every frame.
+            original = (frame.extracted_text or "").strip()
             if original:
                 return f"[Earlier screenshot omitted. Text visible on it: {original}]"
         return "[Earlier screenshot omitted.]"

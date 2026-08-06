@@ -28,7 +28,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from xian.ocr.engine import OcrLine, merge_adjacent_lines, ocr_available
-from xian.ocr.onnx_engine import PROVIDER_PREFERENCE, _polygon_to_box, select_providers
+from xian.ocr.onnx_engine import NPU_PROVIDER, _polygon_to_box, npu_provider_available
 from xian.ocr.translate import batch_translate, parse_translations
 
 
@@ -80,29 +80,24 @@ def test_merging_is_a_no_op_for_a_single_line():
 
 # ── provider selection ───────────────────────────────────────────────
 
-def test_cpu_is_always_a_candidate_even_with_nothing_installed(monkeypatch):
+def test_npu_provider_is_detected_when_the_runtime_exposes_it(monkeypatch):
+    monkeypatch.setattr(
+        "xian.ocr.onnx_engine.available_providers",
+        lambda: ["CPUExecutionProvider", NPU_PROVIDER],
+    )
+    assert npu_provider_available() is True
+
+
+def test_npu_provider_is_absent_without_the_ryzen_ai_runtime(monkeypatch):
+    monkeypatch.setattr(
+        "xian.ocr.onnx_engine.available_providers", lambda: ["CPUExecutionProvider"]
+    )
+    assert npu_provider_available() is False
+
+
+def test_provider_probe_is_safe_without_onnxruntime(monkeypatch):
     monkeypatch.setattr("xian.ocr.onnx_engine.available_providers", lambda: [])
-    assert select_providers() == ["CPUExecutionProvider"]
-
-
-def test_npu_is_preferred_over_gpu_and_cpu(monkeypatch):
-    monkeypatch.setattr(
-        "xian.ocr.onnx_engine.available_providers",
-        lambda: ["CPUExecutionProvider", "ROCMExecutionProvider", "VitisAIExecutionProvider"],
-    )
-    assert select_providers()[0] == "VitisAIExecutionProvider"
-
-
-def test_npu_can_be_declined(monkeypatch):
-    monkeypatch.setattr(
-        "xian.ocr.onnx_engine.available_providers",
-        lambda: ["VitisAIExecutionProvider", "CPUExecutionProvider"],
-    )
-    assert "VitisAIExecutionProvider" not in select_providers(prefer_npu=False)
-
-
-def test_provider_preference_puts_cpu_last():
-    assert PROVIDER_PREFERENCE[-1] == "CPUExecutionProvider"
+    assert npu_provider_available() is False
 
 
 # ── batch translation ────────────────────────────────────────────────

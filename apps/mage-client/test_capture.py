@@ -87,6 +87,35 @@ def test_capture_region_rejects_empty_rect():
     assert ScreenCapture.capture_region(QRect()) == (None, False)
 
 
+def test_an_all_black_region_grab_is_kept():
+    """A dark HUD panel is legitimately black. Rejecting it would drop every
+    frame back to a full-desktop capture and lose the fast path."""
+    def fake_run(cmd, **kwargs):
+        return _Completed(_png_bytes(320, 80, (0, 0, 0)))
+
+    with patch.dict(os.environ, {"XDG_SESSION_TYPE": "wayland"}), \
+            patch("mage.capture.screen.sys.platform", "linux"), \
+            patch("mage.capture.screen.subprocess.run", fake_run):
+        data, already_cropped = ScreenCapture.capture_region(QRect(0, 0, 320, 80))
+
+    assert already_cropped is True
+    assert data is not None
+
+
+def test_a_failed_grim_run_still_falls_back():
+    """grim reports failure with a non-zero exit code, not a black frame."""
+    def fake_run(cmd, **kwargs):
+        return _Completed(b"", returncode=1)
+
+    with patch.dict(os.environ, {"XDG_SESSION_TYPE": "wayland"}), \
+            patch("mage.capture.screen.sys.platform", "linux"), \
+            patch("mage.capture.screen.subprocess.run", fake_run), \
+            patch.object(ScreenCapture, "capture_screen", return_value=_png_bytes(800, 600)):
+        _data, already_cropped = ScreenCapture.capture_region(QRect(0, 0, 320, 80))
+
+    assert already_cropped is False
+
+
 @pytest.mark.parametrize("size", [(3, 3), (1, 40), (200, 120)])
 def test_small_regions_are_not_misjudged_as_empty(size):
     """Region grabs can be narrower than the 5x5 sample grid."""

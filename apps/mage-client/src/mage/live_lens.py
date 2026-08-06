@@ -139,8 +139,13 @@ def regions_signature(regions) -> tuple:
 class LiveLensWorker(QThread):
     """Polls a screen region and emits translated, positioned text."""
 
-    #: Region translations ready to paint, in region-local pixels.
-    regions_ready = pyqtSignal(object, object)  # (list[LiveRegion], QRect)
+    #: Region translations ready to paint, in region-local capture pixels,
+    #: plus the capture-pixels-per-logical-pixel scale needed to map them into
+    #: Qt's coordinate space.  The scale is measured from the frame rather than
+    #: assumed from the display: grim hands back device pixels while the PyQt
+    #: fallback composites in logical ones, so a fixed devicePixelRatio would
+    #: be wrong for one of them on any HiDPI screen.
+    regions_ready = pyqtSignal(object, object, float)  # (list[LiveRegion], QRect, scale)
     #: Ask the UI to hide the overlay so the next capture sees clean pixels.
     overlay_hide = pyqtSignal()
     status = pyqtSignal(str)
@@ -359,8 +364,15 @@ class LiveLensWorker(QThread):
             for region in live:
                 self._session_recorder(region.original, region.translated)
 
-        self.regions_ready.emit(live, self.rect)
+        self.regions_ready.emit(live, self.rect, self._capture_scale(frame))
         return True
+
+    def _capture_scale(self, frame: Image.Image) -> float:
+        """Capture pixels per logical pixel, measured from the frame itself."""
+        logical_width = self.rect.width()
+        if logical_width <= 0 or not frame.width:
+            return 1.0
+        return frame.width / float(logical_width)
 
     async def _sleep_remainder(self, started: float, interval: float) -> None:
         elapsed = time.monotonic() - started

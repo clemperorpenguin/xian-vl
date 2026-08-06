@@ -305,3 +305,48 @@ async def test_chat_prompt_carries_the_session_context(store, tmp_path):
     store.flush()
     kinds = [e.kind for e in store.recent_events()]
     assert "chat_user" in kinds and "chat_assistant" in kinds
+
+
+# ── review follow-ups ────────────────────────────────────────────────
+
+def test_search_recalls_earlier_sessions_of_the_same_game(store):
+    """Remembering an NPC met three evenings ago is the point of the feature."""
+    _append(store, "ocr", "", "Elder Xu guards the north pass")
+    store.flush()
+    store.end_session()
+    store.begin_session(window_title="Jianghu Online", game_profile="jx3")
+
+    assert any("Elder Xu" in e.translated for e in store.search("Elder Xu"))
+
+
+def test_search_does_not_leak_across_different_games(store):
+    """Retrieved events are shown to the model as fact about *this* game."""
+    _append(store, "ocr", "", "Elder Xu guards the north pass")
+    store.flush()
+    store.end_session()
+    store.begin_session(window_title="Some Other RPG", game_profile="other")
+
+    assert store.search("Elder Xu") == []
+    assert any("Elder Xu" in e.translated for e in store.search("Elder Xu", same_game_only=False))
+
+
+def test_context_block_does_not_inject_another_games_quest_text(store):
+    _append(store, "ocr", "", "Deliver the jade seal to the magistrate")
+    store.flush()
+    store.end_session()
+    store.begin_session(window_title="Some Other RPG", game_profile="other")
+
+    block = GameStateAssembler(store).build_context_block("jade seal", token_budget=1200)
+
+    assert "magistrate" not in block
+
+
+def test_flush_waits_for_events_queued_during_the_flush_window(store):
+    """clear_all() flushes first; a missed event would be resurrected after."""
+    for i in range(50):
+        _append(store, "ocr", "", f"line {i}")
+    assert store.flush()
+
+    store.clear_all()
+    store.begin_session()
+    assert store.recent_events(limit=100, session_only=False) == []

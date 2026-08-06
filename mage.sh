@@ -557,7 +557,9 @@ do_doctor_npu() {
     # support the XDNA 1 NPUs in 7040/8040 and 200-series parts.
     if command -v lscpu &>/dev/null; then
         local cpu_model cpu_model_lc
-        cpu_model="$(lscpu | grep -i 'model name' | head -1 | cut -d: -f2- | sed 's/^ *//')"
+        # `|| true`: under `set -euo pipefail` a grep that matches nothing (or
+        # a SIGPIPE from head) would otherwise abort the whole diagnostic run.
+        cpu_model="$(lscpu | grep -i 'model name' | head -1 | cut -d: -f2- | sed 's/^ *//' || true)"
         cpu_model_lc="$(printf '%s' "${cpu_model}" | tr '[:upper:]' '[:lower:]')"
         echo "CPU:           ${cpu_model:-unknown}"
         if [[ "${cpu_model_lc}" == *"ryzen ai"* ]]; then

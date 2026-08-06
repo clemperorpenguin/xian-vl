@@ -168,6 +168,12 @@ class SessionStore:
         self._closed = threading.Event()
         self._flushed = threading.Event()
         self._flushed.set()
+        # Counted rather than inferred from queue.empty(): the writer can
+        # observe an empty queue in the window between a producer clearing
+        # ``_flushed`` and its put(), which would let flush() return before
+        # that event was committed — and clear_all() would then delete rows
+        # the writer is about to re-insert.
+        self._pending_writes = 0
 
         parent = os.path.dirname(os.path.abspath(db_path))
         if parent:
@@ -234,8 +240,17 @@ class SessionStore:
         if not event.ts:
             event.ts = time.time()
         event.session_id = session_id
-        self._flushed.clear()
+        with self._lock:
+            self._pending_writes += 1
+            self._flushed.clear()
         self._queue.put(event)
+
+    def _mark_written(self, count: int) -> None:
+        """Account for ``count`` committed events and release flush() waiters."""
+        with self._lock:
+            self._pending_writes = max(0, self._pending_writes - count)
+            if self._pending_writes == 0:
+                self._flushed.set()
 
     def _writer_loop(self) -> None:
         pending: list[SessionEvent] = []
@@ -243,7 +258,8 @@ class SessionStore:
             try:
                 item = self._queue.get(timeout=self.FLUSH_INTERVAL_SECONDS)
                 if item is None:  # shutdown sentinel
-                    self._write_batch(pending)
+                    self._flush_pending(pending)
+                    self._flushed.set()
                     return
                 pending.append(item)
                 # Opportunistically drain so bursts commit together.
@@ -253,17 +269,25 @@ class SessionStore:
                     except queue.Empty:
                         break
                     if item is None:
-                        self._write_batch(pending)
+                        self._flush_pending(pending)
+                        self._flushed.set()
                         return
                     pending.append(item)
             except queue.Empty:
                 pass
 
-            if pending:
-                self._write_batch(pending)
-                pending = []
-            if self._queue.empty():
-                self._flushed.set()
+            self._flush_pending(pending)
+            pending = []
+
+    def _flush_pending(self, pending: list[SessionEvent]) -> None:
+        """Write a batch and account for it, whether or not the write worked."""
+        if not pending:
+            return
+        count = len(pending)
+        try:
+            self._write_batch(pending)
+        finally:
+            self._mark_written(count)
 
     def _write_batch(self, pending: list[SessionEvent]) -> None:
         if not pending:
@@ -321,28 +345,61 @@ class SessionStore:
             rows = conn.execute(sql, params).fetchall()
         return [_row_to_event(r) for r in reversed(rows)]
 
-    def search(self, query: str, limit: int = 8) -> list[SessionEvent]:
-        """Full-text search over everything logged, newest-relevant first.
+    def search(self, query: str, limit: int = 8, same_game_only: bool = True) -> list[SessionEvent]:
+        """Full-text search over the play history, newest-relevant first.
 
         Ranked by BM25 with a mild recency tilt: in a long session the same
         NPC name recurs, and the latest mention is usually the useful one.
+
+        Results span earlier sessions of the *same* game by default, which is
+        the point — recalling an NPC met three evenings ago is exactly what
+        this is for. They must not span different games, though: the retrieved
+        block is presented to the model as established fact about the current
+        playthrough, so a quest line from last week's other game would be
+        asserted as true of this one.
         """
         terms = _fts_terms(query)
         if not terms:
             return []
+
+        sql = (
+            "SELECT e.*, bm25(events_fts) AS rank FROM events_fts"
+            " JOIN events e ON e.id = events_fts.rowid"
+        )
+        params: list = [terms]
+        scope = self._current_game_scope() if same_game_only else None
+        if scope is not None:
+            sql += (
+                " JOIN sessions s ON s.id = e.session_id"
+                " WHERE events_fts MATCH ?"
+                " AND IFNULL(s.game_profile,'') = ? AND IFNULL(s.window_title,'') = ?"
+            )
+            params.extend(scope)
+        else:
+            sql += " WHERE events_fts MATCH ?"
+        sql += " ORDER BY rank ASC, e.id DESC LIMIT ?"
+        params.append(limit)
+
         try:
             with self._connect() as conn:
-                rows = conn.execute(
-                    "SELECT e.*, bm25(events_fts) AS rank FROM events_fts"
-                    " JOIN events e ON e.id = events_fts.rowid"
-                    " WHERE events_fts MATCH ?"
-                    " ORDER BY rank ASC, e.id DESC LIMIT ?",
-                    (terms, limit),
-                ).fetchall()
+                rows = conn.execute(sql, params).fetchall()
         except sqlite3.OperationalError as exc:
             logger.debug("FTS query %r rejected: %s", terms, exc)
             return []
         return [_row_to_event(r) for r in rows]
+
+    def _current_game_scope(self) -> tuple[str, str] | None:
+        """The (game_profile, window_title) identifying the current game."""
+        session_id = self.session_id
+        if session_id is None:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT game_profile, window_title FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+        if not row:
+            return None
+        return (row["game_profile"] or "", row["window_title"] or "")
 
     # ── rolling digest ───────────────────────────────────────────────
 
