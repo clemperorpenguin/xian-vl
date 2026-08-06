@@ -5,7 +5,7 @@ description = "Core AI translation engine — prompt engineering, context manage
 requires-python = ">=3.10, <3.14"
 license = {text = "GPL-3.0-or-later"}
 dependencies = [
-    "Pillow>=10.0",
+    "Pillow>=12.3.0",
     "openai>=1.0.0",
     "numpy>=1.24",
     "opencv-python-headless>=4.8",
@@ -17,7 +17,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0"]
+# 1.28.1 fixes GHSA-vj7q-gjh5-988w (WebSocket Host/Origin validation). Capped
+# below 2.0, which removed mcp.server.fastmcp — the API knowledge/mcp_server.py
+# is built on.
+mcp = ["mcp>=1.28.1,<2.0"]
 dev = ["pytest>=8.0"]
 # Local text detection/recognition for live translation. Optional because the
 # vision model can do the same job unaided, just an order of magnitude slower.
