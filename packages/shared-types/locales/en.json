@@ -79,6 +79,26 @@
     "value": "Prefer NPU",
     "context": "Inference backend option: run text and speech on the neural processing unit when possible"
   },
+  "settings.label.collection_tier": {
+    "value": "Model collection",
+    "context": "Label for the drop-down choosing which Xian model collection (tier) to install"
+  },
+  "settings.tooltip.collection_tier": {
+    "value": "Xian installs its own bundle of models: a vision planner, speech-to-text, and a voice. Pick the tier that fits your machine — changing it downloads the new bundle and switches to it.",
+    "context": "Tooltip explaining what a Xian collection tier is and that changing it downloads models"
+  },
+  "settings.option.collection.lite": {
+    "value": "Xian-Lite (4B planner)",
+    "context": "Collection tier option: smallest bundle, for machines with limited memory"
+  },
+  "settings.option.collection.ultra": {
+    "value": "Xian-Ultra (9B planner)",
+    "context": "Collection tier option: mid-size bundle, the default for a dedicated GPU"
+  },
+  "settings.option.collection.halo": {
+    "value": "Xian-Halo (35B MoE planner)",
+    "context": "Collection tier option: largest bundle, for big unified-memory APUs such as Ryzen AI MAX"
+  },
   "settings.label.npu_power_mode": {
     "value": "NPU power mode",
     "context": "Label for the drop-down choosing the neural processing unit's performance profile"

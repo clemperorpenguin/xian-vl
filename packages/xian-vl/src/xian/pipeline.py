@@ -250,6 +250,20 @@ class VLProcessor:
             return self.router.vision(self.config.model_name)
         return self.config.model_name
 
+    def get_translation_model_name(self) -> str:
+        """Resolve the model name to use for bulk line translation.
+
+        Distinct from :meth:`get_model_name` because a machine-translation
+        model may be installed for this one job — see
+        :meth:`~xian.omni_router.OmniModelRouter.translation`.
+        """
+        self.router.active_model = self.config.model_name
+        if self.config.model_name in ("omni-router", "default"):
+            return self.router.translation()
+        if self.router.is_omni_model(self.config.model_name):
+            return self.router.translation(self.config.model_name)
+        return self.config.model_name
+
 
     async def init_engine(self):
         """No-op stub for backward compatibility."""
@@ -1664,25 +1678,30 @@ class VLProcessor:
                 pulled_models = await client.list_models()
                 pulled_ids = [m.get("id") for m in pulled_models if m.get("id")]
                 
-                registered_models = await client.list_models(show_all=True)
-                registered_ids = [m.get("id") for m in registered_models if m.get("id")]
-
-                if is_omni:
-                    if model_to_load not in registered_ids:
+                # Collections must be gated on *downloaded*, not merely
+                # registered. A registered-but-unpulled collection has no
+                # components yet, and POST /v1/load then falls through to the
+                # leaf-model path and fails with "GGUF file not found for
+                # checkpoint" — the collection name is not a GGUF. The default
+                # /v1/models listing already excludes a collection whose
+                # components are not all downloaded, so this check is exact.
+                if model_to_load not in pulled_ids:
+                    if is_omni:
+                        registered_models = await client.list_models(show_all=True)
+                        registered_ids = [m.get("id") for m in registered_models if m.get("id")]
+                        known = "registered but not downloaded" if model_to_load in registered_ids else "not registered"
                         logger.warning(
-                            "Omni model '%s' is not registered on Lemonade server. "
-                            "Registered models: %s. Skipping pre-warming.",
-                            model_to_load, registered_ids
+                            "Collection '%s' is %s on the Lemonade server; skipping pre-warming. "
+                            "Install it from Settings, or run ./mage.sh --install-collection.",
+                            model_to_load, known,
                         )
-                        return
-                else:
-                    if model_to_load not in pulled_ids:
+                    else:
                         logger.warning(
                             "Model '%s' is not pulled/available on Lemonade server. "
                             "Pulled models: %s. Skipping VRAM pre-warming.",
                             model_to_load, pulled_ids
                         )
-                        return
+                    return
 
                 logger.info("Pre-warming model '%s' (is_omni=%s) in Lemonade Server...", model_to_load, is_omni)
                 try:

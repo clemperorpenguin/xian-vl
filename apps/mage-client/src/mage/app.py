@@ -40,6 +40,13 @@ from PyQt6.QtGui import QIcon, QCursor, QColor
 from mage.ui.theme import accent_hex, accent_hover_hex
 
 from xian.pipeline import VLProcessor, VLConfig
+from xian.collections import (
+    COLLECTIONS,
+    build_pull_body,
+    collection_for_name,
+    get_collection,
+    recommended_tier,
+)
 from xian.session_store import SessionStore
 from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker, ChatTranslationWorker, RaidWorker, voice_for_language
 from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
@@ -68,7 +75,7 @@ from mage.settings_keys import (
     KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS, KEY_FAMILIAR_TYPE,
     KEY_FAMILIAR_CUSTOM_RECIPE, KEY_MEMORY_ENABLED, KEY_MEMORY_RETENTION_DAYS,
     KEY_BACKEND_PREFERENCE, KEY_NPU_POWER_MODE, KEY_LIVE_INTERVAL_MS,
-    KEY_LIVE_BACKEND,
+    KEY_LIVE_BACKEND, KEY_COLLECTION_TIER,
 )
 from mage.utils.window_binder import WindowBinder
 from shared_types.state import state, t
@@ -101,6 +108,9 @@ class SettingsDialog(QDialog):
     """Small modal dialog for configuring the Lemonade backend."""
     
     layout_edit_requested = pyqtSignal()
+
+    #: Set on save when the collection tier changed, so the caller installs it.
+    tier_changed = False
 
     def __init__(self, settings: QSettings, models: list, parent=None, app=None):
         super().__init__(parent)
@@ -189,6 +199,20 @@ class SettingsDialog(QDialog):
             self.model_combo.addItems(models)
         self.model_combo.setCurrentText(settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL))
         backend_layout.addRow(t("settings.label.model"), self.model_combo)
+
+        # Which Xian collection to install. Picking one here re-registers it and
+        # points the model above at it; the model field stays editable for
+        # anyone who would rather drive a model of their own choosing.
+        self.tier_combo = QComboBox()
+        for tier, collection in COLLECTIONS.items():
+            label = f"{t(f'settings.option.collection.{tier.value}')} — {collection.size_gb:.1f} GB"
+            self.tier_combo.addItem(label, tier.value)
+        self._initial_tier = settings.value(KEY_COLLECTION_TIER, constants.DEFAULT_COLLECTION_TIER)
+        tier_idx = self.tier_combo.findData(self._initial_tier)
+        if tier_idx >= 0:
+            self.tier_combo.setCurrentIndex(tier_idx)
+        self.tier_combo.setToolTip(t("settings.tooltip.collection_tier"))
+        backend_layout.addRow(t("settings.label.collection_tier"), self.tier_combo)
 
         self.tokens_spin = QSpinBox()
         self.tokens_spin.setRange(256, 32768)
@@ -498,6 +522,13 @@ class SettingsDialog(QDialog):
         self.url_edit.setText(normalized)
         self.settings.setValue(KEY_API_URL, normalized)
         self.settings.setValue(KEY_API_MODEL, self.model_combo.currentText())
+        # A changed tier names a different collection, so it also decides the
+        # model — otherwise the combo above would keep pointing at the old one.
+        selected_tier = self.tier_combo.currentData()
+        self.tier_changed = selected_tier != self._initial_tier
+        self.settings.setValue(KEY_COLLECTION_TIER, selected_tier)
+        if self.tier_changed:
+            self.settings.setValue(KEY_API_MODEL, get_collection(selected_tier).name)
         self.settings.setValue("layout_preset", self.preset_combo.currentText())
         self.settings.setValue(KEY_SOURCE_LANG, self.source_lang_combo.currentText())
         self.settings.setValue(KEY_TARGET_LANG, self.lang_combo.currentText())
@@ -582,8 +613,7 @@ class XianApp(QWidget):
         self.settings = QSettings(ORGANIZATION, APP_NAME)
         state.load_locale(self.settings.value(KEY_UI_LANG, "en"))
 
-        if self.settings.value(KEY_API_MODEL) == "MAGE":
-            self.settings.setValue(KEY_API_MODEL, constants.DEFAULT_MODEL)
+        self._seed_collection_tier()
         self._available_models: list = []
 
         self.processor = VLProcessor(VLConfig(
@@ -803,6 +833,34 @@ class XianApp(QWidget):
             and not self.dialogue_mode_active
             and action != "cinematic"
         )
+
+    def _seed_collection_tier(self):
+        """Choose a collection tier on first run, from installed memory.
+
+        Only the *first* run: once a tier is stored, the user's choice stands.
+        Total RAM is a proxy — on a discrete-GPU machine VRAM is what actually
+        binds — but it is the one figure available before the server has been
+        contacted, and Settings has a picker for when it guesses low.
+        """
+        if self.settings.value(KEY_COLLECTION_TIER):
+            return
+        memory_gb = 0.0
+        try:
+            import psutil
+
+            memory_gb = psutil.virtual_memory().total / (1024 ** 3)
+        except Exception as e:  # psutil missing, or an unreadable /proc
+            logger.debug("Could not read system memory for tier selection: %s", e)
+
+        tier = recommended_tier(memory_gb) if memory_gb else constants.DEFAULT_COLLECTION_TIER
+        collection = get_collection(tier)
+        logger.info(
+            "First run: %.0f GB of memory detected, choosing collection %s.",
+            memory_gb, collection.name,
+        )
+        self.settings.setValue(KEY_COLLECTION_TIER, str(tier))
+        if not self.settings.value(KEY_API_MODEL):
+            self.settings.setValue(KEY_API_MODEL, collection.name)
 
     def _init_session_memory(self):
         """Open the durable play-session log and hand it to the processor.
@@ -2260,42 +2318,51 @@ class XianApp(QWidget):
             
             # Update the central router
             self.processor.router.update_with_models(raw_models or [])
-            
-            # Prefer Omni model as default if detected
+
+            # Prefer an installed Omni collection as the default
             target_model = self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
-            if target_model == "MAGE":
-                target_model = constants.DEFAULT_MODEL
-                self.settings.setValue(KEY_API_MODEL, target_model)
 
             if self.processor.router.omni_detected:
                 omni_id = self.processor.router.omni_model_id
-                if omni_id == "MAGE":
-                    omni_id = constants.DEFAULT_MODEL
                 if omni_id and (target_model in (None, "", constants.DEFAULT_MODEL, "omni-router", "default")):
                     logger.info("Omni model '%s' detected, setting as default.", omni_id)
                     self.settings.setValue(KEY_API_MODEL, omni_id)
                     self.processor.config.model_name = omni_id
                     target_model = omni_id
 
-            # Ensure the default model is pulled
+            # Ensure the default model is installed. A Xian collection needs its
+            # full registration body — it does not exist on the server by name
+            # until we send one (see xian.collections).
             all_downloaded = [m.get("id") for m in (raw_models or []) if m.get("downloaded", True)]
             if target_model not in all_downloaded and not self._model_pull_attempted:
-                logger.info("Model '%s' not found on server, pulling...", target_model)
                 self._model_pull_attempted = True
-                self._pull_model(target_model)
-            
+                collection = collection_for_name(target_model)
+                if collection is not None:
+                    logger.info(
+                        "Collection '%s' not installed, registering and downloading (~%.1f GB)...",
+                        collection.name, collection.size_gb,
+                    )
+                    self._pull_model(collection.name, body=build_pull_body(collection.tier, stream=False))
+                else:
+                    logger.info("Model '%s' not found on server, pulling...", target_model)
+                    self._pull_model(target_model)
+
             # Set the active model on the router to rebuild modality mappings
             self.processor.router.active_model = target_model
         else:
             logger.warning("Lemonade server not reachable")
             self._available_models = []
 
-    def _pull_model(self, model_name: str):
-        """Download a model via the Lemonade /v1/pull endpoint."""
+    def _pull_model(self, model_name: str, body: dict | None = None):
+        """Download a model via the Lemonade /v1/pull endpoint.
+
+        ``body`` carries a full registration document for models the server does
+        not already know by name, such as a Xian collection.
+        """
         self._safe_stop_worker("_pull_worker")
         api_url = _normalized_api_url_from_settings(self.settings)
         gpu_util = self.settings.value(KEY_GPU_UTIL, constants.DEFAULT_GPU_MEMORY_UTILIZATION)
-        self._pull_worker = ModelPullWorker(api_url, model_name, gpu_util)
+        self._pull_worker = ModelPullWorker(api_url, model_name, gpu_util, body=body)
         self._pull_worker.pull_done.connect(self._on_pull_done)
         self._pull_worker.pull_progress.connect(self._on_pull_progress)
         self._pull_worker.start()
@@ -2345,6 +2412,10 @@ class XianApp(QWidget):
                 self.processor.config.api_url,
                 backend_preference=self.processor.config.backend_preference,
             )
+            if dlg.tier_changed:
+                # Let the health check install the newly chosen collection: the
+                # attempt latch is per-target, not per-session.
+                self._model_pull_attempted = False
             # Re-run health check
             self._run_health_check()
 

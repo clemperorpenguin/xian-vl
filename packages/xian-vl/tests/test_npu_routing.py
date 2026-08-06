@@ -66,7 +66,7 @@ def test_gpu_preference_never_routes_to_the_npu():
         assert modality not in npu_ids
 
 
-def test_auto_moves_only_speech():
+def test_auto_moves_speech_but_not_chat():
     """Whisper on the NPU is a free win; relocating the chat LLM is a trade-off."""
     router = _router(MIXED_MODELS, BACKEND_AUTO)
     assert router.asr() == "whisper-large-v3-flm"
@@ -105,6 +105,49 @@ def test_npu_llm_selection_skips_whisper_and_embedding_models():
         {"id": "Gemma3-4B-flm", "recipe": "flm", "labels": ["chat"], "downloaded": True},
     ]
     assert _router(models, BACKEND_NPU).llm() == "Gemma3-4B-flm"
+
+
+# ── translation routing ──────────────────────────────────────────────
+
+# The same host, plus a dedicated machine-translation model served by the NPU.
+MT_MODELS = MIXED_MODELS + [
+    {"id": "translategemma-4b-FLM", "recipe": "flm", "labels": ["chat"], "downloaded": True},
+]
+
+
+def test_translation_prefers_a_dedicated_model_on_the_npu():
+    """Bulk line translation is the hottest call in live mode — it gets the NPU."""
+    assert _router(MT_MODELS, BACKEND_AUTO).translation() == "translategemma-4b-FLM"
+
+
+def test_translation_falls_back_to_the_general_llm_without_one():
+    """Every machine without an MT model keeps the behaviour it had."""
+    router = _router(MIXED_MODELS, BACKEND_AUTO)
+    assert router.translation() == router.llm() == "Qwen3.5-4B-MTP-GGUF"
+
+
+def test_gpu_preference_keeps_translation_off_the_npu():
+    router = _router(MT_MODELS, BACKEND_GPU)
+    assert router.translation() not in set(router.npu_model_ids())
+
+
+@pytest.mark.parametrize("preference", [BACKEND_AUTO, BACKEND_GPU, BACKEND_NPU])
+def test_a_translation_model_never_takes_another_modality(preference):
+    """It carries a "chat" label and the word "gemma", and can do neither.
+
+    Asked to hold a conversation it translates the question; asked to read a
+    screen it has no vision tower at all.  Both would be silent quality
+    failures, so the exclusion is by name and applies to every path.
+    """
+    router = _router(MT_MODELS, preference)
+    for resolved in (router.llm(), router.vision(), router.asr(), router.tts()):
+        assert resolved != "translategemma-4b-FLM"
+
+
+def test_a_translation_model_is_identified_as_translation_only():
+    router = _router(MT_MODELS, BACKEND_AUTO)
+    assert router.is_translation_only("translategemma-4b-FLM") is True
+    assert router.is_translation_only("Qwen3.5-4B-MTP-GGUF") is False
 
 
 def test_load_options_carry_the_power_mode_only_for_npu_models():

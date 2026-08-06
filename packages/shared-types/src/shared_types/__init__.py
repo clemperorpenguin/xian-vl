@@ -45,6 +45,7 @@ from shared_types.models import (
 )
 from shared_types.constants import (
     DEFAULT_API_URL,
+    DEFAULT_COLLECTION_TIER,
     DEFAULT_MODEL,
     DEFAULT_MAX_TOKENS,
 )
@@ -72,6 +73,7 @@ __all__ = [
     "LemonadeHealth",
     # Constants
     "DEFAULT_API_URL",
+    "DEFAULT_COLLECTION_TIER",
     "DEFAULT_MODEL",
     "DEFAULT_MAX_TOKENS",
 ]

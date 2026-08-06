@@ -14,25 +14,23 @@ MAGE solves this problem by treating the embedded **AMD Lemonade C++ runtime** (
 graph TD
     Client["MAGE PyQt6 Client"] -->|"Async API Calls"| Gateway["Lemonade Server :13305"]
     Gateway -->|"GET /v1/models?show_all=true"| Discovery["Model Discovery"]
-    Discovery -->|"recipe: collection.omni"| Omni["LMX-Omni-5.5B-Lite\n(Virtual Omni Bundle)"]
-    Omni -->|"components[]"| VLM["Qwen3.5-4B-MTP-GGUF\nlabels: chat, tool-calling"]
-    Omni -->|"components[]"| ASR["Whisper-Tiny\nlabels: transcription"]
+    Discovery -->|"recipe: collection.omni"| Omni["Xian-Ultra\n(Virtual Omni Bundle)"]
+    Omni -->|"components[]"| VLM["Qwen3.5-9B-GGUF\nlabels: vision, tool-calling"]
+    Omni -->|"components[]"| ASR["Whisper-Large-v3-Turbo\nlabels: transcription"]
     Omni -->|"components[]"| TTS["kokoro-v1\nlabels: tts"]
-    Omni -->|"components[]"| IMG["SD-Turbo\nlabels: image"]
 
-    Client -->|"POST /v1/chat/completions\n(model=Qwen3.5-4B)"| VLM
-    Client -->|"POST /v1/audio/transcriptions\n(model=Whisper-Tiny)"| ASR
+    Client -->|"POST /v1/chat/completions\n(model=Qwen3.5-9B)"| VLM
+    Client -->|"POST /v1/audio/transcriptions\n(model=Whisper-Large-v3-Turbo)"| ASR
     Client -->|"POST /v1/audio/speech\n(model=kokoro-v1)"| TTS
 
     VLM --> HW["Hardware Acceleration\nVulkan / Radeon GPU / Ryzen NPU"]
     ASR --> HW
     TTS --> HW
-    IMG --> HW
 ```
 
 ### Key Architectural Benefits
 * **Unified Interface**: The local Lemonade instance exposes a single, OpenAI-compatible REST API. The MAGE client utilizes a standard `AsyncOpenAI` client pointing to `http://localhost:13305/v1`, eliminating custom payload serialization and protocol mismatch.
-* **Omni Model Discovery**: At startup, MAGE's [OmniModelRouter](./packages/xian-vl/src/xian/omni_router.py) queries `GET /v1/models?show_all=true` to discover installed Omni Models. When it finds a model with `recipe: "collection.omni"` (or an `LMX-Omni-` prefixed ID), it decomposes the virtual bundle into its individual component models and builds a per-modality routing table. This means the user selects a single "Omni" model in the MAGE settings, and the system automatically resolves the correct sub-model for each task — vision, chat, ASR, TTS — without manual configuration.
+* **Omni Model Discovery**: At startup, MAGE's [OmniModelRouter](./packages/xian-vl/src/xian/omni_router.py) queries `GET /v1/models?show_all=true` to discover installed Omni Models. When it finds a model with `recipe: "collection.omni"`, it decomposes the virtual bundle into its individual component models and overlays a per-modality routing table on top of the labels of everything else installed. This means the user selects a single "Omni" model in the MAGE settings, and the system automatically resolves the correct sub-model for each task — vision, chat, ASR, TTS — without manual configuration. Modalities the collection does not cover (image generation, for instance) still resolve against whatever else is downloaded, so a deliberately small collection does not disable them.
 * **Concurrent Model Orchestration**: MAGE routes tasks representing different modalities to different component models within the Omni collection:
   * **Vision-Language Models (VLMs)** (e.g., Qwen-VL) for visual translation and OCR via `/v1/chat/completions`.
   * **Text Large Language Models (LLMs)** (e.g., Qwen3.5-Instruct, Qwen3.6-35B) for contextual game-lore explanation, chat, and in-game text translation.
@@ -46,21 +44,31 @@ graph TD
 
 The central innovation MAGE leverages from Lemonade is the **Omni Model** pattern ([docs](https://lemonade-server.ai/docs/dev/lemonade-omni/)). An Omni Model is a virtual model registered with `recipe: "collection.omni"` that bundles multiple specialized models into a single logical unit. Users install one Omni Model and get a complete multi-modal AI stack.
 
-### Shipped Omni Models
+### Xian's Own Omni Collections
 
-| Omni Model | LLM | Image | ASR | TTS |
+MAGE registers its own collections rather than depending on Lemonade's shipped `LMX-Omni-*` bundles, defined in [`xian/collections.py`](../packages/xian-vl/src/xian/collections.py):
+
+| Collection | Planner (vision + tool-calling) | ASR | TTS | Footprint |
 |---|---|---|---|---|
-| **LMX-Omni-52B-Halo** | Qwen3.6-35B-A3B-MTP-GGUF | Flux-2-Klein-9B-GGUF (gen + edit) | Whisper-Large-v3-Turbo | kokoro-v1 |
-| **LMX-Omni-5.5B-Lite** | Qwen3.5-4B-MTP-GGUF | SD-Turbo (gen only) | Whisper-Tiny | kokoro-v1 |
+| **Xian-Lite** | Qwen3.5-4B-GGUF | Whisper-Tiny | kokoro-v1 | ~4.0 GB |
+| **Xian-Ultra** | Qwen3.5-9B-GGUF | Whisper-Large-v3-Turbo | kokoro-v1 | ~8.9 GB |
+| **Xian-Halo** | Qwen3.6-35B-A3B-MTP-GGUF | Whisper-Large-v3-Turbo | kokoro-v1 | ~25.8 GB |
 
-The naming follows the convention `LMX-Omni-<total params>-<class>`, where `Halo` targets high-VRAM Strix Halo systems and `Lite` targets 32 GB APUs.
+Two reasons for owning the definition:
+
+* **The vendor bundles are registry-backed.** Their registry entry is a bare pointer with no `components` until the Hugging Face manifest has been pulled. `POST /v1/load` against one in that state does not take the collection branch at all — it falls through to the llama.cpp backend, which looks for a GGUF at the collection's checkpoint and fails with `GGUF file not found for checkpoint`.
+* **The component choices are ours to make.** MAGE needs a vision planner above everything else, and pays download weight for an image generator it never calls. `Xian-Halo` picks a sparse MoE over a dense model of similar footprint because on a unified-memory APU only the active parameters are read per token.
+
+Registration goes through `POST /v1/pull` with the collection's full body — one streamed call that registers *and* downloads every component. Two constraints of that endpoint shape the body: the name must carry the `user.` prefix (so `user.Xian-Ultra` is surfaced publicly as `Xian-Ultra`), and the collection's own checkpoint must stay empty, or the server discards the authored component list in favour of a manifest that does not exist.
+
+Every component is a portable recipe (`llamacpp`, `whispercpp`, `kokoro`). NPU-only recipes are deliberately excluded: `flm` models exist only where FastFlowLM is installed, `ryzenai-llm` is filtered out on Linux entirely, and a collection stays hidden from `/v1/models` until *all* of its components are downloaded — so naming one would break installation everywhere else and silently disable routing where it did install. NPU work is a routing decision layered on top (§ backend preference), not a component.
 
 ### Client-Side Omni Decomposition via OmniModelRouter
 
 MAGE implements its own [OmniModelRouter](./packages/xian-vl/src/xian/omni_router.py) to decompose Omni bundles into per-modality routing decisions. At startup:
 
 1. The router queries `GET /v1/models?show_all=true` (Omni models are hidden from the default listing; the `show_all` flag surfaces them).
-2. It scans the response for any model with `recipe: "collection.omni"` or an `LMX-Omni-` prefixed ID.
+2. It scans the response for any model with `recipe: "collection.omni"` or an `LMX-Omni-` prefixed ID. A Xian collection wins over any other installed on the machine — it is the one whose components we chose.
 3. It reads the `components[]` array and the `labels[]` on each component to build a routing table:
    * `tool-calling` / `chat` / `reasoning` labels → **LLM** modality
    * `vision` / `vl` labels → **Vision** modality (falls back to LLM if no dedicated vision model exists)
@@ -69,7 +77,7 @@ MAGE implements its own [OmniModelRouter](./packages/xian-vl/src/xian/omni_route
    * `image` / `edit` labels → **Image generation/editing** modality
 4. The [VLProcessor](./packages/xian-vl/src/xian/pipeline.py) then calls `router.vision()` for OCR tasks, `router.llm()` for chat/translation, and `router.asr()` for transcription — each resolving transparently to the correct component model ID.
 
-This means the user selects **one model** (e.g., `LMX-Omni-5.5B-Lite`) in the MAGE settings dialog, and the system automatically fans out to `Qwen3.5-4B-MTP-GGUF` for vision/chat, `Whisper-Tiny` for speech recognition, and `kokoro-v1` for text-to-speech — all served from the same Lemonade process on port 13305.
+This means the user selects **one model** (e.g., `Xian-Ultra`) in the MAGE settings dialog, and the system automatically fans out to `Qwen3.5-9B-GGUF` for vision/chat, `Whisper-Large-v3-Turbo` for speech recognition, and `kokoro-v1` for text-to-speech — all served from the same Lemonade process on port 13305.
 
 ### Lemonade-Specific API Surface
 
@@ -232,7 +240,7 @@ MASHA ([apps/masha-extension](./apps/masha-extension)) is the browser spoke: a
 WXT (Chrome MV3 / Firefox MV2) extension that translates selected web text. It is
 the one component **not** written in Python, so rather than importing the `xian`
 core it **mirrors** it in TypeScript — the same default model
-(`LMX-Omni-5.5B-Lite`), the same `<think>`-stripping, and the same prompt framing
+(`Xian-Ultra`), the same `<think>`-stripping, and the same prompt framing
 as [pipeline.py](./packages/xian-vl/src/xian/pipeline.py)'s `create_prompt`. The
 existing `lemonadeUrl.ts` ↔ `lemonade_url.py` mirror established this precedent.
 
@@ -299,10 +307,12 @@ graph TD
 
 ### Why a Client-Side Router Is Mandatory Here
 
-NATE cannot trust the server's Omni bundle to route vision. On the test node,
-`LMX-Omni-5.5B-Lite` **refuses image input** ("I don't have the capability to
-analyze images") because its Lite collection has no vision LLM component, whereas
-the discrete, `vision`-labelled `Gemma-4-31B-it-GGUF` performs OCR correctly. So
+NATE cannot trust the server's Omni bundle to route vision. On the test node, a
+vendor Lite bundle **refused image input** ("I don't have the capability to
+analyze images") because the collection had no vision LLM component, whereas the
+discrete, `vision`-labelled `Gemma-4-31B-it-GGUF` performed OCR correctly. That
+finding is why every Xian collection is defined around a `vision`-labelled
+planner and why a test asserts it (`test_the_planner_can_see_and_call_tools`). So
 `NateOmniRouter` queries `GET /v1/models?show_all=true` and selects the
 `vision`-labelled model itself — the same discovery logic as the Python
 [OmniModelRouter](./packages/xian-vl/src/xian/omni_router.py), narrowed to the one

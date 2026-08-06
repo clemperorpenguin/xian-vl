@@ -65,7 +65,9 @@ def resolve_model(api_url: str, model_name: str) -> str:
 def get_lemonade_config():
     settings = QSettings("Xian", "VideoGameTranslator")
     api_url = settings.value("api_url", "http://localhost:13305/v1")
-    model = settings.value("api_model", "LMX-Omni-5.5B-Lite")
+    # Mirrors shared_types.constants.DEFAULT_MODEL; localize deliberately
+    # depends on nothing but PyQt, so the name is repeated rather than imported.
+    model = settings.value("api_model", "Xian-Ultra")
     
     resolved_model = resolve_model(api_url, model)
     

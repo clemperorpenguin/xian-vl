@@ -87,6 +87,18 @@ class LemonadeClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def pull_model_body(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Register and download from a full ``POST /v1/pull`` body.
+
+        Used for collection registration, where the body carries a recipe and a
+        component list rather than just a name (see :mod:`xian.collections`).
+        Registration and download happen in this one call, so it can be slow;
+        the timeout is raised accordingly.
+        """
+        resp = await self._client.post("/v1/pull", json=body, timeout=None)
+        resp.raise_for_status()
+        return resp.json()
+
     async def load_model(
         self,
         name: str,

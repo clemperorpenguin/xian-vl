@@ -105,3 +105,47 @@ def test_settings_dialog_exposes_memory_controls(q_app):
 
     dialog.deleteLater()
     settings.clear()
+
+
+def test_settings_dialog_switches_the_collection_tier(q_app):
+    """Choosing a tier also names the model, and flags the change for install."""
+    from mage.app import SettingsDialog
+    from mage.settings_keys import KEY_API_MODEL, KEY_COLLECTION_TIER
+
+    settings = QSettings("XianProject", "MageTestTier")
+    settings.clear()
+    settings.setValue(KEY_COLLECTION_TIER, "lite")
+    settings.setValue(KEY_API_MODEL, "Xian-Lite")
+
+    dialog = SettingsDialog(settings, models=["Xian-Lite"])
+    assert dialog.tier_combo.currentData() == "lite"
+
+    dialog.tier_combo.setCurrentIndex(dialog.tier_combo.findData("halo"))
+    dialog._save()
+
+    assert settings.value(KEY_COLLECTION_TIER) == "halo"
+    assert settings.value(KEY_API_MODEL) == "Xian-Halo"
+    assert dialog.tier_changed is True
+
+    dialog.deleteLater()
+    settings.clear()
+
+
+def test_settings_dialog_leaves_a_custom_model_alone(q_app):
+    """An unchanged tier must not overwrite a model the user typed in."""
+    from mage.app import SettingsDialog
+    from mage.settings_keys import KEY_API_MODEL, KEY_COLLECTION_TIER
+
+    settings = QSettings("XianProject", "MageTestTierKeep")
+    settings.clear()
+    settings.setValue(KEY_COLLECTION_TIER, "ultra")
+
+    dialog = SettingsDialog(settings, models=[])
+    dialog.model_combo.setCurrentText("Qwen3.5-9B-GGUF")
+    dialog._save()
+
+    assert settings.value(KEY_API_MODEL) == "Qwen3.5-9B-GGUF"
+    assert dialog.tier_changed is False
+
+    dialog.deleteLater()
+    settings.clear()

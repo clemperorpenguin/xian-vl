@@ -35,9 +35,14 @@ from xian.timeout import CHAT_AUX_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["batch_translate", "parse_translations"]
+__all__ = ["apply_glossary", "batch_translate", "parse_translations"]
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+#: Concurrent requests on the dedicated-MT path. One line per request keeps the
+#: output aligned with the input; a handful in flight keeps the NPU busy without
+#: queueing the whole screen behind one slow line.
+_MT_CONCURRENCY = 4
 
 
 def _system_prompt(source_lang: str, target_lang: str, glossary: dict[str, str] | None) -> str:
@@ -89,6 +94,81 @@ def parse_translations(raw: str, count: int) -> list[str]:
     return out
 
 
+def apply_glossary(text: str, glossary: dict[str, str] | None) -> str:
+    """Substitute known terms into the *source* text before translating.
+
+    The instruction-following path passes the glossary as prompt text.  A
+    dedicated MT model has no instructions to follow, so the only lever is the
+    input itself: replacing 名劍山莊 with "Mingjian Manor" before the call gets
+    the established rendering through, because MT models pass unknown Latin
+    tokens along rather than re-translating them.  Longest term first, so a term
+    that contains a shorter one is not clobbered by it.
+    """
+    if not glossary:
+        return text
+    for src in sorted(glossary, key=len, reverse=True):
+        if src and src in text:
+            text = text.replace(src, glossary[src])
+    return text
+
+
+async def _translate_one(processor, model: str, text: str, source_lang: str, target_lang: str) -> str:
+    """Translate a single line with a bare prompt.  Returns "" on failure."""
+    try:
+        response = await asyncio.wait_for(
+            processor.client.chat.completions.create(
+                model=model,
+                messages=[{
+                    "role": "user",
+                    "content": f"Translate the following {source_lang} text to {target_lang}.\n\n{text}",
+                }],
+                max_tokens=256,
+                temperature=0.0,
+            ),
+            timeout=CHAT_AUX_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Translation timed out for a line of %d chars", len(text))
+        return ""
+    except Exception as exc:
+        logger.warning("Translation failed: %s", exc)
+        return ""
+
+    choice = response.choices[0] if response.choices else None
+    return ((choice.message.content or "") if choice else "").strip()
+
+
+async def _batch_translate_mt(
+    processor,
+    model: str,
+    texts: list[str],
+    source_lang: str,
+    target_lang: str,
+    glossary: dict[str, str] | None,
+) -> list[str]:
+    """Translate via a dedicated MT model: one line per request, in parallel.
+
+    A translation-only model has no way to return several lines keyed by number
+    — asked to, it translates the request.  One line per call costs more
+    requests but keeps the output aligned with the input by construction, and
+    these models are small enough (and NPU-resident often enough) that the
+    round-trips overlap into roughly the same wall time.
+    """
+    semaphore = asyncio.Semaphore(_MT_CONCURRENCY)
+
+    async def run(text: str) -> str:
+        async with semaphore:
+            return await _translate_one(
+                processor, model, apply_glossary(text, glossary), source_lang, target_lang
+            )
+
+    results = await asyncio.gather(*(run(text) for text in texts), return_exceptions=True)
+    return [
+        original if isinstance(result, BaseException) or not result else result
+        for result, original in zip(results, texts)
+    ]
+
+
 async def batch_translate(
     processor,
     texts: list[str],
@@ -107,12 +187,16 @@ async def batch_translate(
     if not processor.client:
         return list(texts)
 
+    model = processor.get_translation_model_name()
+    if processor.router.is_translation_only(model):
+        return await _batch_translate_mt(processor, model, texts, source_lang, target_lang, glossary)
+
     payload = json.dumps({str(i + 1): text for i, text in enumerate(texts)}, ensure_ascii=False)
 
     try:
         response = await asyncio.wait_for(
             processor.client.chat.completions.create(
-                model=processor.get_model_name(),
+                model=model,
                 messages=[
                     {"role": "system", "content": _system_prompt(source_lang, target_lang, glossary)},
                     {"role": "user", "content": payload},

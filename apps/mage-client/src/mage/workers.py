@@ -753,17 +753,31 @@ class ModelPullWorker(QThread):
     # (file being downloaded, percent 0-100) — throttled to whole-percent steps.
     pull_progress = pyqtSignal(str, float)
 
-    def __init__(self, api_url: str, model_name: str, gpu_memory_utilization: str = "Default"):
+    def __init__(
+        self,
+        api_url: str,
+        model_name: str,
+        gpu_memory_utilization: str = "Default",
+        body: dict | None = None,
+    ):
         super().__init__()
         self.api_url = api_url
         self.model_name = model_name
         self.gpu_memory_utilization = gpu_memory_utilization
+        #: Full registration body, for a model the server does not already know
+        #: by name — a Xian collection carries its recipe and components here
+        #: (see :mod:`xian.collections`).  ``None`` pulls by name.
+        self.body = body
 
     def run(self):
         try:
             base_url = os.environ.get("LEMONADE_API_URL", self.api_url)
-            payload: dict = {"model": self.model_name, "stream": True}
-            if self.gpu_memory_utilization != "Default":
+            payload: dict = dict(self.body) if self.body else {"model": self.model_name}
+            payload["stream"] = True
+            # A collection has no backend of its own, so a VRAM fraction on its
+            # pull body would have nothing to apply to — each component carries
+            # its own options.
+            if self.body is None and self.gpu_memory_utilization != "Default":
                 try:
                     payload["gpu_memory_utilization"] = float(self.gpu_memory_utilization)
                 except ValueError:

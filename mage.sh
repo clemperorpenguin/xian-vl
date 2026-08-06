@@ -61,6 +61,10 @@ Options:
   --build       Build embeddable Lemonade from source without registering.
   --doctor-npu  Check whether this machine can run inference on the Ryzen AI
                 NPU (driver, XRT runtime, FastFlowLM, and installed models).
+  --install-collection [TIER]
+                Register and download a Xian model collection against a running
+                Lemonade server. TIER is lite, ultra, or halo; omitted, the
+                tier that fits this machine's memory is chosen.
   --help        Show this help message.
 
 With no options, MAGE is launched directly. If uv or project dependencies
@@ -293,9 +297,9 @@ _install_lemonade_from_dir() {
         exit 1
     fi
     
-    echo "lemond daemon is ready. Pulling model LMX-Omni-5.5B-Lite…"
-    if ! "${HOME}/.local/bin/lemonade" pull LMX-Omni-5.5B-Lite; then
-        echo "Error: Failed to pull model LMX-Omni-5.5B-Lite." >&2
+    echo "lemond daemon is ready. Installing the Xian model collection…"
+    if ! install_collection; then
+        echo "Error: Failed to install the Xian model collection." >&2
         kill "${lemond_pid}" 2>/dev/null || true
         exit 1
     fi
@@ -304,7 +308,51 @@ _install_lemonade_from_dir() {
     kill "${lemond_pid}" 2>/dev/null || true
     wait "${lemond_pid}" 2>/dev/null || true
     
-    echo "✓ Model LMX-Omni-5.5B-Lite pulled and cached successfully."
+    echo "✓ Xian model collection installed and cached successfully."
+}
+
+# Register and download a Xian collection through POST /v1/pull.
+#
+# The collection is a "collection.omni" model of our own: a vision planner plus
+# speech-to-text and a voice, registered under user.Xian-<tier>. Its definition
+# lives in xian.collections, which prints the exact request body — one source of
+# truth for the installer, the app, and the tests.
+#
+# $1: tier (lite | ultra | halo). Defaults to the tier that fits this machine.
+install_collection() {
+    local tier="${1:-}"
+    local port="${2:-13305}"
+
+    cd "${REPO_DIR}"
+
+    if [[ -z "${tier}" ]]; then
+        tier="$(uv run --package mage-client python - <<'PY'
+import psutil
+from xian.collections import recommended_tier
+print(recommended_tier(psutil.virtual_memory().total / (1024 ** 3)))
+PY
+        )" || tier="ultra"
+    fi
+
+    local body
+    body="$(uv run --package mage-client python -m xian.collections "${tier}" --no-stream)" || return 1
+
+    echo "Installing collection tier '${tier}' (this downloads several GB)…"
+    local http_code
+    http_code="$(curl -sS -o /tmp/xian-pull-$$.json -w '%{http_code}' \
+        -X POST "http://127.0.0.1:${port}/v1/pull" \
+        -H 'Content-Type: application/json' \
+        --data "${body}" \
+        --max-time 7200)" || return 1
+
+    if [[ "${http_code}" != "200" ]]; then
+        echo "Error: /v1/pull returned HTTP ${http_code}:" >&2
+        cat "/tmp/xian-pull-$$.json" >&2
+        rm -f "/tmp/xian-pull-$$.json"
+        return 1
+    fi
+    rm -f "/tmp/xian-pull-$$.json"
+    return 0
 }
 
 # ── Actions ───────────────────────────────────────────────────────────────────
@@ -603,6 +651,7 @@ do_doctor_npu() {
 
 ACTION="run"
 BUILD_LEMONADE=false
+COLLECTION_TIER=""
 
 case "${1:-}" in
     --install)
@@ -620,6 +669,10 @@ case "${1:-}" in
         ;;
     --doctor-npu)
         ACTION="doctor-npu"
+        ;;
+    --install-collection)
+        ACTION="install-collection"
+        COLLECTION_TIER="${2:-}"
         ;;
     --help|-h)
         print_usage
@@ -640,6 +693,11 @@ case "${ACTION}" in
         ;;
     doctor-npu)
         do_doctor_npu
+        ;;
+    install-collection)
+        ensure_uv
+        sync_deps
+        install_collection "${COLLECTION_TIER:-}"
         ;;
     *)
         do_run "$@"

@@ -111,6 +111,13 @@ def test_get_resource_path(monkeypatch):
 
 @pytest.mark.anyio
 async def test_prewarm_model_collection(monkeypatch):
+    """A collection is pre-warmed only once its components are downloaded.
+
+    POST /v1/load against a collection the server has registered but not pulled
+    resolves no components, falls through to the leaf-model path, and fails
+    looking for a GGUF at the collection's checkpoint.  Being in the
+    show_all listing is therefore not enough to load one.
+    """
     config = VLConfig()
     config.model_name = "LMX-Omni-5.5B-Lite"
     processor = VLProcessor(config)
@@ -146,16 +153,21 @@ async def test_prewarm_model_collection(monkeypatch):
         async def list_models(self, show_all=False):
             if show_all:
                 return [{"id": "LMX-Omni-5.5B-Lite"}, {"id": "Qwen3.5-4B-MTP-GGUF"}]
-            else:
-                return []  # Not pulled yet
+            return list(pulled)
         async def load_model(self, name, options=None):
             nonlocal loaded_model_id
             loaded_model_id = name
             return {"status": "success"}
-            
+
     monkeypatch.setattr("xian.pipeline.LemonadeClient", MockLemonadeClient)
-    
+
+    # Registered, but its components are not all downloaded: skip.
+    pulled = [{"id": "Qwen3.5-4B-MTP-GGUF"}]
     await processor.prewarm_model()
-    
-    # Verify that the omni model itself (LMX-Omni-5.5B-Lite) was loaded directly
+    assert loaded_model_id is None
+
+    # Fully downloaded: the collection loads by name, and the server cascades
+    # the load across its components.
+    pulled = [{"id": "LMX-Omni-5.5B-Lite"}, {"id": "Qwen3.5-4B-MTP-GGUF"}]
+    await processor.prewarm_model()
     assert loaded_model_id == "LMX-Omni-5.5B-Lite"

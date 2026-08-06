@@ -22,6 +22,8 @@ import logging
 from typing import Any
 import httpx
 
+from xian.collections import is_xian_collection
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,7 +33,24 @@ logger = logging.getLogger(__name__)
 NPU_RECIPES = ("flm",)
 
 #: Modalities FastFlowLM can actually serve.
-NPU_MODALITIES = ("llm", "asr")
+NPU_MODALITIES = ("llm", "asr", "translation")
+
+# Machine-translation models: they translate, and do nothing else. Worth routing
+# to on the hottest path in the app (every changed line in live mode), but they
+# have no tool-calling, no vision, and do not follow instructions — they
+# translate them. So they are excluded from every other modality by name, and
+# callers must give them a plain text-in/text-out prompt (xian.ocr.translate).
+TRANSLATION_KEYWORDS = ("translategemma", "madlad", "nllb", "opus-mt", "seamless", "towerinstruct")
+
+#: Labels a purpose-built translation model may carry.
+TRANSLATION_LABELS = ("translation", "translate")
+
+
+def is_translation_only_model(model_id: str | None) -> bool:
+    """True for a machine-translation model that cannot serve other modalities."""
+    if not model_id:
+        return False
+    return any(kw in model_id.lower() for kw in TRANSLATION_KEYWORDS)
 
 BACKEND_AUTO = "auto"
 BACKEND_GPU = "gpu"
@@ -90,28 +109,46 @@ class OmniModelRouter:
         self._omni_detected = False
         self._omni_model_id = None
 
-        # Check for Omni collections
+        # Check for Omni collections. A Xian collection wins over any other on
+        # the machine: it is the one whose components we chose.
         for m in self._downloaded_models:
             m_id = m.get("id", "")
             recipe = m.get("recipe", "")
-            if recipe == "collection.omni" or m_id.startswith("LMX-Omni-"):
+            if recipe == "collection.omni" or m_id.startswith("LMX-Omni-") or is_xian_collection(m_id):
                 self._omni_detected = True
-                self._omni_model_id = m_id
-                break
+                if self._omni_model_id is None or is_xian_collection(m_id):
+                    self._omni_model_id = m_id
+                if is_xian_collection(m_id):
+                    break
 
-        # Map labels to modalities globally first
+        # Map labels to modalities globally first. Under an explicit GPU
+        # preference the NPU models are left out of the table altogether:
+        # otherwise whether one wins a modality comes down to where it happens
+        # to sit in the server's model list, which is not a preference at all.
         for m in self._downloaded_models:
+            if not self._routable(m):
+                continue
             m_id = m.get("id", "")
             labels = m.get("labels", [])
-            
-            # Map based on standard labels
+            mt_only = is_translation_only_model(m_id)
+
+            # Map based on standard labels. A translation-only model claims no
+            # modality but its own, whatever generic labels it was published
+            # with — it cannot hold a conversation or read an image.
             for label in labels:
+                if mt_only and label not in TRANSLATION_LABELS:
+                    continue
                 if label not in self._models:
                     self._models[label] = m_id
-            
+
             # If we don't have explicit labels, try fallback heuristics based on id
             lower_id = m_id.lower()
-            if "whisper" in lower_id:
+            if mt_only:
+                # Name-matched before every other rule: "TranslateGemma" would
+                # otherwise land in chat/tool-calling on the "gemma" keyword and
+                # displace a planner that can actually hold a conversation.
+                self._models.setdefault("translation", m_id)
+            elif "whisper" in lower_id:
                 self._models.setdefault("transcription", m_id)
                 self._models.setdefault("asr", m_id)
             elif "kokoro" in lower_id or "tts" in lower_id:
@@ -136,39 +173,49 @@ class OmniModelRouter:
                     break
             
             if components:
-                # Clear all standard modality mappings to prevent pollution from non-components
-                self._models = {}
-                
-                # Re-map only from components
+                # Components *overlay* the global map rather than replacing it.
+                # A Xian collection deliberately bundles only planner/ASR/TTS, so
+                # wiping the map would resolve image and edit to nothing and
+                # break the image tools for a user who has an image model
+                # downloaded alongside it. Components still win wherever they
+                # cover a modality, which is the point of an active collection.
+                overlay: dict[str, str] = {}
                 for comp_id in components:
                     comp_info = next((m for m in self._downloaded_models if m.get("id") == comp_id), None)
                     comp_labels = comp_info.get("labels", []) if comp_info else []
-                    
+                    mt_only = is_translation_only_model(comp_id)
+
                     # Map explicit labels
                     for label in comp_labels:
-                        self._models[label] = comp_id
-                        
+                        if mt_only and label not in TRANSLATION_LABELS:
+                            continue
+                        overlay[label] = comp_id
+
                     # Map heuristics
                     lower_id = comp_id.lower()
-                    if "whisper" in lower_id:
-                        self._models["transcription"] = comp_id
-                        self._models["asr"] = comp_id
+                    if mt_only:
+                        overlay["translation"] = comp_id
+                    elif "whisper" in lower_id:
+                        overlay["transcription"] = comp_id
+                        overlay["asr"] = comp_id
                     elif "kokoro" in lower_id or "tts" in lower_id:
-                        self._models["tts"] = comp_id
-                        self._models["text-to-speech"] = comp_id
+                        overlay["tts"] = comp_id
+                        overlay["text-to-speech"] = comp_id
                     elif "flux" in lower_id or "sd" in lower_id or "stable-diffusion" in lower_id:
-                        self._models["image"] = comp_id
-                        self._models["edit"] = comp_id
+                        overlay["image"] = comp_id
+                        overlay["edit"] = comp_id
                     elif "vision" in lower_id or "vl" in lower_id or "qwen-vl" in lower_id:
-                        self._models["vision"] = comp_id
+                        overlay["vision"] = comp_id
                     elif "qwen" in lower_id or "llama" in lower_id or "mistral" in lower_id or "gemma" in lower_id:
-                        self._models["chat"] = comp_id
-                        self._models["tool-calling"] = comp_id
-                        self._models["reasoning"] = comp_id
+                        overlay["chat"] = comp_id
+                        overlay["tool-calling"] = comp_id
+                        overlay["reasoning"] = comp_id
 
                 # Fallback for vision inside the collection
-                if "vision" not in self._models and ("chat" in self._models or "tool-calling" in self._models):
-                    self._models["vision"] = self._models.get("tool-calling") or self._models.get("chat")
+                if "vision" not in overlay and ("chat" in overlay or "tool-calling" in overlay):
+                    overlay["vision"] = overlay.get("tool-calling") or overlay.get("chat")
+
+                self._models.update(overlay)
 
         # Only log when the resolved routing actually changes — this rebuild
         # runs on every inference, so unconditional logging floods the console.
@@ -205,6 +252,8 @@ class OmniModelRouter:
         """Returns True if the given model_id is a Lemonade Omni Model."""
         if not model_id or model_id in ("omni-router", "default"):
             return False
+        if is_xian_collection(model_id):
+            return True
         for m in self._downloaded_models:
             if m.get("id") == model_id:
                 return m.get("recipe") == "collection.omni" or model_id.startswith("LMX-Omni-")
@@ -226,6 +275,8 @@ class OmniModelRouter:
         elif modality == "vision":
             val = self._resolve_component(components, ["vision"], ["vision", "vl", "qwen-vl"])
             return val or self.resolve_omni_component(omni_model_id, "llm")
+        elif modality == "translation":
+            return self._resolve_component(components, list(TRANSLATION_LABELS), list(TRANSLATION_KEYWORDS))
         elif modality == "asr":
             return self._resolve_component(components, ["transcription", "realtime-transcription", "asr"], ["whisper", "whispercpp"])
         elif modality == "tts":
@@ -238,19 +289,29 @@ class OmniModelRouter:
         return None
 
     def _resolve_component(self, components: list[str], labels_to_match: list[str], fallback_keywords: list[str]) -> str | None:
-        for comp_id in components:
+        # A translation-only model answers to no modality but its own. Without
+        # this it would win the llm slot on the "gemma" keyword, and every chat
+        # turn would go to a model that translates the question instead of
+        # answering it.
+        wants_translation = any(label in TRANSLATION_LABELS for label in labels_to_match)
+        candidates = [
+            comp_id for comp_id in components
+            if is_translation_only_model(comp_id) == wants_translation
+        ]
+
+        for comp_id in candidates:
             comp_info = next((m for m in self._downloaded_models if m.get("id") == comp_id), None)
             if comp_info:
                 comp_labels = comp_info.get("labels", [])
                 if any(l in comp_labels for l in labels_to_match):
                     return comp_id
 
-        for comp_id in components:
+        for comp_id in candidates:
             comp_id_lower = comp_id.lower()
             if any(kw in comp_id_lower for kw in fallback_keywords):
                 return comp_id
 
-        for comp_id in components:
+        for comp_id in candidates:
             comp_info = next((m for m in self._downloaded_models if m.get("id") == comp_id), None)
             if comp_info:
                 recipe = comp_info.get("recipe", "").lower()
@@ -265,6 +326,10 @@ class OmniModelRouter:
     def is_npu_model(model: dict[str, Any]) -> bool:
         return str(model.get("recipe", "")).lower() in NPU_RECIPES
 
+    def _routable(self, model: dict[str, Any]) -> bool:
+        """Whether this model may appear in the routing table at all."""
+        return not (self.backend_preference == BACKEND_GPU and self.is_npu_model(model))
+
     def npu_available(self) -> bool:
         """True when the server has at least one NPU-backed model registered."""
         return any(self.is_npu_model(m) for m in self._downloaded_models)
@@ -278,10 +343,12 @@ class OmniModelRouter:
             return False
         if self.backend_preference == BACKEND_NPU:
             return True
-        # In auto mode only speech moves: it is a strict win (Whisper is small,
-        # the NPU handles it comfortably, and it frees the GPU during raids).
-        # Moving the chat LLM is a quality trade-off, so that stays opt-in.
-        return self.backend_preference == BACKEND_AUTO and modality == "asr"
+        # In auto mode speech and translation move. Both are strict wins: the
+        # models are small, the NPU handles them comfortably, and they are the
+        # two highest-frequency calls in the app — freeing the GPU for the
+        # vision model is exactly what live mode needs. Moving the *chat* LLM is
+        # a quality trade-off, so that one stays opt-in.
+        return self.backend_preference == BACKEND_AUTO and modality in ("asr", "translation")
 
     def _npu_model_for(self, modality: str) -> str | None:
         """Find an NPU-backed model that can serve this modality."""
@@ -293,6 +360,10 @@ class OmniModelRouter:
             labels = ("transcription", "realtime-transcription", "asr")
             keywords = ("whisper",)
             excluded = ()
+        elif modality == "translation":
+            labels = TRANSLATION_LABELS
+            keywords = TRANSLATION_KEYWORDS
+            excluded = ()
         else:
             return None
 
@@ -302,6 +373,10 @@ class OmniModelRouter:
             model_id = m.get("id", "")
             lower_id = model_id.lower()
             if any(x in lower_id for x in excluded):
+                continue
+            # Only the translation modality may resolve to a translation-only
+            # model, whatever its labels claim.
+            if is_translation_only_model(model_id) != (modality == "translation"):
                 continue
             if any(label in m.get("labels", []) for label in labels):
                 return model_id
@@ -336,9 +411,16 @@ class OmniModelRouter:
             if resolved:
                 return resolved
 
-        return (self._models.get("tool-calling") or 
-                self._models.get("chat") or 
-                (self._downloaded_models[0]["id"] if self._downloaded_models else ""))
+        if self._models.get("tool-calling"):
+            return self._models["tool-calling"]
+        if self._models.get("chat"):
+            return self._models["chat"]
+        # Last resort: any downloaded model that can hold a conversation.
+        for m in self._downloaded_models:
+            model_id = m.get("id", "")
+            if model_id and self._routable(m) and not is_translation_only_model(model_id):
+                return model_id
+        return ""
 
     def vision(self, active_model: str | None = None) -> str:
         """Returns the best vision-capable model id."""
@@ -370,9 +452,39 @@ class OmniModelRouter:
                 return candidate
         for m in self._downloaded_models:
             model_id = m.get("id")
-            if model_id and model_id not in npu_ids:
+            if model_id and model_id not in npu_ids and not is_translation_only_model(model_id):
                 return model_id
         return ""
+
+    def translation(self, active_model: str | None = None) -> str:
+        """Returns the best model id for bulk machine translation.
+
+        Prefers a purpose-built translation model — on the NPU when one is
+        installed — and falls back to the general LLM, which is what every
+        machine without one uses.  Callers must ask
+        :meth:`is_translation_only` what kind of model they got: a dedicated MT
+        model needs a plain text-in/text-out prompt, not the structured
+        instructions the general LLM path uses.
+        """
+        npu = self._npu_override("translation")
+        if npu:
+            return npu
+
+        model = active_model or self.active_model
+        if model and self.is_omni_model(model):
+            resolved = self.resolve_omni_component(model, "translation")
+            if resolved:
+                return resolved
+
+        model_id = self._models.get("translation")
+        if model_id:
+            return model_id
+
+        return self.llm(active_model)
+
+    def is_translation_only(self, model_id: str | None) -> bool:
+        """Whether this model can only translate (see :func:`is_translation_only_model`)."""
+        return is_translation_only_model(model_id)
 
     def asr(self, active_model: str | None = None) -> str:
         """Returns the best speech-to-text (ASR) model id."""

@@ -28,7 +28,11 @@ import os
 DEFAULT_API_URL = os.environ.get("XIAN_API_URL", "http://localhost:13305/v1")
 
 # ── Model Defaults ───────────────────────────────────────────────────
-DEFAULT_MODEL = "LMX-Omni-5.5B-Lite"
+# Xian registers its own Omni collection rather than depending on a vendor
+# bundle: see ``xian.collections``.  ``LMX-Omni-*`` remains a valid manual
+# choice, it is just not what we install.
+DEFAULT_MODEL = "Xian-Ultra"
+DEFAULT_COLLECTION_TIER = "ultra"
 DEFAULT_MAX_TOKENS = 2048
 MODE_MAX_TOKENS: dict[str, int] = {
     "Game": 4096,

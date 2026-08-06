@@ -127,7 +127,15 @@ def test_fenced_and_thinking_wrapped_replies_still_parse():
     assert parse_translations(f"<think>hmm</think>```json\n{payload}\n```", 1) == ["translated"]
 
 
-def _processor(reply: str):
+def _reply(content: str):
+    choice = MagicMock()
+    choice.message.content = content
+    response = MagicMock()
+    response.choices = [choice]
+    return response
+
+
+def _processor(reply: str, *, translation_only: bool = False):
     processor = MagicMock()
     choice = MagicMock()
     choice.message.content = reply
@@ -135,6 +143,10 @@ def _processor(reply: str):
     response.choices = [choice]
     processor.client.chat.completions.create = AsyncMock(return_value=response)
     processor.get_model_name.return_value = "test-llm"
+    processor.get_translation_model_name.return_value = (
+        "translategemma-4b-FLM" if translation_only else "test-llm"
+    )
+    processor.router.is_translation_only.return_value = translation_only
     return processor
 
 
@@ -203,3 +215,61 @@ def test_engine_reads_rendered_text_and_reports_its_provider():
 
     assert engine.provider.endswith("ExecutionProvider")
     assert any("HELLO" in ln.text.upper() for ln in lines)
+
+
+# ── dedicated machine-translation models ─────────────────────────────
+
+@pytest.mark.anyio
+async def test_a_translation_model_gets_one_request_per_line():
+    """An MT model has no way to return several lines keyed by number.
+
+    Asked for numbered JSON it translates the instructions instead, so the
+    alignment between input and output has to come from the request shape.
+    """
+    processor = _processor("Gate", translation_only=True)
+
+    result = await batch_translate(processor, ["城門", "市場"], "Chinese", "English")
+
+    assert result == ["Gate", "Gate"]
+    assert processor.client.chat.completions.create.await_count == 2
+
+
+@pytest.mark.anyio
+async def test_a_translation_model_is_given_no_system_prompt():
+    processor = _processor("Gate", translation_only=True)
+
+    await batch_translate(processor, ["城門"], "Chinese", "English")
+
+    messages = processor.client.chat.completions.create.call_args.kwargs["messages"]
+    assert [m["role"] for m in messages] == ["user"]
+    assert "城門" in messages[0]["content"]
+
+
+@pytest.mark.anyio
+async def test_glossary_terms_are_substituted_into_the_source_for_an_mt_model():
+    """The only lever on a model that follows no instructions is its input."""
+    processor = _processor("Head to Pure Yang", translation_only=True)
+
+    await batch_translate(
+        processor, ["前往純陽"], "Chinese", "English", glossary={"純陽": "Pure Yang"}
+    )
+
+    sent = processor.client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    assert "Pure Yang" in sent and "純陽" not in sent
+
+
+@pytest.mark.anyio
+async def test_a_failed_line_on_the_mt_path_keeps_the_others():
+    processor = _processor("", translation_only=True)
+    replies = [RuntimeError("busy"), _reply("Market")]
+    processor.client.chat.completions.create = AsyncMock(side_effect=replies)
+
+    assert await batch_translate(processor, ["城門", "市場"], "Chinese", "English") == ["城門", "Market"]
+
+
+def test_glossary_substitution_prefers_the_longest_term():
+    """"純陽" inside "純陽宮" must not be replaced out from under the longer term."""
+    from xian.ocr.translate import apply_glossary
+
+    glossary = {"純陽": "Pure Yang", "純陽宮": "Pure Yang Palace"}
+    assert apply_glossary("前往純陽宮", glossary) == "前往Pure Yang Palace"
