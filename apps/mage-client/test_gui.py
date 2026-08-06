@@ -80,3 +80,28 @@ def test_mage_overlay_window_click_through(q_app):
     assert win.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents) is True
     
     app.settings.clear()
+
+
+def test_settings_dialog_exposes_memory_controls(q_app):
+    """The Memory group must round-trip through QSettings."""
+    from mage.app import SettingsDialog
+    from mage.settings_keys import KEY_MEMORY_ENABLED, KEY_MEMORY_RETENTION_DAYS
+
+    settings = QSettings("XianProject", "MageTestMemory")
+    settings.clear()
+    settings.setValue(KEY_MEMORY_ENABLED, "false")
+    settings.setValue(KEY_MEMORY_RETENTION_DAYS, 7)
+
+    dialog = SettingsDialog(settings, models=[])
+    assert dialog.memory_enabled_cb.isChecked() is False
+    assert dialog.memory_retention_spin.value() == 7
+
+    dialog.memory_enabled_cb.setChecked(True)
+    dialog.memory_retention_spin.setValue(14)
+    dialog._save()
+
+    assert settings.value(KEY_MEMORY_ENABLED) == "true"
+    assert int(settings.value(KEY_MEMORY_RETENTION_DAYS)) == 14
+
+    dialog.deleteLater()
+    settings.clear()

@@ -34,10 +34,21 @@ from PIL import Image, ImageFilter
 from openai import AsyncOpenAI
 import imagehash
 
-from shared_types.constants import DEFAULT_API_URL, DEFAULT_MAX_TOKENS, QWEN_MAX_DIMENSION, IMAGE_HASH_SIZE, MODE_MAX_TOKENS
+from shared_types.constants import (
+    DEFAULT_API_URL,
+    DEFAULT_MAX_TOKENS,
+    QWEN_MAX_DIMENSION,
+    IMAGE_HASH_SIZE,
+    MODE_MAX_TOKENS,
+    CONTEXT_FRAME_WINDOW,
+    GAME_STATE_CHAT_TOKEN_BUDGET,
+    GAME_STATE_OCR_TOKEN_BUDGET,
+)
 from shared_types.models import TranslationResult, TextStyle, AccuracyScore
 from xian.compiler import WikiCompiler
 from xian.context_manager import ContextManager
+from xian.game_state import GameStateAssembler, RollingSummarizer
+from xian.session_store import SessionEvent, SessionStore
 from xian.searcher import LocalWikiSearcher, WebSearcher
 from xian.url_safety import markdown_http_https_url_or_none
 from xian.timeout import (
@@ -168,7 +179,13 @@ class VLProcessor:
         self._last_raw_output: str = ""
 
         # Initialize context manager for stateful interactions
-        self.context_manager = ContextManager(max_frames=1)
+        self.context_manager = ContextManager(max_frames=CONTEXT_FRAME_WINDOW)
+
+        # Durable session memory. Optional: the engine works without it, and
+        # the CLI apps (luduan, lore) never attach one.
+        self.session_store: SessionStore | None = None
+        self.game_state: GameStateAssembler | None = None
+        self.summarizer: RollingSummarizer | None = None
         self.wiki_dir = self.find_wiki_dir()
         logger.info("Using wiki directory: %s", self.wiki_dir)
 
@@ -309,6 +326,90 @@ class VLProcessor:
 
 
 
+    # ── Session memory ───────────────────────────────────────────────
+
+    def attach_session_store(self, store: SessionStore | None) -> None:
+        """Attach (or detach with None) durable session memory.
+
+        The client owns the database path, so it constructs the store and
+        hands it over here rather than the engine guessing a location.
+        """
+        self.session_store = store
+        if store is None:
+            self.game_state = None
+            self.summarizer = None
+            return
+        self.game_state = GameStateAssembler(store)
+        self.summarizer = RollingSummarizer(store, self)
+
+    def record_event(
+        self,
+        kind: str,
+        original: str = "",
+        translated: str = "",
+        *,
+        confidence: float | None = None,
+        region: tuple[int, int, int, int] | None = None,
+        **extra,
+    ) -> None:
+        """Log one thing that happened. Silently no-ops without a store."""
+        if not self.session_store:
+            return
+        if not (original or translated):
+            return
+        try:
+            self.session_store.append_event(
+                SessionEvent(
+                    kind=kind,
+                    original=original,
+                    translated=translated,
+                    confidence=confidence,
+                    region=region,
+                    extra=extra,
+                )
+            )
+        except Exception as exc:
+            logger.debug("Could not record %s event: %s", kind, exc)
+
+    def _record_results(self, kind: str, results: list[TranslationResult]) -> None:
+        """Log a batch of translation results, skipping empty ones."""
+        if not self.session_store:
+            return
+        for result in results:
+            if not (result.original_text or result.translated_text):
+                continue
+            if result.original_text.strip().lower() in ("(none)", "none"):
+                continue
+            self.record_event(
+                kind,
+                result.original_text,
+                result.translated_text,
+                confidence=getattr(result, "confidence", None),
+            )
+        if self.summarizer:
+            self.summarizer.maybe_summarize()
+
+    def build_game_state_block(self, question: str | None = None, token_budget: int = GAME_STATE_CHAT_TOKEN_BUDGET) -> str:
+        """Return the session-memory block for a prompt, or "" if unavailable."""
+        if not self.game_state:
+            return ""
+        try:
+            return self.game_state.build_context_block(question, token_budget=token_budget)
+        except Exception as exc:
+            logger.debug("Could not build game state block: %s", exc)
+            return ""
+
+    def _describe_past_frame(self, frame_id: int | None) -> str:
+        """Render an earlier screenshot as text for replayed chat history."""
+        frame = None
+        if frame_id is not None:
+            frame = self.context_manager.get_frame_by_id(frame_id)
+        if frame is not None and frame.extracted_text:
+            original, _, _ = self.parse_response(frame.extracted_text)
+            if original:
+                return f"[Earlier screenshot omitted. Text visible on it: {original}]"
+        return "[Earlier screenshot omitted.]"
+
     def _get_or_encode_image(self, image: Image.Image) -> tuple[str, bool]:
         """Return (b64_string, was_cached). Skips re-encoding if image is unchanged."""
         phash = str(imagehash.phash(image, hash_size=IMAGE_HASH_SIZE))
@@ -324,11 +425,24 @@ class VLProcessor:
             self._last_b64 = b64
             return b64, False
 
-    def preprocess_image(self, image_data: bytes) -> Image.Image:
+    def preprocess_image(self, image_data: bytes | Image.Image) -> Image.Image:
         """
         Preprocess image for vision-language model input.
+
+        Accepts either encoded bytes or an already-decoded PIL image; callers
+        that already hold a decoded frame should pass it directly to avoid a
+        redundant encode/decode round trip.
         """
-        image = Image.open(io.BytesIO(image_data))
+        if isinstance(image_data, Image.Image):
+            return self.preprocess_pil(image_data)
+        return self.preprocess_pil(Image.open(io.BytesIO(image_data)))
+
+    def preprocess_pil(self, image: Image.Image) -> Image.Image:
+        """Scale, pad, and sharpen a decoded frame for the vision model.
+
+        These steps are tuned together (see docs/PERFORMANCE.md) — the square
+        pad in particular stops the ViT from stretching the frame.
+        """
         max_dimension = QWEN_MAX_DIMENSION
         width, height = image.size
 
@@ -415,6 +529,16 @@ class VLProcessor:
                     system_prompt += "\n" + "\n".join(context_parts)
             except Exception as e:
                 logger.warning("RAG search in create_prompt failed: %s", e)
+
+        # 3. Inject session memory so recurring names stay consistent with
+        #    how they were already translated earlier in the session.
+        state_block = self.build_game_state_block(token_budget=GAME_STATE_OCR_TOKEN_BUDGET)
+        if state_block:
+            system_prompt += (
+                "\n\nGAME SESSION CONTEXT:\n"
+                "Background from earlier in this play session. Use it to keep names and "
+                "terminology consistent. Do NOT translate or transcribe it.\n" + state_block
+            )
 
         user_prompt = (
             f"OCR the {source_lang} text from this image of {mode_context}, "
@@ -551,7 +675,7 @@ class VLProcessor:
 
         return "", "", confidence
 
-    async def process_frame(self, image_data: bytes, source_lang: str, target_lang: str, mode: str, styles: list[str]) -> list[TranslationResult]:
+    async def process_frame(self, image_data: bytes | Image.Image, source_lang: str, target_lang: str, mode: str, styles: list[str]) -> list[TranslationResult]:
         """
         Process a single frame with unified OCR and translation via OmniRouter.
         """
@@ -563,7 +687,7 @@ class VLProcessor:
             raise RuntimeError("Stream frame failed to produce results.")
         return results_data
 
-    async def stream_frame(self, image_data: bytes, source_lang: str, target_lang: str, mode: str, styles: list[str]):
+    async def stream_frame(self, image_data: bytes | Image.Image, source_lang: str, target_lang: str, mode: str, styles: list[str]):
         """Streaming version of process_frame. Yields (original, translated, results_data) partials."""
         if not self.engine:
             raise RuntimeError("Engine not initialized.")
@@ -717,6 +841,7 @@ class VLProcessor:
 
                 extracted = [r.original_text for r in results]
                 self.context_manager.update_last_frame_data("\n".join(extracted), results)
+                self._record_results("ocr", results)
 
                 yield orig, trans, (results, messages, accumulated)
                 return  # Success, exit the retry loop
@@ -848,7 +973,7 @@ class VLProcessor:
 
         return system_prompt
 
-    async def process_cinematic(self, image_data: bytes, transcript: str, target_lang: str, styles: list[str], b64_image: str | None = None, image: Image.Image | None = None, source_lang: str = "Chinese", audio_bytes: bytes | None = None) -> list[TranslationResult]:
+    async def process_cinematic(self, image_data: bytes | Image.Image, transcript: str, target_lang: str, styles: list[str], b64_image: str | None = None, image: Image.Image | None = None, source_lang: str = "Chinese", audio_bytes: bytes | None = None) -> list[TranslationResult]:
         """
         Process a single frame along with an audio transcript using OmniRouter.
         """
@@ -951,6 +1076,7 @@ class VLProcessor:
 
             extracted = [r.original_text for r in results]
             self.context_manager.update_last_frame_data("\n".join(extracted), results)
+            self._record_results("ocr", results)
 
             return results
 
@@ -1020,9 +1146,20 @@ class VLProcessor:
         # Add user message to context manager
         self.context_manager.add_user_message(sanitized, with_image=True)
 
-        # Build OpenAI-compatible chat history
+        # Build OpenAI-compatible chat history.
+        #
+        # Only the newest turn carries the actual screenshot.  Older image
+        # markers are replaced with the OCR text captured at the time: sending
+        # the *current* frame for every historical marker would rewrite the
+        # past, and re-encoding N screenshots per turn is needlessly expensive.
+        history = self.context_manager.get_chat_history()
+        newest_image_index = -1
+        for idx, msg in enumerate(history):
+            if any(item.get("type") == "image" for item in msg["content"]):
+                newest_image_index = idx
+
         openai_messages = []
-        for msg in self.context_manager.get_chat_history():
+        for idx, msg in enumerate(history):
             role = msg["role"]
             content = msg["content"]
 
@@ -1032,10 +1169,16 @@ class VLProcessor:
                 if item["type"] == "text":
                     openai_content.append({"type": "text", "text": item["text"]})
                 elif item["type"] == "image":
-                    frame = self.context_manager.get_latest_frame()
-                    if frame:
-                        b64_img = self.encode_image(frame)
-                        openai_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_img}"}})
+                    if idx == newest_image_index:
+                        frame = self.context_manager.get_latest_frame()
+                        if frame:
+                            b64_img = self.encode_image(frame)
+                            openai_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_img}"}})
+                    else:
+                        openai_content.append({
+                            "type": "text",
+                            "text": self._describe_past_frame(item.get("frame_id")),
+                        })
 
             # OpenAI requires content to be a string if it's just text, or list if multimodal
             if len(openai_content) == 1 and openai_content[0]["type"] == "text":
@@ -1067,6 +1210,20 @@ class VLProcessor:
                 "3. If the user asks to analyze the current screen or screenshot, use 'screenshot' or 'image' as the image_path in analyze_image."
             ),
         }
+
+        # Session memory: what the player has already seen and decided. This is
+        # what lets "what do I do next?" be answered from the actual playthrough
+        # rather than the model's general knowledge of the game.
+        state_block = self.build_game_state_block(sanitized, token_budget=GAME_STATE_CHAT_TOKEN_BUDGET)
+        if state_block:
+            system_msg["content"] += (
+                "\n\nGAME SESSION CONTEXT:\n"
+                "The following is a record of the current play session — text translated on "
+                "screen, questions asked, and choices made. Treat it as established fact about "
+                "where the player is, and prefer it over general knowledge of the game when the "
+                "two disagree.\n" + state_block
+            )
+
         openai_messages.insert(0, system_msg)
 
         model_to_use = self.get_model_name()
@@ -1405,6 +1562,10 @@ class VLProcessor:
 
             # Add assistant message to context
             self.context_manager.add_assistant_message(cleaned_output)
+            self.record_event("chat_user", translated=sanitized)
+            self.record_event("chat_assistant", translated=cleaned_output)
+            if self.summarizer:
+                self.summarizer.maybe_summarize()
 
             return cleaned_output
 

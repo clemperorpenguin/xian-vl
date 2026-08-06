@@ -57,3 +57,17 @@ DEFAULT_GPU_MEMORY_UTILIZATION = "Default"
 # ── Image Processing ─────────────────────────────────────────────────
 QWEN_MAX_DIMENSION = 1920
 IMAGE_HASH_SIZE = 16  # 16×16 perceptual hash
+
+# ── Context ──────────────────────────────────────────────────────────
+# Frames kept in the sliding window. Chat history references frames by id,
+# so this bounds how far back an earlier screenshot stays describable.
+CONTEXT_FRAME_WINDOW = 3
+
+# Token budgets for the session-memory block. Chat can afford real context;
+# the OCR path gets a much smaller slice because latency is what matters there
+# and the block only has to keep terminology consistent.
+GAME_STATE_CHAT_TOKEN_BUDGET = 1200
+GAME_STATE_OCR_TOKEN_BUDGET = 300
+
+# Days of play history kept before purging.
+DEFAULT_MEMORY_RETENTION_DAYS = 30

@@ -34,12 +34,13 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QWidget, QCheckBox, QMessageBox, QInputDialog, QTabWidget, QSlider,
     QFileDialog
 )
-from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, QStandardPaths, pyqtSignal
 from PyQt6.QtGui import QIcon, QCursor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
 
 from xian.pipeline import VLProcessor, VLConfig
+from xian.session_store import SessionStore
 from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker, ChatTranslationWorker, RaidWorker, voice_for_language
 from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
 from mage.ui.chat_sidebar import ChatSidebar
@@ -65,7 +66,7 @@ from mage.settings_keys import (
     KEY_GPU_UTIL, KEY_DIALOGUE_DELAY,
     KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG,
     KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS, KEY_FAMILIAR_TYPE,
-    KEY_FAMILIAR_CUSTOM_RECIPE,
+    KEY_FAMILIAR_CUSTOM_RECIPE, KEY_MEMORY_ENABLED, KEY_MEMORY_RETENTION_DAYS,
 )
 from mage.utils.window_binder import WindowBinder
 from shared_types.state import state, t
@@ -75,6 +76,11 @@ logger = logging.getLogger(__name__)
 ORGANIZATION = constants.ORGANIZATION_NAME
 APP_NAME = constants.APPLICATION_NAME
 MAX_AUTO_CONTINUES = 5
+
+
+def _is_true(value) -> bool:
+    """QSettings round-trips booleans as strings on some platforms."""
+    return value == "true" or value is True
 
 
 def _normalized_api_url_from_settings(settings: QSettings) -> str:
@@ -270,6 +276,24 @@ class SettingsDialog(QDialog):
         self.auto_speak_cb.setChecked(speak_val == "true" or speak_val is True)
         features_layout.addRow(self.auto_speak_cb)
 
+        self.memory_enabled_cb = QCheckBox(t("settings.checkbox.memory_enabled"))
+        self.memory_enabled_cb.setToolTip(t("settings.tooltip.memory_enabled"))
+        self.memory_enabled_cb.setChecked(_is_true(settings.value(KEY_MEMORY_ENABLED, "true")))
+        features_layout.addRow(self.memory_enabled_cb)
+
+        memory_row = QHBoxLayout()
+        self.memory_retention_spin = QSpinBox()
+        self.memory_retention_spin.setRange(1, 365)
+        self.memory_retention_spin.setSuffix(" d")
+        self.memory_retention_spin.setValue(int(settings.value(
+            KEY_MEMORY_RETENTION_DAYS, constants.DEFAULT_MEMORY_RETENTION_DAYS
+        )))
+        memory_row.addWidget(self.memory_retention_spin, 1)
+        self.clear_memory_btn = QPushButton(t("settings.button.clear_memory"))
+        self.clear_memory_btn.clicked.connect(self._on_clear_memory_clicked)
+        memory_row.addWidget(self.clear_memory_btn)
+        features_layout.addRow(t("settings.label.memory_retention"), memory_row)
+
         self.familiar_enabled_cb = QCheckBox(t("settings.checkbox.familiar_enabled"))
         fam_val = settings.value(KEY_FAMILIAR_ENABLED, "false")
         self.familiar_enabled_cb.setChecked(fam_val == "true" or fam_val is True)
@@ -440,6 +464,8 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
+        self.settings.setValue(KEY_MEMORY_ENABLED, "true" if self.memory_enabled_cb.isChecked() else "false")
+        self.settings.setValue(KEY_MEMORY_RETENTION_DAYS, self.memory_retention_spin.value())
         self.settings.setValue(KEY_FAMILIAR_ENABLED, "true" if self.familiar_enabled_cb.isChecked() else "false")
         self.settings.setValue(KEY_FAMILIAR_TYPE, self.familiar_type_combo.currentData())
         self.settings.setValue(KEY_FAMILIAR_TTS, "true" if self.familiar_tts_cb.isChecked() else "false")
@@ -457,6 +483,20 @@ class SettingsDialog(QDialog):
     def _on_edit_layout(self):
         self.layout_edit_requested.emit()
         self.accept()
+
+    def _on_clear_memory_clicked(self):
+        """Settings 'Clear memory' button: erase the whole play history."""
+        confirm = QMessageBox.question(
+            self,
+            t("settings.button.clear_memory"),
+            t("settings.confirm.clear_memory"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        if self.app is not None:
+            self.app.clear_session_memory()
 
     def _on_conjure_clicked(self):
         """Settings 'Conjure…' button: generate via the app, then select custom."""
@@ -565,6 +605,8 @@ class XianApp(QWidget):
         self.osd_timer = QTimer(self)
         self.osd_timer.setSingleShot(True)
         self.osd_timer.timeout.connect(self.hide_osd)
+
+        self._init_session_memory()
 
         self.chat_sidebar = ChatSidebar(self.processor, parent=self)
         self.notes_sidebar = NotesSidebar(self)
@@ -697,6 +739,64 @@ class XianApp(QWidget):
             and not self.dialogue_mode_active
             and action != "cinematic"
         )
+
+    def _init_session_memory(self):
+        """Open the durable play-session log and hand it to the processor.
+
+        The client owns the storage location; the engine stays Qt-free and only
+        receives the ready-made store.  Failure here is never fatal — memory is
+        an enhancement, and translation must keep working without it.
+        """
+        self.session_store = None
+        if not _is_true(self.settings.value(KEY_MEMORY_ENABLED, "true")):
+            logger.info("Session memory disabled by settings")
+            return
+
+        try:
+            base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
+            db_path = os.path.join(base, "session", "sessions.db")
+            retention = int(self.settings.value(
+                KEY_MEMORY_RETENTION_DAYS, constants.DEFAULT_MEMORY_RETENTION_DAYS
+            ))
+
+            self.session_store = SessionStore(db_path, retention_days=retention)
+            self.session_store.purge_older_than()
+            self.session_store.begin_session(
+                window_title=self.settings.value(KEY_TARGET_WINDOW_TITLE, "") or None,
+                game_profile=self.settings.value(KEY_MODE, constants.DEFAULT_MODE),
+            )
+            self.processor.attach_session_store(self.session_store)
+        except Exception as e:
+            logger.warning("Session memory unavailable: %s", e)
+            self.session_store = None
+
+    def clear_session_memory(self):
+        """Erase all stored play history and start a fresh session."""
+        store = getattr(self, "session_store", None)
+        if store is None:
+            return
+        try:
+            store.clear_all()
+            store.begin_session(
+                window_title=self.settings.value(KEY_TARGET_WINDOW_TITLE, "") or None,
+                game_profile=self.settings.value(KEY_MODE, constants.DEFAULT_MODE),
+            )
+            logger.info("Session memory cleared")
+        except Exception as e:
+            logger.error("Error clearing session memory: %s", e)
+
+    def _close_session_memory(self):
+        """Flush and close the session log on shutdown."""
+        store = getattr(self, "session_store", None)
+        if store is None:
+            return
+        try:
+            store.end_session()
+            store.close()
+        except Exception as e:
+            logger.error("Error closing session memory: %s", e)
+        finally:
+            self.session_store = None
 
     def _setup_telemetry(self):
         """Start periodic host-resource sampling (CPU/GPU/RAM/VRAM).
@@ -968,8 +1068,12 @@ class XianApp(QWidget):
 
         logger.warning("Unknown lens action: %s", action)
 
-    def _run_inference(self, image_data: bytes, action: str, anchor_rect: QRect):
-        """Spawn an InferenceWorker for the given image crop."""
+    def _run_inference(self, image_data, action: str, anchor_rect: QRect):
+        """Spawn an InferenceWorker for the given image crop.
+
+        ``image_data`` is either encoded bytes (lens/chat paths) or an already
+        decoded PIL image (capture worker path).
+        """
         if not self._ensure_model_ready():
             return
         source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
@@ -1144,6 +1248,9 @@ class XianApp(QWidget):
             entry = (original_combined, translation_combined)
             if not self._dialogue_session or self._dialogue_session[-1] != entry:
                 self._dialogue_session.append(entry)
+                # Dialogue lines are the story the player is living through, so
+                # they are logged separately from ambient OCR.
+                self.processor.record_event("dialogue", original_combined, translation_combined)
 
         # If a thinking bubble is active, reuse it and update in-place
         if bubble and bubble.isVisible():
@@ -1323,12 +1430,16 @@ class XianApp(QWidget):
             stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
             title = f"{t('notes.title.dialogue_session')} — {stamp}"
             self.notes_sidebar.add_note(title, content, tags=["dialogue"])
+            self.processor.record_event("note", translated=f"{title}\n{content}")
         else:
             original = getattr(bubble, "_original", "") or ""
             translation = getattr(bubble, "_text", "") or ""
             if not translation.strip():
                 return
             self.notes_sidebar.add_note_from_translation(original, translation)
+            # A note is the player flagging something as worth remembering —
+            # exactly the material the assistant should weight most heavily.
+            self.processor.record_event("note", original, translation)
         bubble.mark_note_saved()
 
     def _on_raid_add_to_notes(self):
@@ -1915,6 +2026,7 @@ class XianApp(QWidget):
 
     def _on_chunk_translated(self, transcript, translation, worker):
         logger.info("Raid chunk translated: %s -> %s", transcript, translation)
+        self.processor.record_event("raid", transcript, translation)
 
         if hasattr(self, "raid_window") and self.raid_window and self.raid_window.isVisible():
             self.raid_window.append_translation(transcript, translation)
@@ -2411,6 +2523,9 @@ class XianApp(QWidget):
             self.stop_raid_mode()
         except Exception as e:
             logger.error("Error stopping raid mode on close: %s", e)
+
+        # Flush pending session-memory writes before the writer thread dies.
+        self._close_session_memory()
 
         # Stop the named single-instance workers.
         for worker_attr in ("_status_worker", "_pull_worker", "_prewarm_worker"):

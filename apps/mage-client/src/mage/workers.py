@@ -136,7 +136,7 @@ class InferenceWorker(QThread):
     chat_done = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, processor, *, image_data: bytes = None,
+    def __init__(self, processor, *, image_data=None,
                  source_lang: str = "Chinese", target_lang: str = "English",
                  mode: str = "Game", styles: list[str] = None,
                  action: str = "translate",
@@ -336,13 +336,14 @@ class ContinueWorker(QThread):
 class CinematicWorker(QThread):
     """Run Cinematic inference handling audio transcription and visual OCR.
 
-    Accepts image bytes, captures audio, transcribes it, and calls VLProcessor.process_cinematic().
+    Accepts an image (encoded bytes or a decoded PIL image), captures audio,
+    transcribes it, and calls VLProcessor.process_cinematic().
     """
 
     translation_done = pyqtSignal(list, str)
     error = pyqtSignal(str)
 
-    def __init__(self, processor, *, image_data: bytes = None,
+    def __init__(self, processor, *, image_data=None,
                  target_lang: str = "English", styles: list[str] = None,
                  anchor_rect: QRect = None, source_lang: str = "Chinese"):
         super().__init__()
@@ -866,8 +867,13 @@ class PrewarmWorker(QThread):
 
 
 class CaptureWorker(QThread):
-    """Asynchronously captures, crops, composites, and encodes screenshots."""
-    capture_done = pyqtSignal(bytes, QRect)
+    """Asynchronously captures, crops, and composites screenshots.
+
+    Emits a decoded PIL image rather than re-encoded bytes: the pipeline
+    decodes whatever it is given anyway, so encoding here only to decode again
+    downstream wastes time on every dialogue frame.
+    """
+    capture_done = pyqtSignal(object, QRect)
     error = pyqtSignal(str)
 
     def __init__(self, mode: str, rects: list[QRect], total_geo: QRect):
@@ -878,10 +884,30 @@ class CaptureWorker(QThread):
 
     def run(self):
         from mage.capture.screen import ScreenCapture
+        from mage.utils.images import qimage_to_pil
         from PyQt6.QtGui import QImage, QPainter
-        from PyQt6.QtCore import QBuffer, QIODevice
 
         try:
+            if self.mode == "dialogue":
+                rect = self.rects[0]
+                data, already_cropped = ScreenCapture.capture_region(rect)
+                if not data:
+                    self.error.emit("Failed to capture screen")
+                    return
+
+                img = QImage.fromData(data)
+                if img.isNull():
+                    self.error.emit("Failed to load screen capture image")
+                    return
+
+                if not already_cropped:
+                    safe_rect = rect.translated(-self.total_geo.left(), -self.total_geo.top())
+                    safe_rect = safe_rect.intersected(img.rect())
+                    img = img.copy(safe_rect)
+
+                self.capture_done.emit(qimage_to_pil(img), rect)
+                return
+
             data = ScreenCapture.capture_screen()
             if not data:
                 self.error.emit("Failed to capture screen")
@@ -892,20 +918,7 @@ class CaptureWorker(QThread):
                 self.error.emit("Failed to load screen capture image")
                 return
 
-            if self.mode == "dialogue":
-                rect = self.rects[0]
-                safe_rect = rect.translated(-self.total_geo.left(), -self.total_geo.top())
-                safe_rect = safe_rect.intersected(img.rect())
-                cropped = img.copy(safe_rect)
-                
-                buf = QBuffer()
-                buf.open(QIODevice.OpenModeFlag.WriteOnly)
-                cropped.save(buf, "JPG", 85)
-                cropped_data = bytes(buf.buffer())
-                
-                self.capture_done.emit(cropped_data, rect)
-
-            elif self.mode == "cinematic":
+            if self.mode == "cinematic":
                 total_height = sum(r.height() for r in self.rects)
                 max_width = max(r.width() for r in self.rects)
 
@@ -922,13 +935,8 @@ class CaptureWorker(QThread):
                     y_offset += r.height()
                 painter.end()
 
-                buf = QBuffer()
-                buf.open(QIODevice.OpenModeFlag.WriteOnly)
-                composite.save(buf, "JPG", 85)
-                composite_data = bytes(buf.buffer())
-
                 anchor_rect = self.rects[-1] if self.rects else QRect()
-                self.capture_done.emit(composite_data, anchor_rect)
+                self.capture_done.emit(qimage_to_pil(composite), anchor_rect)
         except Exception as e:
             logger.error("CaptureWorker error: %s", e)
             self.error.emit(str(e))

@@ -59,6 +59,26 @@
     "value": "Auto-speak translations (Text-to-Speech)",
     "context": "Checkbox label to auto-speak translations"
   },
+  "settings.checkbox.memory_enabled": {
+    "value": "Remember this play session",
+    "context": "Checkbox label enabling the assistant to remember translated text, dialogue, and chat from the current game session"
+  },
+  "settings.tooltip.memory_enabled": {
+    "value": "Keeps a local record of translated text and chat so the assistant can answer questions like \"what do I do next?\" using what you have actually seen in game.",
+    "context": "Tooltip explaining what the session memory feature stores and why"
+  },
+  "settings.label.memory_retention": {
+    "value": "Keep history for",
+    "context": "Label for the spin box choosing how many days of play history to keep before deleting it"
+  },
+  "settings.button.clear_memory": {
+    "value": "Clear memory",
+    "context": "Button that permanently deletes all stored play history"
+  },
+  "settings.confirm.clear_memory": {
+    "value": "Delete all remembered game history? This cannot be undone.",
+    "context": "Confirmation prompt shown before permanently erasing stored play history"
+  },
   "settings.checkbox.familiar_enabled": {
     "value": "Familiar Mode (desktop companion)",
     "context": "Checkbox label to enable Familiar Mode: a floating desktop companion pet that walks around the screen"
