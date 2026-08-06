@@ -43,6 +43,7 @@ from shared_types.constants import (
     CONTEXT_FRAME_WINDOW,
     GAME_STATE_CHAT_TOKEN_BUDGET,
     GAME_STATE_OCR_TOKEN_BUDGET,
+    DEFAULT_NPU_POWER_MODE,
 )
 from shared_types.models import TranslationResult, TextStyle, AccuracyScore
 from xian.compiler import WikiCompiler
@@ -58,7 +59,7 @@ from xian.timeout import (
 )
 from xian.async_engine import AsyncEngine
 from xian.lemonade_client import LemonadeClient
-from xian.omni_router import OmniModelRouter
+from xian.omni_router import OmniModelRouter, BACKEND_AUTO
 from xian.tools import OMNI_TOOLS
 
 _LANG_CODE_TO_NAME = {
@@ -150,6 +151,11 @@ class VLConfig:
     api_url: str = DEFAULT_API_URL
     max_tokens: int = DEFAULT_MAX_TOKENS
     temperature: float = 0.1
+    #: "auto" | "gpu" | "npu" — which accelerator text and speech work prefers.
+    #: Vision always stays on the GPU; there is no NPU vision backend.
+    backend_preference: str = BACKEND_AUTO
+    #: FastFlowLM power profile: powersaver | balanced | performance | turbo.
+    npu_power_mode: str = DEFAULT_NPU_POWER_MODE
 
 
 class VLProcessor:
@@ -162,7 +168,10 @@ class VLProcessor:
             api_key=os.environ.get("LEMONADE_API_KEY", "not-needed")
         )
         self.engine.start()
-        self.router = OmniModelRouter(os.environ.get("LEMONADE_API_URL", self.config.api_url))
+        self.router = OmniModelRouter(
+            os.environ.get("LEMONADE_API_URL", self.config.api_url),
+            backend_preference=self.config.backend_preference,
+        )
 
 
         # Thread lock for caching properties
@@ -325,6 +334,16 @@ class VLProcessor:
         return ""
 
 
+
+    def _load_options_for(self, model_id: str) -> dict | None:
+        """Per-model options for POST /v1/load.
+
+        NPU-backed models take a power profile; GPU models take nothing extra
+        (VRAM fraction is applied at pull time, not load time).
+        """
+        if model_id and model_id in self.router.npu_model_ids():
+            return {"power_mode": self.config.npu_power_mode}
+        return None
 
     # ── Session memory ───────────────────────────────────────────────
 
@@ -1663,7 +1682,7 @@ class VLProcessor:
 
                 logger.info("Pre-warming model '%s' (is_omni=%s) in Lemonade Server...", model_to_load, is_omni)
                 try:
-                    await client.load_model(model_to_load)
+                    await client.load_model(model_to_load, self._load_options_for(model_to_load))
                 except Exception as load_err:
                     if not is_omni:
                         logger.debug("Explicit /v1/load failed, falling back to dummy inference: %s", load_err)

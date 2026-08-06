@@ -67,6 +67,7 @@ from mage.settings_keys import (
     KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG,
     KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS, KEY_FAMILIAR_TYPE,
     KEY_FAMILIAR_CUSTOM_RECIPE, KEY_MEMORY_ENABLED, KEY_MEMORY_RETENTION_DAYS,
+    KEY_BACKEND_PREFERENCE, KEY_NPU_POWER_MODE,
 )
 from mage.utils.window_binder import WindowBinder
 from shared_types.state import state, t
@@ -197,6 +198,33 @@ class SettingsDialog(QDialog):
         self.gpu_combo.addItems(["Default", "0.5", "0.75"])
         self.gpu_combo.setCurrentText(settings.value(KEY_GPU_UTIL, constants.DEFAULT_GPU_MEMORY_UTILIZATION))
         backend_layout.addRow(t("settings.label.gpu_memory_utilization"), self.gpu_combo)
+
+        # Accelerator choice. Only text and speech can move to the NPU — the
+        # vision model always runs on the GPU, so this never affects OCR speed.
+        self.backend_combo = QComboBox()
+        for pref in constants.BACKEND_PREFERENCES:
+            self.backend_combo.addItem(t(f"settings.option.backend.{pref}"), pref)
+        b_idx = self.backend_combo.findData(
+            settings.value(KEY_BACKEND_PREFERENCE, constants.DEFAULT_BACKEND_PREFERENCE)
+        )
+        if b_idx >= 0:
+            self.backend_combo.setCurrentIndex(b_idx)
+        self.backend_combo.setToolTip(t("settings.tooltip.backend_preference"))
+        backend_layout.addRow(t("settings.label.backend_preference"), self.backend_combo)
+
+        self.npu_power_combo = QComboBox()
+        for mode in constants.NPU_POWER_MODES:
+            self.npu_power_combo.addItem(t(f"settings.option.npu_power.{mode}"), mode)
+        p_idx = self.npu_power_combo.findData(
+            settings.value(KEY_NPU_POWER_MODE, constants.DEFAULT_NPU_POWER_MODE)
+        )
+        if p_idx >= 0:
+            self.npu_power_combo.setCurrentIndex(p_idx)
+        npu_available = bool(app and app.processor.router.npu_available())
+        self.npu_power_combo.setEnabled(npu_available)
+        if not npu_available:
+            self.npu_power_combo.setToolTip(t("settings.tooltip.npu_unavailable"))
+        backend_layout.addRow(t("settings.label.npu_power_mode"), self.npu_power_combo)
 
         self.tabs.addTab(backend_tab, "Backend")
 
@@ -461,6 +489,8 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_LEADER_KEY, self.leader_combo.currentData())
         self.settings.setValue(KEY_OVERLAY_TOGGLE_KEY, self.overlay_toggle_combo.currentData())
         self.settings.setValue(KEY_GPU_UTIL, self.gpu_combo.currentText())
+        self.settings.setValue(KEY_BACKEND_PREFERENCE, self.backend_combo.currentData())
+        self.settings.setValue(KEY_NPU_POWER_MODE, self.npu_power_combo.currentData())
         self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
@@ -536,6 +566,12 @@ class XianApp(QWidget):
             model_name=self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL),
             api_url=_normalized_api_url_from_settings(self.settings),
             max_tokens=int(self.settings.value(KEY_MAX_TOKENS, constants.DEFAULT_MAX_TOKENS)),
+            backend_preference=self.settings.value(
+                KEY_BACKEND_PREFERENCE, constants.DEFAULT_BACKEND_PREFERENCE
+            ),
+            npu_power_mode=self.settings.value(
+                KEY_NPU_POWER_MODE, constants.DEFAULT_NPU_POWER_MODE
+            ),
         ))
         self.dictionary = LocalDictionary()
 
@@ -2134,11 +2170,20 @@ class XianApp(QWidget):
             self.processor.config.api_url = _normalized_api_url_from_settings(self.settings)
             self.processor.config.model_name = self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
             self.processor.config.max_tokens = int(self.settings.value(KEY_MAX_TOKENS, constants.DEFAULT_MAX_TOKENS))
+            self.processor.config.backend_preference = self.settings.value(
+                KEY_BACKEND_PREFERENCE, constants.DEFAULT_BACKEND_PREFERENCE
+            )
+            self.processor.config.npu_power_mode = self.settings.value(
+                KEY_NPU_POWER_MODE, constants.DEFAULT_NPU_POWER_MODE
+            )
             self.processor.engine.reconfigure(
                 base_url=self.processor.config.api_url
             )
             from xian.omni_router import OmniModelRouter
-            self.processor.router = OmniModelRouter(self.processor.config.api_url)
+            self.processor.router = OmniModelRouter(
+                self.processor.config.api_url,
+                backend_preference=self.processor.config.backend_preference,
+            )
             # Re-run health check
             self._run_health_check()
             

@@ -134,11 +134,12 @@ class ResourceSample:
     gpu_pct: Optional[float] = None
     vram_used_mb: Optional[float] = None
     vram_total_mb: Optional[float] = None
+    npu_pct: Optional[float] = None
 
     def is_empty(self) -> bool:
         return all(
             getattr(self, f) is None
-            for f in ("cpu_pct", "ram_used_mb", "gpu_pct", "vram_used_mb")
+            for f in ("cpu_pct", "ram_used_mb", "gpu_pct", "vram_used_mb", "npu_pct")
         )
 
 
@@ -169,6 +170,8 @@ def parse_lemonade_resources(system_info: Any, stats: Any) -> ResourceSample:
             sample.vram_total_mb = _find_first(src, ("vram_total", "total_vram", "gpu_memory_total", "memory_total"))
         if sample.gpu_pct is None:
             sample.gpu_pct = _find_first(src, ("gpu_util", "gpu_load", "gpu_usage", "gpu_busy", "utilization"))
+        if sample.npu_pct is None:
+            sample.npu_pct = _find_first(src, ("npu_util", "npu_load", "npu_usage", "npu_busy"))
     _normalize_vram(sample)
     return sample
 
@@ -370,6 +373,7 @@ class TelemetrySampler:
         self.processor = processor
         self.recorder = recorder or get_recorder()
         self._gpu_probe_disabled = False
+        self._npu_probe_disabled = False
         try:
             import psutil  # noqa: F401
             self._psutil = psutil
@@ -419,12 +423,18 @@ class TelemetrySampler:
             sample.gpu_pct = lem.gpu_pct
             sample.vram_used_mb = lem.vram_used_mb
             sample.vram_total_mb = lem.vram_total_mb
+            sample.npu_pct = lem.npu_pct
         except Exception:
             logger.debug("Telemetry: Lemonade resource poll failed", exc_info=True)
 
         # Best-effort AMD SMI fallback when Lemonade exposed no VRAM figure.
         if sample.vram_used_mb is None and not self._gpu_probe_disabled:
             await self._probe_amd_smi(sample)
+
+        # Same idea for the NPU: Lemonade does not report XDNA utilization, so
+        # ask the Ryzen AI runtime directly when it is installed.
+        if sample.npu_pct is None and not self._npu_probe_disabled:
+            await self._probe_xrt_smi(sample)
 
         self.recorder.record_resources(sample)
 
@@ -459,3 +469,32 @@ class TelemetrySampler:
                 return
         # Nothing usable; stop trying for the rest of the session.
         self._gpu_probe_disabled = True
+
+    async def _probe_xrt_smi(self, sample: ResourceSample) -> None:
+        """Read NPU utilization from ``xrt-smi``, the Ryzen AI runtime tool.
+
+        Disables itself after a failure so a machine without an NPU does not
+        spawn a doomed subprocess on every tick.
+        """
+        import asyncio
+        import shutil
+
+        if shutil.which("xrt-smi") is None:
+            self._npu_probe_disabled = True
+            return
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "xrt-smi", "examine", "--report", "telemetry", "--format", "JSON",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+            data = json.loads(out.decode("utf-8", "replace"))
+        except Exception:
+            logger.debug("Telemetry: xrt-smi probe failed", exc_info=True)
+            self._npu_probe_disabled = True
+            return
+
+        sample.npu_pct = _find_first(data, ("npu_util", "utilization", "usage", "busy"))
+        if sample.npu_pct is None:
+            self._npu_probe_disabled = True

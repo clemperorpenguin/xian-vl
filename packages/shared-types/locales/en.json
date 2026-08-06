@@ -59,6 +59,50 @@
     "value": "Auto-speak translations (Text-to-Speech)",
     "context": "Checkbox label to auto-speak translations"
   },
+  "settings.label.backend_preference": {
+    "value": "Inference backend",
+    "context": "Label for the drop-down choosing whether text and speech inference runs on the GPU or the NPU"
+  },
+  "settings.tooltip.backend_preference": {
+    "value": "Chooses where chat, translation, and speech run. The vision model always uses the GPU — there is no NPU vision backend — so moving text work to the NPU frees the GPU rather than speeding up OCR.",
+    "context": "Tooltip explaining the inference backend choice and its limits"
+  },
+  "settings.option.backend.auto": {
+    "value": "Auto",
+    "context": "Inference backend option: let the app decide which accelerator to use"
+  },
+  "settings.option.backend.gpu": {
+    "value": "GPU only",
+    "context": "Inference backend option: run everything on the GPU"
+  },
+  "settings.option.backend.npu": {
+    "value": "Prefer NPU",
+    "context": "Inference backend option: run text and speech on the neural processing unit when possible"
+  },
+  "settings.label.npu_power_mode": {
+    "value": "NPU power mode",
+    "context": "Label for the drop-down choosing the neural processing unit's performance profile"
+  },
+  "settings.tooltip.npu_unavailable": {
+    "value": "No NPU-backed model was found on the server.",
+    "context": "Tooltip shown when the NPU power mode control is disabled because no NPU model is available"
+  },
+  "settings.option.npu_power.powersaver": {
+    "value": "Power saver",
+    "context": "NPU power profile: lowest power and heat, slowest inference"
+  },
+  "settings.option.npu_power.balanced": {
+    "value": "Balanced",
+    "context": "NPU power profile: default balance of speed and power draw"
+  },
+  "settings.option.npu_power.performance": {
+    "value": "Performance",
+    "context": "NPU power profile: faster inference at higher power draw"
+  },
+  "settings.option.npu_power.turbo": {
+    "value": "Turbo",
+    "context": "NPU power profile: maximum speed, highest power and heat"
+  },
   "settings.checkbox.memory_enabled": {
     "value": "Remember this play session",
     "context": "Checkbox label enabling the assistant to remember translated text, dialogue, and chat from the current game session"

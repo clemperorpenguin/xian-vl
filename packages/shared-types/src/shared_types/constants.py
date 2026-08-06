@@ -54,6 +54,15 @@ DEFAULT_OVERLAY_TOGGLE_KEY = "rshift"
 # ── GPU ──────────────────────────────────────────────────────────────
 DEFAULT_GPU_MEMORY_UTILIZATION = "Default"
 
+# ── NPU (AMD Ryzen AI / XDNA) ────────────────────────────────────────
+# Which accelerator text and speech inference prefers. Vision always stays on
+# the GPU: the Linux NPU backend (FastFlowLM) serves no vision models.
+DEFAULT_BACKEND_PREFERENCE = "auto"
+BACKEND_PREFERENCES = ("auto", "gpu", "npu")
+# FastFlowLM power profiles, slowest/coolest to fastest/hottest.
+NPU_POWER_MODES = ("powersaver", "balanced", "performance", "turbo")
+DEFAULT_NPU_POWER_MODE = "balanced"
+
 # ── Image Processing ─────────────────────────────────────────────────
 QWEN_MAX_DIMENSION = 1920
 IMAGE_HASH_SIZE = 16  # 16×16 perceptual hash

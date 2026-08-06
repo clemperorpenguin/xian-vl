@@ -25,6 +25,19 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+# Lemonade recipes that execute on the Ryzen AI NPU. FastFlowLM ("flm") is
+# the only one available on Linux, and it serves text LLMs, Whisper ASR, and
+# embeddings — there is no NPU vision path, so vision must never route here.
+NPU_RECIPES = ("flm",)
+
+#: Modalities FastFlowLM can actually serve.
+NPU_MODALITIES = ("llm", "asr")
+
+BACKEND_AUTO = "auto"
+BACKEND_GPU = "gpu"
+BACKEND_NPU = "npu"
+
+
 class OmniModelRouter:
     """Discovers, caches, and routes requests to the correct model for each modality.
 
@@ -35,11 +48,16 @@ class OmniModelRouter:
     - tts: Text-to-speech model
     - image: Image generation model
     - edit: Image editing model
+
+    Routing is by modality label.  ``backend_preference`` adds a second axis:
+    when the host has an NPU-backed model registered, text and speech work can
+    be steered onto it so the GPU is left to the vision model.
     """
 
-    def __init__(self, api_url: str):
+    def __init__(self, api_url: str, backend_preference: str = BACKEND_AUTO):
         self.api_url = api_url.rstrip("/")
         self.api_url_no_v1 = self.api_url.removesuffix("/v1")
+        self.backend_preference = backend_preference
         self._models: dict[str, str] = {}
         self._downloaded_models: list[dict[str, Any]] = []
         self._omni_detected = False
@@ -241,9 +259,72 @@ class OmniModelRouter:
 
         return None
 
+    # ── NPU routing ──────────────────────────────────────────────────
+
+    @staticmethod
+    def is_npu_model(model: dict[str, Any]) -> bool:
+        return str(model.get("recipe", "")).lower() in NPU_RECIPES
+
+    def npu_available(self) -> bool:
+        """True when the server has at least one NPU-backed model registered."""
+        return any(self.is_npu_model(m) for m in self._downloaded_models)
+
+    def npu_model_ids(self) -> list[str]:
+        return [m["id"] for m in self._downloaded_models if self.is_npu_model(m) and "id" in m]
+
+    def _wants_npu(self, modality: str) -> bool:
+        """Whether this modality should be steered to the NPU."""
+        if modality not in NPU_MODALITIES:
+            return False
+        if self.backend_preference == BACKEND_NPU:
+            return True
+        # In auto mode only speech moves: it is a strict win (Whisper is small,
+        # the NPU handles it comfortably, and it frees the GPU during raids).
+        # Moving the chat LLM is a quality trade-off, so that stays opt-in.
+        return self.backend_preference == BACKEND_AUTO and modality == "asr"
+
+    def _npu_model_for(self, modality: str) -> str | None:
+        """Find an NPU-backed model that can serve this modality."""
+        if modality == "llm":
+            labels = ("tool-calling", "chat", "reasoning", "llm")
+            keywords = ("qwen", "llama", "gemma", "mistral", "deepseek")
+            excluded = ("whisper", "embed")
+        elif modality == "asr":
+            labels = ("transcription", "realtime-transcription", "asr")
+            keywords = ("whisper",)
+            excluded = ()
+        else:
+            return None
+
+        for m in self._downloaded_models:
+            if not self.is_npu_model(m):
+                continue
+            model_id = m.get("id", "")
+            lower_id = model_id.lower()
+            if any(x in lower_id for x in excluded):
+                continue
+            if any(label in m.get("labels", []) for label in labels):
+                return model_id
+            if any(kw in lower_id for kw in keywords):
+                return model_id
+        return None
+
+    def _npu_override(self, modality: str) -> str | None:
+        """Resolve this modality to an NPU model, or None to route normally."""
+        if not self._wants_npu(modality):
+            return None
+        model_id = self._npu_model_for(modality)
+        if model_id:
+            logger.debug("Routing %s to NPU model %s", modality, model_id)
+        return model_id
+
     # Modality getters
     def llm(self, active_model: str | None = None) -> str:
         """Returns the best chat/LLM model id."""
+        npu = self._npu_override("llm")
+        if npu:
+            return npu
+
         model = active_model or self.active_model
         if model and self.is_omni_model(model):
             resolved = self.resolve_omni_component(model, "llm")
@@ -272,10 +353,24 @@ class OmniModelRouter:
             if resolved:
                 return resolved
 
-        return self._models.get("vision") or self.llm(active_model)
+        if self._models.get("vision"):
+            return self._models["vision"]
+
+        # Falling back to the LLM must not pick up an NPU model: FastFlowLM
+        # has no vision path, so such a request would fail at the server.
+        fallback = self.llm(active_model)
+        if fallback and fallback in self.npu_model_ids():
+            return (self._models.get("tool-calling")
+                    or self._models.get("chat")
+                    or (self._downloaded_models[0]["id"] if self._downloaded_models else ""))
+        return fallback
 
     def asr(self, active_model: str | None = None) -> str:
         """Returns the best speech-to-text (ASR) model id."""
+        npu = self._npu_override("asr")
+        if npu:
+            return npu
+
         model = active_model or self.active_model
         if model and self.is_omni_model(model):
             resolved = self.resolve_omni_component(model, "asr")

@@ -112,3 +112,13 @@ if __name__ == "__main__":
         fn()
         print(f"ok  {fn.__name__}")
     print(f"\nALL {len(fns)} TELEMETRY TESTS PASSED")
+
+
+def test_parse_lemonade_resources_picks_up_npu_utilization():
+    sample = parse_lemonade_resources({"npu_util": 62.5}, {})
+    assert sample.npu_pct == 62.5
+    assert sample.is_empty() is False
+
+
+def test_resource_sample_without_npu_key_stays_none():
+    assert parse_lemonade_resources({"gpu_util": 10}, {}).npu_pct is None

@@ -122,6 +122,8 @@ async def test_prewarm_model_collection(monkeypatch):
             pass
         def is_omni_model(self, name):
             return name == "LMX-Omni-5.5B-Lite"
+        def npu_model_ids(self):
+            return []
         def llm(self, name=None):
             return "Qwen3.5-4B-MTP-GGUF"
             
@@ -146,7 +148,7 @@ async def test_prewarm_model_collection(monkeypatch):
                 return [{"id": "LMX-Omni-5.5B-Lite"}, {"id": "Qwen3.5-4B-MTP-GGUF"}]
             else:
                 return []  # Not pulled yet
-        async def load_model(self, name):
+        async def load_model(self, name, options=None):
             nonlocal loaded_model_id
             loaded_model_id = name
             return {"status": "success"}

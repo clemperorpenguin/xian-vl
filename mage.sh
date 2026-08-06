@@ -59,6 +59,8 @@ Options:
                 instead of downloading a pre-built binary.
   --uninstall   Remove the application entry created by --install.
   --build       Build embeddable Lemonade from source without registering.
+  --doctor-npu  Check whether this machine can run inference on the Ryzen AI
+                NPU (driver, XRT runtime, FastFlowLM, and installed models).
   --help        Show this help message.
 
 With no options, MAGE is launched directly. If uv or project dependencies
@@ -522,6 +524,79 @@ do_run() {
     exec uv run --package mage-client mage "$@"
 }
 
+# Report whether this machine can run inference on the Ryzen AI NPU.
+# Every requirement below is a real gate — failing any one of them means
+# Lemonade silently falls back to CPU/GPU rather than erroring.
+do_doctor_npu() {
+    echo "── Ryzen AI NPU diagnostics ──"
+
+    if [[ "${PLATFORM}" != "Linux" ]]; then
+        echo "✗ NPU diagnostics only apply to Linux (found ${PLATFORM})."
+        return 1
+    fi
+
+    local failures=0
+
+    echo "Kernel:        $(uname -r)"
+
+    if [[ -e /dev/accel/accel0 ]]; then
+        echo "✓ NPU device:  /dev/accel/accel0 present"
+    else
+        echo "✗ NPU device:  /dev/accel/accel0 missing — the amdxdna driver is not bound."
+        failures=$((failures + 1))
+    fi
+
+    if lsmod 2>/dev/null | grep -q '^amdxdna'; then
+        echo "✓ Driver:      amdxdna module loaded"
+    else
+        echo "✗ Driver:      amdxdna module not loaded (needs a kernel with the XDNA driver)."
+        failures=$((failures + 1))
+    fi
+
+    # XDNA 2 (Ryzen AI 300/400 series) is required — FastFlowLM does not
+    # support the XDNA 1 NPUs in 7040/8040 and 200-series parts.
+    if command -v lscpu &>/dev/null; then
+        local cpu_model cpu_model_lc
+        cpu_model="$(lscpu | grep -i 'model name' | head -1 | cut -d: -f2- | sed 's/^ *//')"
+        cpu_model_lc="$(printf '%s' "${cpu_model}" | tr '[:upper:]' '[:lower:]')"
+        echo "CPU:           ${cpu_model:-unknown}"
+        if [[ "${cpu_model_lc}" == *"ryzen ai"* ]]; then
+            echo "✓ Generation:  Ryzen AI part detected (confirm XDNA 2 — 300/400 series only)"
+        else
+            echo "⚠ Generation:  not a Ryzen AI part; NPU inference will be unavailable."
+        fi
+    fi
+
+    if command -v xrt-smi &>/dev/null; then
+        echo "✓ XRT:         $(command -v xrt-smi)"
+        xrt-smi examine 2>/dev/null | head -20 || true
+    else
+        echo "✗ XRT:         xrt-smi not found — install the Ryzen AI runtime (XRT)."
+        failures=$((failures + 1))
+    fi
+
+    if command -v flm &>/dev/null; then
+        echo "✓ FastFlowLM:  $(command -v flm)"
+    else
+        echo "✗ FastFlowLM:  flm not found — Lemonade needs it to serve models on the NPU."
+        failures=$((failures + 1))
+    fi
+
+    if [[ -d "${HOME}/.flm/models" ]]; then
+        echo "✓ FLM models:  $(find "${HOME}/.flm/models" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l) installed"
+    else
+        echo "⚠ FLM models:  ~/.flm/models is empty — pull an NPU model before selecting 'Prefer NPU'."
+    fi
+
+    echo
+    if (( failures == 0 )); then
+        echo "✓ NPU inference prerequisites look satisfied."
+    else
+        echo "✗ ${failures} prerequisite(s) missing — MAGE will keep using the GPU."
+    fi
+    return "${failures}"
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 ACTION="run"
@@ -541,6 +616,9 @@ case "${1:-}" in
         ACTION="build"
         BUILD_LEMONADE=true
         ;;
+    --doctor-npu)
+        ACTION="doctor-npu"
+        ;;
     --help|-h)
         print_usage
         exit 0
@@ -557,6 +635,9 @@ case "${ACTION}" in
     build)
         install_build_deps
         build_lemonade
+        ;;
+    doctor-npu)
+        do_doctor_npu
         ;;
     *)
         do_run "$@"
