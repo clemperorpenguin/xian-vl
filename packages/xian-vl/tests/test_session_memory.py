@@ -350,3 +350,34 @@ def test_flush_waits_for_events_queued_during_the_flush_window(store):
     store.clear_all()
     store.begin_session()
     assert store.recent_events(limit=100, session_only=False) == []
+
+
+def test_connections_are_closed_after_every_operation(store, monkeypatch):
+    """Reads and writes must not leave SQLite handles behind.
+
+    Regression: `with sqlite3.connect(...) as conn` commits but never closes,
+    so every append and every query leaked a connection and a WAL reader.
+    """
+    import sqlite3 as sqlite3_module
+
+    opened = []
+    real_connect = sqlite3_module.connect
+
+    def _tracking_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr("xian.session_store.sqlite3.connect", _tracking_connect)
+
+    _append(store, "ocr", "原文", "translated")
+    store.flush()
+    store.recent_events(limit=5)
+    store.search("translated")
+    store.get_digest()
+    store.purge_older_than(days=365)
+
+    assert opened, "expected the store to have opened at least one connection"
+    for conn in opened:
+        with pytest.raises(sqlite3_module.ProgrammingError):
+            conn.execute("SELECT 1")

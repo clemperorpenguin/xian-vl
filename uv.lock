@@ -528,39 +528,6 @@ wheels = [
 ]
 
 [[package]]
-name = "lmdb"
-version = "2.2.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/21/44/d94934efaf8f887b6959f131fde740fcaa831edfd13eb5425574637cddd5/lmdb-2.2.0.tar.gz", hash = "sha256:53020e20305c043ea6e68089bc242d744fba6073cdb268332299ba6dda2886d4", size = 933189, upload-time = "2026-03-30T01:26:19.049Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fc/b2/d6f5249f8ce730fab15ef3f0ceed86ab401112ba5c768ba461ac6d7f66be/lmdb-2.2.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:41e6a5747d7b8777cc5b1226b57c2dea94023fb55bca5f798f46e50f31c8fd69", size = 112291, upload-time = "2026-03-30T01:25:33.766Z" },
-    { url = "https://files.pythonhosted.org/packages/02/ec/3154671ccff606bcde7ef33116c57e0a0cc49912fbf0449e117caa8579e7/lmdb-2.2.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:97c26c296a907a3990bf26fb7e13a332f58d91048b7c835feab43f9e9a5e9cd2", size = 111112, upload-time = "2026-03-30T01:25:34.953Z" },
-    { url = "https://files.pythonhosted.org/packages/0f/30/3f9f357a58f0772663d480346d75ca152f6071121a25ec13d2994b461144/lmdb-2.2.0-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e86d3403a74d2b6f57459fa6bae07c5be97ad41be4baa102153f355125f058a0", size = 319004, upload-time = "2026-03-30T01:25:36.044Z" },
-    { url = "https://files.pythonhosted.org/packages/d6/c5/1ec96f55496b232b9cde99cfebe3dbb41be4d48debd93f1aaadbe89936b3/lmdb-2.2.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:dab9b1b0376067ce42c9705065fd4197ddeaf63cda06e2a3988b16ab5a0e5991", size = 321401, upload-time = "2026-03-30T01:25:37.248Z" },
-    { url = "https://files.pythonhosted.org/packages/e3/7e/a7f8e478b91e3238d7284d97991b683fefea9e1b3522a57ee5668576a3b5/lmdb-2.2.0-cp310-cp310-win_amd64.whl", hash = "sha256:a07e1d58a2e1b4fceff7741adc1a41ed636ec6368a3201c465fa5709a212907a", size = 109758, upload-time = "2026-03-30T01:25:38.359Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/55/8c83540dfc77666668f65074336e74d3e409822f5ad7f5223c21edbf92ab/lmdb-2.2.0-cp310-cp310-win_arm64.whl", hash = "sha256:85ccaba7a254b1570395960037cc9a414249fca35674a582b92eac00fc879653", size = 103507, upload-time = "2026-03-30T01:25:39.733Z" },
-    { url = "https://files.pythonhosted.org/packages/15/20/043bd8851979fb86a7fdb08b4337d319dbccf7f468632418527bad684945/lmdb-2.2.0-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:a72dba2c63f6d497f1dd1a1e46e30f14dfb8c1fddc5a51ed913993f5ac03736c", size = 112274, upload-time = "2026-03-30T01:25:40.919Z" },
-    { url = "https://files.pythonhosted.org/packages/ad/d1/d8f61fda6f837dad050514544560385a0f12e8b94e91079f63632195acc6/lmdb-2.2.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:5c807ce9c514354c4f2e76f97e69002048b7f4a3c97a3eaf82415bf7c5daed77", size = 111129, upload-time = "2026-03-30T01:25:42.31Z" },
-    { url = "https://files.pythonhosted.org/packages/19/11/f25fc19a68d8218d1337894b323fae79a4cccdef0994ba1c2714e268a2cd/lmdb-2.2.0-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:a073fada46565c373c8683c67c7c07cc0d3511fef7e122da7052bb5720d2af09", size = 321904, upload-time = "2026-03-30T01:25:43.436Z" },
-    { url = "https://files.pythonhosted.org/packages/31/a0/1b95f1d53e207d7f4581950228ae891fd930f5d2aeda1501a95982c7b2a8/lmdb-2.2.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:856b322399dcc1992675b8cf5f56cd54e89d05ea86a89dc5f6fa6d671c7b48f2", size = 324208, upload-time = "2026-03-30T01:25:44.706Z" },
-    { url = "https://files.pythonhosted.org/packages/8a/1a/6c5931ee1412a9d8c0c3859ed33bb64ed00ea8ef418413c56524e0372ef3/lmdb-2.2.0-cp311-cp311-win_amd64.whl", hash = "sha256:beacb2aed281cc806cb9a91663ed1a772fecd7a125d16b694cfc7af94a9864be", size = 109793, upload-time = "2026-03-30T01:25:46.148Z" },
-    { url = "https://files.pythonhosted.org/packages/2e/36/0ba441a4faddd32376270aabedf915d7a21f5fe031313e18c6998b0138d4/lmdb-2.2.0-cp311-cp311-win_arm64.whl", hash = "sha256:e36455ace4c50b5185e4660e19d63533fe5c07840598eeefaad783415a380bab", size = 103680, upload-time = "2026-03-30T01:25:47.222Z" },
-    { url = "https://files.pythonhosted.org/packages/b8/a7/9604e594725e2d2d0482669cfd9cba23cc47bd288f076c7e93985e5c046c/lmdb-2.2.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:8cc73de748070321986a3a26f51f3693bdd196c20e797d8d2ad0e860b5d2e26c", size = 113096, upload-time = "2026-03-30T01:25:48.293Z" },
-    { url = "https://files.pythonhosted.org/packages/05/cf/7b8e13c1253c77a2c41b7786659d64e97f758a13f1fafdb815cf76630eba/lmdb-2.2.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:9b6fecb1e32c55f0a1f3585d637f221e20146bb3ea9997c50fdfa3a58c0c2e41", size = 111656, upload-time = "2026-03-30T01:25:49.36Z" },
-    { url = "https://files.pythonhosted.org/packages/94/6a/f059c48e4f3321710825fdb1cdee50d32eea90e0c097441beec1b155788f/lmdb-2.2.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:547e083457b6a0936fe73821f35c019be817877f9a85488be818ec8383ef47a6", size = 329003, upload-time = "2026-03-30T01:25:50.47Z" },
-    { url = "https://files.pythonhosted.org/packages/38/22/513c885f284eccd49fc8d1c0a9a9d5da6badd9efc600d482424118df2a67/lmdb-2.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:dd505c995a595403f69367cbf16bcd5c88cdd208c706d709ba9b1bc2f9a16f69", size = 333140, upload-time = "2026-03-30T01:25:51.68Z" },
-    { url = "https://files.pythonhosted.org/packages/f1/9b/8b3c81009230ebbe340e59cf2996626800f291e034ed76535d754b2cf98c/lmdb-2.2.0-cp312-cp312-win_amd64.whl", hash = "sha256:dacf737ad869c6e48e1471dfa4d3e7c6ce2d082a218c069e20c4a138804e5fd2", size = 109668, upload-time = "2026-03-30T01:25:53.091Z" },
-    { url = "https://files.pythonhosted.org/packages/0b/68/368099745c1d82d079c490c62cdef5e99bc9a3e9132991e3b82967363d55/lmdb-2.2.0-cp312-cp312-win_arm64.whl", hash = "sha256:653f5e183b04b9124c505c519a3ff691038b4fb459c3211b1323c67bfba53f37", size = 103760, upload-time = "2026-03-30T01:25:54.374Z" },
-    { url = "https://files.pythonhosted.org/packages/64/43/543af71e8fa4c56623bb89c358121ab806426f26685f11539fe5452deffa/lmdb-2.2.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:36e0cbe6b7d59f6e19b448942c5f9e91674f596a802743258f82e926a9a09632", size = 113550, upload-time = "2026-03-30T01:25:55.727Z" },
-    { url = "https://files.pythonhosted.org/packages/22/2c/4702d36c0073737554b20d1d62e879a066df963482f8e514866588ddd82d/lmdb-2.2.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:e5d7a9dfd279a5884806fd478244961e4483cc6d7eb769caed1d7019a8608c20", size = 112135, upload-time = "2026-03-30T01:25:56.809Z" },
-    { url = "https://files.pythonhosted.org/packages/2f/43/d015fea326ed0a634107f29740b002170a462b6d2481e509105c685520f5/lmdb-2.2.0-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d0dbe7902b2cdb60bf6c893f307ef2b2a5039afd22f029515b86183f05ab1353", size = 332108, upload-time = "2026-03-30T01:25:57.907Z" },
-    { url = "https://files.pythonhosted.org/packages/bb/c9/503e7f173994b514936badcbcb7fa9f89a07a3cfe596c6fb95b1b91b8d70/lmdb-2.2.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9c576cdb163ae61a7ef6eecbc20a6025a4abe085491c1dc0c667d726f4926b53", size = 336017, upload-time = "2026-03-30T01:25:59.234Z" },
-    { url = "https://files.pythonhosted.org/packages/3e/94/b3b064acfd2f8acf5aaa53fff2c43963dbc1932ba8b8df4e27d75bf6a34a/lmdb-2.2.0-cp313-cp313-win_amd64.whl", hash = "sha256:746eebcd4c0aeaf0eb2f897028929d270c5bc80ef4918500eec16db6f26f3fcc", size = 109574, upload-time = "2026-03-30T01:26:00.324Z" },
-    { url = "https://files.pythonhosted.org/packages/b9/10/dc7488d1effc339cd9470f9d22ec0fd7052a3d4fdfae87765ecd41cb2e59/lmdb-2.2.0-cp313-cp313-win_arm64.whl", hash = "sha256:006153aac9fb0415a5f3e8ac88789e5730dba3dd0743cd84c95e3951ff68bc3a", size = 103810, upload-time = "2026-03-30T01:26:01.559Z" },
-    { url = "https://files.pythonhosted.org/packages/b2/05/a1831e9c3a312e57b694ada1574f17b3acd3b2753e92b4d06a8d942889c1/lmdb-2.2.0-pp310-pypy310_pp73-manylinux_2_38_x86_64.whl", hash = "sha256:a678e0ffcdc366a197b60e1f3e28e7c425031b35d5cbd73c0f08290ee7791ca6", size = 94857, upload-time = "2026-03-30T01:26:17.931Z" },
-]
-
-[[package]]
 name = "lore-client"
 version = "0.1.0"
 source = { editable = "apps/lore-client" }
@@ -1040,25 +1007,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cf/4c/c73f828fdbcd37eaf21d08fa852544a3ca7c2dbb3ea76873d64f2ea413d1/opencv_python-5.0.0.93-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c8de2dec111122a02e8beb28e16c31904992dfd6186560b142a92c71403c1039", size = 73783032, upload-time = "2026-07-02T06:55:03.415Z" },
     { url = "https://files.pythonhosted.org/packages/e2/4b/edaf83b996ca5a1a3d8ccad485706b9c6d4742b13b9c4586bf1c1e7d9423/opencv_python-5.0.0.93-cp37-abi3-win32.whl", hash = "sha256:4b4b1a34c79bf8d3738e3cfe9a9e67b51a79663f6b692cbdad8c31f570da4157", size = 35564734, upload-time = "2026-07-02T05:49:57.704Z" },
     { url = "https://files.pythonhosted.org/packages/21/f0/9fa6e85cb10c8eb36a0222d27e50fe381b86ce49a55446bf39f491727564/opencv_python-5.0.0.93-cp37-abi3-win_amd64.whl", hash = "sha256:f90ba04b8f73bc5c3814037699739f0156f597338a98f05956c684e7c3ca10d2", size = 44000345, upload-time = "2026-07-02T05:49:54.971Z" },
-]
-
-[[package]]
-name = "opencv-python-headless"
-version = "4.13.0.92"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/42/2310883be3b8826ac58c3f2787b9358a2d46923d61f88fedf930bc59c60c/opencv_python_headless-4.13.0.92-cp37-abi3-macosx_13_0_arm64.whl", hash = "sha256:1a7d040ac656c11b8c38677cc8cccdc149f98535089dbe5b081e80a4e5903209", size = 46247192, upload-time = "2026-02-05T07:01:35.187Z" },
-    { url = "https://files.pythonhosted.org/packages/2d/1e/6f9e38005a6f7f22af785df42a43139d0e20f169eb5787ce8be37ee7fcc9/opencv_python_headless-4.13.0.92-cp37-abi3-macosx_14_0_x86_64.whl", hash = "sha256:3e0a6f0a37994ec6ce5f59e936be21d5d6384a4556f2d2da9c2f9c5dc948394c", size = 32568914, upload-time = "2026-02-05T07:01:51.989Z" },
-    { url = "https://files.pythonhosted.org/packages/21/76/9417a6aef9def70e467a5bf560579f816148a4c658b7d525581b356eda9e/opencv_python_headless-4.13.0.92-cp37-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:5c8cfc8e87ed452b5cecb9419473ee5560a989859fe1d10d1ce11ae87b09a2cb", size = 33703709, upload-time = "2026-02-05T10:24:46.469Z" },
-    { url = "https://files.pythonhosted.org/packages/92/ce/bd17ff5772938267fd49716e94ca24f616ff4cb1ff4c6be13085108037be/opencv_python_headless-4.13.0.92-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:0525a3d2c0b46c611e2130b5fdebc94cf404845d8fa64d2f3a3b679572a5bd22", size = 56016764, upload-time = "2026-02-05T10:26:48.904Z" },
-    { url = "https://files.pythonhosted.org/packages/8f/b4/b7bcbf7c874665825a8c8e1097e93ea25d1f1d210a3e20d4451d01da30aa/opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:eb60e36b237b1ebd40a912da5384b348df8ed534f6f644d8e0b4f103e272ba7d", size = 35010236, upload-time = "2026-02-05T10:28:11.031Z" },
-    { url = "https://files.pythonhosted.org/packages/4b/33/b5db29a6c00eb8f50708110d8d453747ca125c8b805bc437b289dbdcc057/opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:0bd48544f77c68b2941392fcdf9bcd2b9cdf00e98cb8c29b2455d194763cf99e", size = 60391106, upload-time = "2026-02-05T10:30:14.236Z" },
-    { url = "https://files.pythonhosted.org/packages/fb/c3/52cfea47cd33e53e8c0fbd6e7c800b457245c1fda7d61660b4ffe9596a7f/opencv_python_headless-4.13.0.92-cp37-abi3-win32.whl", hash = "sha256:a7cf08e5b191f4ebb530791acc0825a7986e0d0dee2a3c491184bd8599848a4b", size = 30812232, upload-time = "2026-02-05T07:02:29.594Z" },
-    { url = "https://files.pythonhosted.org/packages/4a/90/b338326131ccb2aaa3c2c85d00f41822c0050139a4bfe723cfd95455bd2d/opencv_python_headless-4.13.0.92-cp37-abi3-win_amd64.whl", hash = "sha256:77a82fe35ddcec0f62c15f2ba8a12ecc2ed4207c17b0902c7a3151ae29f37fb6", size = 40070414, upload-time = "2026-02-05T07:02:26.448Z" },
 ]
 
 [[package]]
@@ -2298,11 +2246,9 @@ source = { editable = "packages/xian-vl" }
 dependencies = [
     { name = "httpx" },
     { name = "imagehash" },
-    { name = "lmdb" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "openai" },
-    { name = "opencv-python-headless" },
     { name = "pillow" },
     { name = "pyyaml" },
     { name = "shared-types" },
@@ -2325,12 +2271,10 @@ ocr = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "imagehash", specifier = ">=4.3" },
-    { name = "lmdb", specifier = ">=1.4" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1,<2.0" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "onnxruntime", marker = "extra == 'ocr'", specifier = ">=1.17" },
     { name = "openai", specifier = ">=1.0.0" },
-    { name = "opencv-python-headless", specifier = ">=4.8" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pyyaml" },

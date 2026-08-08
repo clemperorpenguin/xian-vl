@@ -51,6 +51,9 @@ class NotesSidebar(MageOverlayWindow):
         self.setFixedWidth(350)
         self._notes: list[dict] = []
         self._editing_id: str | None = None
+        self._text_size = 13
+        if self.app and hasattr(self.app, "settings") and self.app.settings:
+            self._text_size = int(self.app.settings.value("overlay_text_size", 13))
 
         # Position on the left side of the screen if not restored
         preset = self.app.settings.value("layout_preset", "Default")
@@ -208,7 +211,9 @@ class NotesSidebar(MageOverlayWindow):
         card_layout.setSpacing(4)
 
         title = QLabel(note.get("title", ""))
-        title.setStyleSheet(f"color: {accent_hex()}; font-weight: bold; font-size: 13px;")
+        title.setStyleSheet(
+            f"color: {accent_hex()}; font-weight: bold; font-size: {self._text_size}px;"
+        )
         title.setWordWrap(True)
         card_layout.addWidget(title)
 
@@ -216,7 +221,7 @@ class NotesSidebar(MageOverlayWindow):
         preview = content[:100] + ("…" if len(content) > 100 else "")
         if preview:
             preview_lbl = QLabel(preview)
-            preview_lbl.setStyleSheet("color: #CCC; font-size: 12px;")
+            preview_lbl.setStyleSheet(f"color: #CCC; font-size: {self._text_size - 1}px;")
             preview_lbl.setWordWrap(True)
             card_layout.addWidget(preview_lbl)
 
@@ -310,6 +315,7 @@ class NotesSidebar(MageOverlayWindow):
         self.setWindowOpacity(value / 100)
 
     def set_text_size(self, px: int):
+        self._text_size = px
         self._refresh_list()
 
     # ── Qt overrides ──────────────────────────────────────────────────────────

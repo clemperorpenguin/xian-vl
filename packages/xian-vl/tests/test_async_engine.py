@@ -91,6 +91,9 @@ async def test_vlprocessor_streaming_identical_image():
         cached_results = [TranslationResult(original_text="テスト", translated_text="Test", confidence=1.0)]
         
         processor._last_results = cached_results
+        # Results are cached per (source, target, mode, styles) as well as per
+        # image, so the key has to match the call below to be a cache hit.
+        processor._last_results_key = ("Chinese", "English", "Game", ())
         # Seed the last hash and b64
         import imagehash
         from shared_types.constants import IMAGE_HASH_SIZE

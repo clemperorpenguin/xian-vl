@@ -36,6 +36,7 @@ import queue
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -190,12 +191,22 @@ class SessionStore:
 
     # ── connections ──────────────────────────────────────────────────
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
+        """Yield a short-lived connection, committing and closing on exit.
+
+        sqlite3's own connection context manager commits but does *not* close,
+        which would leak a handle (and a WAL reader) per read and per write.
+        """
         conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     # ── session lifecycle ────────────────────────────────────────────
 
@@ -447,9 +458,11 @@ class SessionStore:
             return 0
         cutoff = time.time() - days * 86400
         with self._connect() as conn:
-            doomed = [r["id"] for r in conn.execute("SELECT id FROM events WHERE ts < ?", (cutoff,))]
-            for event_id in doomed:
-                conn.execute("DELETE FROM events_fts WHERE rowid = ?", (event_id,))
+            conn.execute(
+                "DELETE FROM events_fts WHERE rowid IN"
+                " (SELECT id FROM events WHERE ts < ?)",
+                (cutoff,),
+            )
             removed = conn.execute("DELETE FROM events WHERE ts < ?", (cutoff,)).rowcount
             conn.execute(
                 "DELETE FROM sessions WHERE started_at < ? AND id != ?",

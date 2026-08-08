@@ -74,17 +74,7 @@ class HowToSayDialog(MageOverlayWindow):
         self.input_field.setMinimumWidth(400)
         self.input_field.setMaximumHeight(80)
         self.input_field.setPlaceholderText(t("chat.placeholder.type_message"))
-        self.input_field.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: #2A2A2A;
-                color: #FFFFFF;
-                border: 1px solid #444;
-                border-radius: 0px;
-                padding: 6px;
-                font-size: 13px;
-            }}
-            QTextEdit:focus {{ border: 1px solid {accent_hex()}; }}
-        """)
+        self.input_field.setStyleSheet(self._field_stylesheet(13))
         inner_layout.addWidget(self.input_field)
 
         # Output field
@@ -95,17 +85,8 @@ class HowToSayDialog(MageOverlayWindow):
         self.output_field = QTextEdit()
         self.output_field.setMinimumWidth(400)
         self.output_field.setMaximumHeight(80)
-        self.output_field.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: #2A2A2A;
-                color: #FFFFFF;
-                border: 1px solid #444;
-                border-radius: 0px;
-                padding: 6px;
-                font-size: 14px;
-            }}
-            QTextEdit:focus {{ border: 1px solid {accent_hex()}; }}
-        """)
+        # A step larger than the input: the translation is what gets read.
+        self.output_field.setStyleSheet(self._field_stylesheet(14))
         inner_layout.addWidget(self.output_field)
 
         # Status Label
@@ -194,26 +175,26 @@ class HowToSayDialog(MageOverlayWindow):
                 self.status_label.setText(t("chat.status.error").format(error=e))
                 self.status_label.setStyleSheet("color: #e74c3c;")
 
+    @staticmethod
+    def _field_stylesheet(px: int) -> str:
+        return f"""
+            QTextEdit {{
+                background-color: #2A2A2A;
+                color: #FFFFFF;
+                border: 1px solid #444;
+                border-radius: 0px;
+                padding: 6px;
+                font-size: {px}px;
+            }}
+            QTextEdit:focus {{ border: 1px solid {accent_hex()}; }}
+        """
+
     def set_opacity(self, value: int):
         self.setWindowOpacity(value / 100)
 
     def set_text_size(self, px: int):
-        self.input_field.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: #2A2A2A; color: #FFFFFF;
-                border: 1px solid #444; border-radius: 0px;
-                padding: 6px; font-size: {px}px;
-            }}
-            QTextEdit:focus {{ border: 1px solid {accent_hex()}; }}
-        """)
-        self.output_field.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: #2A2A2A; color: #FFFFFF;
-                border: 1px solid #444; border-radius: 0px;
-                padding: 6px; font-size: {px}px;
-            }}
-            QTextEdit:focus {{ border: 1px solid {accent_hex()}; }}
-        """)
+        self.input_field.setStyleSheet(self._field_stylesheet(px))
+        self.output_field.setStyleSheet(self._field_stylesheet(px))
 
     def set_result(self, translated_text: str):
         self.output_field.setPlainText(translated_text)

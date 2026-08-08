@@ -7,6 +7,7 @@
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 
+import hashlib
 import json
 import logging
 import sys
@@ -17,6 +18,11 @@ import urllib.error
 from PyQt6.QtCore import QSettings
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+# Resolved in main(); module import must not touch the network (importing this
+# module, or running --help, would otherwise probe the Lemonade server).
+LEMONADE_URL = ""
+MODEL = ""
 
 def resolve_model(api_url: str, model_name: str) -> str:
     """If model_name is a composite omni model/collection, resolve it to its LLM component."""
@@ -79,7 +85,6 @@ def get_lemonade_config():
         
     return api_url, resolved_model
 
-LEMONADE_URL, MODEL = get_lemonade_config()
 
 TARGET_LANGUAGES = {
     "zh": "Chinese",
@@ -96,6 +101,43 @@ TARGET_LANGUAGES = {
 # output when asked to translate all ~90 keys at once, so we batch them.
 BATCH_SIZE = 15
 MAX_RETRIES = 3
+
+
+def _source_digest(entry) -> str:
+    """Fingerprint the English text a translation was produced from."""
+    value = entry.get("value", "") if isinstance(entry, dict) else str(entry)
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _digest_path(locales_dir: Path, lang_code: str) -> Path:
+    return locales_dir / f"{lang_code}.source-hash.json"
+
+
+def _load_digests(locales_dir: Path, lang_code: str) -> dict:
+    path = _digest_path(locales_dir, lang_code)
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _stale_keys(en_data: dict, existing: dict, digests: dict) -> dict:
+    """Keys that are missing a translation, or whose English source changed.
+
+    Without the digest sidecar an edited English string would keep its stale
+    translation forever, because the key itself is still present.
+    """
+    out = {}
+    for key, entry in en_data.items():
+        if key not in existing:
+            out[key] = entry
+        elif digests.get(key) not in (None, _source_digest(entry)):
+            out[key] = entry
+    return out
 
 
 def _translate_batch(batch: dict, target_lang_name: str) -> dict:
@@ -194,6 +236,9 @@ def translate_strings(en_data: dict, target_lang_name: str) -> dict:
 
 
 def main():
+    global LEMONADE_URL, MODEL
+    LEMONADE_URL, MODEL = get_lemonade_config()
+
     current_dir = Path(__file__).resolve().parent
     locales_dir = current_dir.parent.parent.parent / "shared-types" / "locales"
     en_path = locales_dir / "en.json"
@@ -230,11 +275,8 @@ def main():
             except (json.JSONDecodeError, OSError):
                 existing = {}
 
-        # Only translate keys that are missing or whose English source changed
-        keys_to_translate = {}
-        for key, entry in en_data.items():
-            if key not in existing:
-                keys_to_translate[key] = entry
+        digests = _load_digests(locales_dir, lang_code)
+        keys_to_translate = _stale_keys(en_data, existing, digests)
 
         if not keys_to_translate:
             logging.info(
@@ -256,6 +298,14 @@ def main():
             with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(ordered, f, ensure_ascii=False, indent=2)
                 f.write("\n")
+
+            # Record what each translation was made from, so a later edit to the
+            # English string is detected as drift rather than silently kept.
+            digests.update({k: _source_digest(en_data[k]) for k in translated if k in en_data})
+            with open(_digest_path(locales_dir, lang_code), "w", encoding="utf-8") as f:
+                json.dump({k: digests[k] for k in en_data if k in digests}, f, indent=2)
+                f.write("\n")
+
             logging.info(
                 "  Successfully wrote %s (%d/%d keys).",
                 out_path, len(ordered), len(en_data),

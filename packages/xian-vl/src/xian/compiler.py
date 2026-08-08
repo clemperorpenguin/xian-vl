@@ -113,13 +113,7 @@ class WikiCompiler:
             else:
                 lines.append(f"- {title} *(source URL omitted)*")
             
-        # Enforce strict Obsidian-style bidirectional linking
-        # This is a heuristic: if we see other known entities, we could link them.
-        # For now, let's at least ensure the main entity is linkable by others,
-        # and maybe link the original names if they look like entities.
-        # The user mentioned "Enforce strict Obsidian-style bidirectional linking ([[Entity]])".
-        # I'll add a section for related entities if provided.
-        
+        # Obsidian-style [[links]], so the vault cross-references itself.
         if "related_entities" in metadata:
             lines.extend([
                 "",

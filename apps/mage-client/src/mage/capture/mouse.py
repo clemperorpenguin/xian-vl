@@ -35,8 +35,18 @@ class MouseListener(QObject):
     def stop(self):
         pass
 
-if sys.platform == "linux":
+try:
     import evdev
+except ImportError:  # not installed, or a non-Linux platform
+    evdev = None
+
+try:
+    from pynput import mouse as _pynput_mouse
+except ImportError:  # headless CI, or no display server bindings
+    _pynput_mouse = None
+
+
+if evdev is not None:
 
     class EvdevMouseListener(MouseListener):
         """
@@ -78,6 +88,12 @@ if sys.platform == "linux":
             except Exception as e:
                 logger.error("EvdevMouseListener: Failed to find mice: %s", e)
 
+        def has_devices(self) -> bool:
+            """Whether any mouse is readable — the caller falls back if not."""
+            if not self.devices:
+                self._find_mice()
+            return bool(self.devices)
+
         def start(self):
             if self.running:
                 return
@@ -94,7 +110,7 @@ if sys.platform == "linux":
             if not self.devices:
                 logger.warning("EvdevMouseListener: No mice found to listen to.")
                 return
-                
+
             self.running = True
             self._threads = []
             for device in self.devices:
@@ -127,25 +143,24 @@ if sys.platform == "linux":
                 if self.running:
                     logger.error("EvdevMouseListener: Error reading from %s: %s", device.name, e)
 
-else:
-    from pynput import mouse
+if _pynput_mouse is not None:
 
     class PynputMouseListener(MouseListener):
         """
         Listens for global mouse clicks using pynput.
-        Used on macOS and Windows.
+        Used on macOS and Windows, and on Linux when evdev is unavailable.
         """
         def __init__(self):
             super().__init__()
             self.listener = None
 
         def on_click(self, x, y, button, pressed):
-            if button == mouse.Button.left and pressed:
+            if button == _pynput_mouse.Button.left and pressed:
                 self.left_click.emit()
 
         def start(self):
             if not self.listener:
-                self.listener = mouse.Listener(on_click=self.on_click)
+                self.listener = _pynput_mouse.Listener(on_click=self.on_click)
                 self.listener.start()
                 logger.info("PynputMouseListener: Started listening.")
 
@@ -154,8 +169,20 @@ else:
                 self.listener.stop()
                 self.listener = None
 
+
 def create_mouse_listener() -> MouseListener:
-    if sys.platform == "linux":
-        return EvdevMouseListener()
-    else:
+    """Prefer evdev on Linux (the only Wayland-wide option), else pynput."""
+    if sys.platform == "linux" and evdev is not None:
+        listener = EvdevMouseListener()
+        if listener.has_devices():
+            return listener
+        logger.warning(
+            "No readable mouse devices found (is this user in the 'input' group?); "
+            "falling back to pynput for click detection."
+        )
+
+    if _pynput_mouse is not None:
         return PynputMouseListener()
+
+    logger.error("No mouse backend available (need evdev or pynput); clicks are ignored.")
+    return MouseListener()

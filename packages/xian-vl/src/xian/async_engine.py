@@ -28,6 +28,7 @@ import logging
 import threading
 from concurrent.futures import Future
 from typing import Any, Coroutine, TypeVar
+from urllib.parse import urlparse
 
 from openai import AsyncOpenAI
 
@@ -35,9 +36,8 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
-from urllib.parse import urlparse
-
 def sanitize_url(url: str) -> str:
+    """Strip any credentials from a URL before it reaches the log."""
     try:
         p = urlparse(url)
         if p.password or p.username:

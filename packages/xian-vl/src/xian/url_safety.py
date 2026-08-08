@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Final
 
+import httpcore
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -90,9 +91,13 @@ def _resolve_host_ips(host: str, *, timeout_seconds: float = 2.0) -> list[ipaddr
     return ips
 
 
-import httpcore
-
 class SSRFSafetyNetworkBackend(httpcore.AsyncNetworkBackend):
+    """Pins every connection to an IP that was already checked as safe.
+
+    Re-resolving the hostname at connect time would reopen the DNS-rebinding
+    window the safety check just closed.
+    """
+
     def __init__(self, original_backend: httpcore.AsyncNetworkBackend, safe_ip: str):
         self.original = original_backend
         self.safe_ip = safe_ip

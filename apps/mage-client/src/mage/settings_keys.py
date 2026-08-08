@@ -21,6 +21,15 @@
 Centralizes key names to avoid typos and drift across files.
 """
 
+
+def is_true(value) -> bool:
+    """Read a QSettings boolean.
+
+    QSettings round-trips booleans as the strings "true"/"false" on some
+    platforms and as real bools on others, so every read has to accept both.
+    """
+    return value is True or value == "true"
+
 KEY_API_URL = "api_url"
 KEY_API_MODEL = "api_model"
 KEY_SOURCE_LANG = "source_lang"

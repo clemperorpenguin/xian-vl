@@ -65,38 +65,18 @@ class ResultBubble(MageOverlayWindow):
         self._continue_count = 0
         self.continuation_messages = None
 
-        border = border_color if border_color else accent_hex()
-
         _app = parent
         _text_size = 13
         _opacity = 85
         if _app and hasattr(_app, "settings") and _app.settings:
             _text_size = int(_app.settings.value("overlay_text_size", 13))
             _opacity = int(_app.settings.value("overlay_opacity", 85))
+        self._text_size = _text_size
 
         # --- layout -----------------------------------------------------------
         root = QWidget(self)
         root.setObjectName("BubbleRoot")
-        root.setStyleSheet(f"""
-            #BubbleRoot {{
-                background-color: rgba(20, 20, 20, 230);
-                border: 1px solid {border};
-                border-radius: 0px;
-            }}
-            QLabel {{
-                color: #eee;
-                font-size: {_text_size}px;
-                padding: 2px;
-            }}
-            QPushButton {{
-                background: transparent;
-                color: #aaa;
-                border: none;
-                font-size: {_text_size - 2}px;
-                padding: 2px 6px;
-            }}
-            QPushButton:hover {{ color: #fff; }}
-        """)
+        root.setStyleSheet(self._root_stylesheet(border_color))
         self.setWindowOpacity(_opacity / 100)
 
         outer = QVBoxLayout(self)
@@ -224,6 +204,35 @@ class ResultBubble(MageOverlayWindow):
         self.promote()
 
     # ------------------------------------------------------------------
+    def _root_stylesheet(self, border_color: str | None = None) -> str:
+        """The bubble's sheet at the current text size.
+
+        Built in one place because ``update_text`` re-applies it on every
+        refresh — pasting a literal there would silently reset the user's
+        configured text size on the first update.
+        """
+        border = border_color or accent_hex()
+        return f"""
+            #BubbleRoot {{
+                background-color: rgba(20, 20, 20, 230);
+                border: 1px solid {border};
+                border-radius: 0px;
+            }}
+            QLabel {{
+                color: #eee;
+                font-size: {self._text_size}px;
+                padding: 2px;
+            }}
+            QPushButton {{
+                background: transparent;
+                color: #aaa;
+                border: none;
+                font-size: {self._text_size - 2}px;
+                padding: 2px 6px;
+            }}
+            QPushButton:hover {{ color: #fff; }}
+        """
+
     def _position_near(self, rect: QRect):
         """Place the bubble just below *rect*, clamped to screen edges."""
         screen = QGuiApplication.screenAt(QCursor.pos())
@@ -268,55 +277,10 @@ class ResultBubble(MageOverlayWindow):
         if hasattr(self, "_speak_src_btn"):
             self._speak_src_btn.setEnabled(bool(original_text))
             
-        if border_color:
-            border = border_color
-            root = self.findChild(QWidget, "BubbleRoot")
-            if root:
-                root.setStyleSheet(f"""
-                    #BubbleRoot {{
-                        background-color: rgba(20, 20, 20, 230);
-                        border: 1px solid {border};
-                        border-radius: 0px;
-                    }}
-                    QLabel {{
-                        color: #eee;
-                        font-size: 13px;
-                        padding: 2px;
-                    }}
-                    QPushButton {{
-                        background: transparent;
-                        color: #888;
-                        border: none;
-                        font-size: 11px;
-                        padding: 2px 6px;
-                    }}
-                    QPushButton:hover {{ color: #fff; }}
-                """)
-        else:
-            border = accent_hex()
-            root = self.findChild(QWidget, "BubbleRoot")
-            if root:
-                root.setStyleSheet(f"""
-                    #BubbleRoot {{
-                        background-color: rgba(20, 20, 20, 230);
-                        border: 1px solid {border};
-                        border-radius: 0px;
-                    }}
-                    QLabel {{
-                        color: #eee;
-                        font-size: 13px;
-                        padding: 2px;
-                    }}
-                    QPushButton {{
-                        background: transparent;
-                        color: #888;
-                        border: none;
-                        font-size: 11px;
-                        padding: 2px 6px;
-                    }}
-                    QPushButton:hover {{ color: #fff; }}
-                """)
-                
+        root = self.findChild(QWidget, "BubbleRoot")
+        if root:
+            root.setStyleSheet(self._root_stylesheet(border_color))
+
         self._apply_confidence_display(confidence, border_color)
 
         if hasattr(self, "_continue_btn"):
@@ -403,8 +367,12 @@ class ResultBubble(MageOverlayWindow):
         self.setWindowOpacity(value / 100)
 
     def set_text_size(self, px: int):
+        self._text_size = px
         self._trans_label.setFont(QFont("sans-serif", px))
         self._orig_label.setStyleSheet(f"color: #bbb; font-size: {px - 1}px;")
+        root = self.findChild(QWidget, "BubbleRoot")
+        if root:
+            root.setStyleSheet(self._root_stylesheet())
         self.adjustSize()
 
     def _on_speak_src_clicked(self):

@@ -45,6 +45,37 @@ TRANSLATION_KEYWORDS = ("translategemma", "madlad", "nllb", "opus-mt", "seamless
 #: Labels a purpose-built translation model may carry.
 TRANSLATION_LABELS = ("translation", "translate")
 
+#: modality -> (labels that claim it, id/recipe keywords that imply it).
+#: ``resolve_omni_component`` and ``_npu_model_for`` both resolve through this,
+#: so a modality taught to one is taught to the other.
+MODALITY_MATCHERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "llm": (
+        ("tool-calling", "chat", "reasoning", "llm"),
+        ("qwen", "llama", "gemma", "mistral", "deepseek"),
+    ),
+    "vision": (("vision",), ("vision", "vl", "qwen-vl")),
+    "translation": (TRANSLATION_LABELS, TRANSLATION_KEYWORDS),
+    "asr": (
+        ("transcription", "realtime-transcription", "asr"),
+        ("whisper", "whispercpp"),
+    ),
+    "tts": (("tts", "text-to-speech"), ("kokoro", "tts")),
+    "image": (("image",), ("flux", "sd", "stable-diffusion")),
+    "edit": (("edit",), ("flux", "sd", "stable-diffusion")),
+}
+
+#: Modality each id keyword implies, for models published without labels.
+#: Ordered: a translation-only model is name-matched before everything else,
+#: because "TranslateGemma" would otherwise land in chat on the "gemma" keyword
+#: and displace a planner that can actually hold a conversation.
+_HEURISTIC_MODALITIES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("whisper",), ("transcription", "asr")),
+    (("kokoro", "tts"), ("tts", "text-to-speech")),
+    (("flux", "sd", "stable-diffusion"), ("image", "edit")),
+    (("vision", "vl", "qwen-vl"), ("vision",)),
+    (("qwen", "llama", "mistral", "gemma"), ("chat", "tool-calling", "reasoning")),
+)
+
 
 def is_translation_only_model(model_id: str | None) -> bool:
     """True for a machine-translation model that cannot serve other modalities."""
@@ -126,42 +157,8 @@ class OmniModelRouter:
         # otherwise whether one wins a modality comes down to where it happens
         # to sit in the server's model list, which is not a preference at all.
         for m in self._downloaded_models:
-            if not self._routable(m):
-                continue
-            m_id = m.get("id", "")
-            labels = m.get("labels", [])
-            mt_only = is_translation_only_model(m_id)
-
-            # Map based on standard labels. A translation-only model claims no
-            # modality but its own, whatever generic labels it was published
-            # with — it cannot hold a conversation or read an image.
-            for label in labels:
-                if mt_only and label not in TRANSLATION_LABELS:
-                    continue
-                if label not in self._models:
-                    self._models[label] = m_id
-
-            # If we don't have explicit labels, try fallback heuristics based on id
-            lower_id = m_id.lower()
-            if mt_only:
-                # Name-matched before every other rule: "TranslateGemma" would
-                # otherwise land in chat/tool-calling on the "gemma" keyword and
-                # displace a planner that can actually hold a conversation.
-                self._models.setdefault("translation", m_id)
-            elif "whisper" in lower_id:
-                self._models.setdefault("transcription", m_id)
-                self._models.setdefault("asr", m_id)
-            elif "kokoro" in lower_id or "tts" in lower_id:
-                self._models.setdefault("tts", m_id)
-                self._models.setdefault("text-to-speech", m_id)
-            elif "flux" in lower_id or "sd" in lower_id or "stable-diffusion" in lower_id:
-                self._models.setdefault("image", m_id)
-                self._models.setdefault("edit", m_id)
-            elif "vision" in lower_id or "vl" in lower_id or "qwen-vl" in lower_id:
-                self._models.setdefault("vision", m_id)
-            elif "qwen" in lower_id or "llama" in lower_id or "mistral" in lower_id or "gemma" in lower_id:
-                self._models.setdefault("chat", m_id)
-                self._models.setdefault("tool-calling", m_id)
+            if self._routable(m):
+                self._map_model(m.get("id", ""), m.get("labels", []), self._models, overwrite=False)
 
         # 2. If an Omni model is active, override self._models mapping with its components
         active = self._active_model or self._omni_model_id
@@ -171,7 +168,7 @@ class OmniModelRouter:
                 if m.get("id") == active:
                     components = m.get("components", [])
                     break
-            
+
             if components:
                 # Components *overlay* the global map rather than replacing it.
                 # A Xian collection deliberately bundles only planner/ASR/TTS, so
@@ -183,33 +180,7 @@ class OmniModelRouter:
                 for comp_id in components:
                     comp_info = next((m for m in self._downloaded_models if m.get("id") == comp_id), None)
                     comp_labels = comp_info.get("labels", []) if comp_info else []
-                    mt_only = is_translation_only_model(comp_id)
-
-                    # Map explicit labels
-                    for label in comp_labels:
-                        if mt_only and label not in TRANSLATION_LABELS:
-                            continue
-                        overlay[label] = comp_id
-
-                    # Map heuristics
-                    lower_id = comp_id.lower()
-                    if mt_only:
-                        overlay["translation"] = comp_id
-                    elif "whisper" in lower_id:
-                        overlay["transcription"] = comp_id
-                        overlay["asr"] = comp_id
-                    elif "kokoro" in lower_id or "tts" in lower_id:
-                        overlay["tts"] = comp_id
-                        overlay["text-to-speech"] = comp_id
-                    elif "flux" in lower_id or "sd" in lower_id or "stable-diffusion" in lower_id:
-                        overlay["image"] = comp_id
-                        overlay["edit"] = comp_id
-                    elif "vision" in lower_id or "vl" in lower_id or "qwen-vl" in lower_id:
-                        overlay["vision"] = comp_id
-                    elif "qwen" in lower_id or "llama" in lower_id or "mistral" in lower_id or "gemma" in lower_id:
-                        overlay["chat"] = comp_id
-                        overlay["tool-calling"] = comp_id
-                        overlay["reasoning"] = comp_id
+                    self._map_model(comp_id, comp_labels, overlay, overwrite=True)
 
                 # Fallback for vision inside the collection
                 if "vision" not in overlay and ("chat" in overlay or "tool-calling" in overlay):
@@ -225,6 +196,48 @@ class OmniModelRouter:
             if self._omni_detected:
                 logger.info("Omni model detected: %s", self._omni_model_id)
             logger.debug("OmniModelRouter mapped labels: %s", self._models)
+
+    @staticmethod
+    def _map_model(
+        model_id: str,
+        labels: list[str],
+        target: dict[str, str],
+        *,
+        overwrite: bool,
+    ) -> None:
+        """Record which modalities ``model_id`` can serve, into ``target``.
+
+        ``overwrite`` picks the precedence: the global table is first-wins
+        (whichever model the server listed first keeps the label), while a
+        collection's component overlay is last-wins, because a component was
+        chosen deliberately and must beat whatever else is installed.
+        """
+        if not model_id:
+            return
+        mt_only = is_translation_only_model(model_id)
+
+        def claim(modality: str) -> None:
+            if overwrite or modality not in target:
+                target[modality] = model_id
+
+        # A translation-only model claims no modality but its own, whatever
+        # generic labels it was published with — it cannot hold a conversation
+        # or read an image.
+        for label in labels:
+            if mt_only and label not in TRANSLATION_LABELS:
+                continue
+            claim(label)
+
+        # Models published without useful labels are placed by name.
+        if mt_only:
+            claim("translation")
+            return
+        lower_id = model_id.lower()
+        for keywords, modalities in _HEURISTIC_MODALITIES:
+            if any(kw in lower_id for kw in keywords):
+                for modality in modalities:
+                    claim(modality)
+                return
 
     def discover_sync(self) -> None:
         """Synchronously query the Lemonade server and update the routing table."""
@@ -270,23 +283,16 @@ class OmniModelRouter:
         if not components:
             return None
 
-        if modality == "llm":
-            return self._resolve_component(components, ["tool-calling", "chat", "reasoning"], ["qwen", "llama", "gemma", "mistral"])
-        elif modality == "vision":
-            val = self._resolve_component(components, ["vision"], ["vision", "vl", "qwen-vl"])
-            return val or self.resolve_omni_component(omni_model_id, "llm")
-        elif modality == "translation":
-            return self._resolve_component(components, list(TRANSLATION_LABELS), list(TRANSLATION_KEYWORDS))
-        elif modality == "asr":
-            return self._resolve_component(components, ["transcription", "realtime-transcription", "asr"], ["whisper", "whispercpp"])
-        elif modality == "tts":
-            return self._resolve_component(components, ["tts", "text-to-speech"], ["kokoro", "tts"])
-        elif modality == "image":
-            return self._resolve_component(components, ["image"], ["flux", "sd", "stable-diffusion"])
-        elif modality == "edit":
-            return self._resolve_component(components, ["edit"], ["flux", "sd", "stable-diffusion"])
-        
-        return None
+        matcher = MODALITY_MATCHERS.get(modality)
+        if matcher is None:
+            return None
+        resolved = self._resolve_component(components, list(matcher[0]), list(matcher[1]))
+
+        # A collection without a dedicated vision model still has to answer
+        # vision calls: its planner is vision-capable by construction.
+        if resolved is None and modality == "vision":
+            return self.resolve_omni_component(omni_model_id, "llm")
+        return resolved
 
     def _resolve_component(self, components: list[str], labels_to_match: list[str], fallback_keywords: list[str]) -> str | None:
         # A translation-only model answers to no modality but its own. Without
@@ -350,22 +356,18 @@ class OmniModelRouter:
         # a quality trade-off, so that one stays opt-in.
         return self.backend_preference == BACKEND_AUTO and modality in ("asr", "translation")
 
+    #: Keywords that disqualify a model from a modality it otherwise matches.
+    #: An NPU chat model must not resolve to the Whisper or embedding models
+    #: sitting next to it, which share none of the chat keywords but do carry
+    #: generic labels.
+    _NPU_EXCLUSIONS = {"llm": ("whisper", "embed")}
+
     def _npu_model_for(self, modality: str) -> str | None:
         """Find an NPU-backed model that can serve this modality."""
-        if modality == "llm":
-            labels = ("tool-calling", "chat", "reasoning", "llm")
-            keywords = ("qwen", "llama", "gemma", "mistral", "deepseek")
-            excluded = ("whisper", "embed")
-        elif modality == "asr":
-            labels = ("transcription", "realtime-transcription", "asr")
-            keywords = ("whisper",)
-            excluded = ()
-        elif modality == "translation":
-            labels = TRANSLATION_LABELS
-            keywords = TRANSLATION_KEYWORDS
-            excluded = ()
-        else:
+        if modality not in NPU_MODALITIES:
             return None
+        labels, keywords = MODALITY_MATCHERS[modality]
+        excluded = self._NPU_EXCLUSIONS.get(modality, ())
 
         for m in self._downloaded_models:
             if not self.is_npu_model(m):

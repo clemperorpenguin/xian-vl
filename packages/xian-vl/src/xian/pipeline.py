@@ -62,6 +62,9 @@ from xian.lemonade_client import LemonadeClient
 from xian.omni_router import OmniModelRouter, BACKEND_AUTO
 from xian.tools import OMNI_TOOLS
 
+# Callers pass whichever form they hold: the UI stores language *names*
+# ("Chinese"), while tool calls and search APIs use BCP-47 codes ("zh-CN").
+# Lookups fall back to the input, so a name passes through unchanged.
 _LANG_CODE_TO_NAME = {
     "zh-CN": "Chinese",
     "zh-TW": "Chinese",
@@ -108,6 +111,20 @@ PLACEHOLDER_PAT = re.compile(
 TRUNCATE_REPEATED_PAT = re.compile(r'(.{1,12}?)\1{4,}$')
 
 logger = logging.getLogger(__name__)
+
+
+def strip_thinking(text: str) -> str:
+    """Remove a model's <think> block, closed or still open."""
+    text = THINK_TAGS_PAT.sub('', text)
+    return THINK_OPEN_PAT.sub('', text).strip()
+
+
+def _clamped_score(raw: str) -> float | None:
+    """Parse a confidence score into 0.0-1.0, or None if it isn't a number."""
+    try:
+        return max(0.0, min(1.0, float(raw.strip())))
+    except (TypeError, ValueError):
+        return None
 
 
 def play_audio_simple(audio_bytes: bytes):
@@ -181,11 +198,11 @@ class VLProcessor:
         self._last_phash: str | None = None
         self._last_b64: str | None = None
         self._last_results: list[TranslationResult] | None = None
+        # The settings the cached results were produced under. Reusing results
+        # across a language or mode change would answer in the wrong language,
+        # so the results cache is keyed on these as well as the image hash.
+        self._last_results_key: tuple | None = None
         self.last_stream_results: list[TranslationResult] = []
-
-        # Continuation context for truncated responses
-        self._last_messages: list[dict] | None = None
-        self._last_raw_output: str = ""
 
         # Initialize context manager for stateful interactions
         self.context_manager = ContextManager(max_frames=CONTEXT_FRAME_WINDOW)
@@ -226,8 +243,10 @@ class VLProcessor:
 
     @property
     def local_searcher(self) -> LocalWikiSearcher:
+        # Rebuilt when wiki_dir changes: the searcher caches parsed documents
+        # from the directory it was built for.
         with self._lock:
-            if not hasattr(self, "_local_searcher_cache") or self._local_searcher_cache is None or self._local_searcher_dir != self.wiki_dir:
+            if self._local_searcher_cache is None or self._local_searcher_dir != self.wiki_dir:
                 self._local_searcher_cache = LocalWikiSearcher(wiki_dir=self.wiki_dir)
                 self._local_searcher_dir = self.wiki_dir
             return self._local_searcher_cache
@@ -338,8 +357,6 @@ class VLProcessor:
         return await asyncio.to_thread(_do_load)
 
     def get_recent_text_for_search(self) -> str:
-        if not hasattr(self, "context_manager") or not self.context_manager:
-            return ""
         text = self.context_manager.get_recent_extracted_text()
         if text:
             orig_text, _, _ = self.parse_response(text)
@@ -521,6 +538,39 @@ class VLProcessor:
         image.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
+    async def _prompt_reference_sections(self, rag_query: str | None) -> str:
+        """Glossary and lore-article blocks to append to a translation prompt.
+
+        Returns "" when the wiki has neither, so callers can append blindly.
+        """
+        sections = ""
+
+        glossary = await self.load_glossary_from_wiki()
+        if glossary:
+            lines = "\n".join(f"- {source}: {target}" for source, target in glossary.items())
+            sections += (
+                "\n\nUse the following game terminology glossary for translation mapping:\n"
+                + lines
+            )
+
+        if rag_query:
+            try:
+                results = await self.local_searcher.search(rag_query, num_results=2)
+            except Exception as e:
+                logger.warning("RAG search failed: %s", e)
+                results = []
+            if results:
+                articles = [
+                    "\n\nLORE REFERENCE ARTICLES:\n"
+                    "Use the following background lore articles for context and translation accuracy:"
+                ]
+                for i, res in enumerate(results, 1):
+                    title = res.get("title", "Untitled").replace("[LOCAL WIKI] ", "")
+                    articles.append(f"--- Article {i}: {title} ---\n{res.get('content', '')}\n")
+                sections += "\n".join(articles)
+
+        return sections
+
     async def create_prompt(self, source_lang: str, target_lang: str, mode: str, styles: list[str]) -> tuple[str, str]:
         """Create a terse OCR+Translation prompt tailored by user settings.
         Returns a tuple of (system_prompt, user_prompt).
@@ -544,31 +594,10 @@ class VLProcessor:
             f"- Do NOT write out coordinate grids, row-by-row lists, or long tables in your reasoning."
         )
 
-        # 1. Load Glossary from Wiki
-        glossary = await self.load_glossary_from_wiki()
-        if glossary:
-            glossary_lines = ["\nUse the following game terminology glossary for translation mapping:"]
-            for ch, en in glossary.items():
-                glossary_lines.append(f"- {ch}: {en}")
-            system_prompt += "\n" + "\n".join(glossary_lines)
+        system_prompt += await self._prompt_reference_sections(self.get_recent_text_for_search())
 
-        # 2. Perform RAG Search (using recent frame OCR history)
-        query = self.get_recent_text_for_search()
-        if query:
-            try:
-                results = await self.local_searcher.search(query, num_results=2)
-                if results:
-                    context_parts = ["\nLORE REFERENCE ARTICLES:\nUse the following background lore articles for context and translation accuracy:"]
-                    for i, res in enumerate(results, 1):
-                        title = res.get("title", "Untitled").replace("[LOCAL WIKI] ", "")
-                        content = res.get("content", "")
-                        context_parts.append(f"--- Article {i}: {title} ---\n{content}\n")
-                    system_prompt += "\n" + "\n".join(context_parts)
-            except Exception as e:
-                logger.warning("RAG search in create_prompt failed: %s", e)
-
-        # 3. Inject session memory so recurring names stay consistent with
-        #    how they were already translated earlier in the session.
+        # Inject session memory so recurring names stay consistent with
+        # how they were already translated earlier in the session.
         state_block = self.build_game_state_block(token_budget=GAME_STATE_OCR_TOKEN_BUDGET)
         if state_block:
             system_prompt += (
@@ -628,9 +657,7 @@ class VLProcessor:
 
         Returns (original_text, translated_text, confidence_score).
         """
-        # Strip thinking tags if present
-        cleaned = THINK_TAGS_PAT.sub('', response).strip()
-        cleaned = THINK_OPEN_PAT.sub('', cleaned).strip()
+        cleaned = strip_thinking(response)
 
         # Check if the response contains a JSON block
         json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
@@ -650,20 +677,17 @@ class VLProcessor:
         confidence = 0.85
         conf_matches = list(CONFIDENCE_PAT.finditer(cleaned))
         if conf_matches:
-            try:
-                confidence = float(conf_matches[-1].group(1).strip())
-                confidence = max(0.0, min(1.0, confidence))  # clamp between 0.0 and 1.0
-            except ValueError:
-                pass
+            scored = _clamped_score(conf_matches[-1].group(1))
+            if scored is not None:
+                confidence = scored
 
-        # Split on double-newline for fallback parsing (confidence only)
+        # A reply with no CONFIDENCE marker may still be the bare 3-part layout,
+        # in which case the last block is the score. Parsed once here; the
+        # unmarked-layout fallback at the end of this method reuses it.
         parts = DOUBLE_NEWLINE_PAT.split(cleaned, maxsplit=2)
-        if not conf_matches and len(parts) == 3:
-            try:
-                val = float(parts[2].strip())
-                confidence = max(0.0, min(1.0, val))
-            except ValueError:
-                pass
+        parts_score = _clamped_score(parts[2]) if len(parts) == 3 else None
+        if not conf_matches and parts_score is not None:
+            confidence = parts_score
 
         # Extract ORIGINAL and TRANSLATED sections using a highly resilient regex.
         orig_match = None
@@ -702,13 +726,9 @@ class VLProcessor:
                 
             return original_text, translation, confidence
 
-        if len(parts) == 3:
-            try:
-                val = float(parts[2].strip())
-                confidence = max(0.0, min(1.0, val))
-                return parts[0].strip(), parts[1].strip(), confidence
-            except ValueError:
-                pass
+        # No ORIGINAL/TRANSLATED markers at all: accept the bare 3-part layout.
+        if parts_score is not None:
+            return parts[0].strip(), parts[1].strip(), parts_score
 
         return "", "", confidence
 
@@ -733,10 +753,12 @@ class VLProcessor:
         self.context_manager.add_frame(image)
         system_prompt, user_prompt = await self.create_prompt(source_lang, target_lang, mode, styles)
 
-        # Check cache
+        # Check cache. The image may be byte-identical to the last one and still
+        # need re-translating: the answer depends on the languages and mode too.
+        results_key = (source_lang, target_lang, mode, tuple(styles))
         b64_image, was_cached = self._get_or_encode_image(image)
         with self._lock:
-            cached_results = self._last_results
+            cached_results = self._last_results if self._last_results_key == results_key else None
         if was_cached and cached_results is not None:
             logger.info("Returning cached translation result (identical frame) via stream")
             with self._lock:
@@ -766,6 +788,10 @@ class VLProcessor:
         for attempt in range(max_attempts):
             accumulated = ""
             loop_detected = False
+            last_loop_check = 0
+            # Seeded here, not in the chunk loop: a stream that yields no content
+            # chunks at all still reaches the final yield below.
+            orig = trans = ""
 
             try:
                 # Escalate parameters on retry to break out of loop
@@ -828,14 +854,21 @@ class VLProcessor:
                         last_log_time = current_time
                         last_log_len = len(accumulated)
 
-                    # Check for repetition loop every 60+ chars
-                    if self._detect_repetition_loop(accumulated):
+                    # Loop detection rescans the whole accumulated text, so
+                    # running it per chunk is quadratic over a long stream.
+                    # Every 64 new characters is well inside the shortest
+                    # pattern the detector can recognise.
+                    if len(accumulated) - last_loop_check < 64:
+                        loop_detected = False
+                    else:
+                        last_loop_check = len(accumulated)
+                        loop_detected = self._detect_repetition_loop(accumulated)
+
+                    if loop_detected:
                         logger.warning(
                             "Repetition loop detected at %d chars (attempt %d/%d), aborting stream. Tail: %r",
                             len(accumulated), attempt + 1, max_attempts, accumulated[-80:],
                         )
-                        loop_detected = True
-                        # Cancel the stream
                         await stream.response.aclose()
                         break
 
@@ -872,9 +905,8 @@ class VLProcessor:
 
                 with self._lock:
                     self._last_results = results
+                    self._last_results_key = results_key
                     self.last_stream_results = results
-                    self._last_messages = messages
-                    self._last_raw_output = accumulated
 
                 extracted = [r.original_text for r in results]
                 self.context_manager.update_last_frame_data("\n".join(extracted), results)
@@ -952,11 +984,8 @@ class VLProcessor:
                     last_finish = chunk.choices[0].finish_reason
                 yield partial_output + accumulated, last_finish, None
 
-            # Update stored context for potential further continuations
-            with self._lock:
-                self._last_raw_output = partial_output + accumulated
-                self._last_messages = continuation_messages
-
+            # The continuation context travels in this final yield; the caller
+            # holds it (on the bubble) for a possible further continuation.
             yield partial_output + accumulated, last_finish, (continuation_messages, partial_output + accumulated)
 
         except asyncio.TimeoutError:
@@ -986,29 +1015,7 @@ class VLProcessor:
             f"- Do NOT write long explanations or list translations repeatedly in your reasoning."
         )
 
-        # 1. Load Glossary from Wiki
-        glossary = await self.load_glossary_from_wiki()
-        if glossary:
-            glossary_lines = ["\nUse the following game terminology glossary for translation mapping:"]
-            for ch, en in glossary.items():
-                glossary_lines.append(f"- {ch}: {en}")
-            system_prompt += "\n" + "\n".join(glossary_lines)
-
-        # 2. Perform RAG Search (using transcript as query)
-        if transcript:
-            try:
-                results = await self.local_searcher.search(transcript, num_results=2)
-                if results:
-                    context_parts = ["\nLORE REFERENCE ARTICLES:\nUse the following background lore articles for context and translation accuracy:"]
-                    for i, res in enumerate(results, 1):
-                        title = res.get("title", "Untitled").replace("[LOCAL WIKI] ", "")
-                        content = res.get("content", "")
-                        context_parts.append(f"--- Article {i}: {title} ---\n{content}\n")
-                    system_prompt += "\n" + "\n".join(context_parts)
-            except Exception as e:
-                logger.warning("RAG search in create_cinematic_prompt failed: %s", e)
-
-        return system_prompt
+        return system_prompt + await self._prompt_reference_sections(transcript)
 
     async def process_cinematic(self, image_data: bytes | Image.Image, transcript: str, target_lang: str, styles: list[str], b64_image: str | None = None, image: Image.Image | None = None, source_lang: str = "Chinese", audio_bytes: bytes | None = None) -> list[TranslationResult]:
         """
@@ -1031,7 +1038,6 @@ class VLProcessor:
         ]
 
         if audio_bytes:
-            import base64
             b64_audio = base64.b64encode(audio_bytes).decode("utf-8")
             content_list.append({
                 "type": "input_audio",
@@ -1152,14 +1158,64 @@ class VLProcessor:
             ch0 = response.choices[0] if response.choices else None
             translated = ch0.message.content or "" if ch0 else ""
             # Strip thinking tags if present
-            translated = re.sub(r'<think>.*?</think>', '', translated, flags=re.DOTALL).strip()
-            translated = re.sub(r'<think>.*$', '', translated, flags=re.DOTALL).strip()
+            translated = strip_thinking(translated)
             if translated:
                 logger.info("Translated query '%s' → '%s'", query, translated)
                 return translated
         except Exception as e:
             logger.warning("Query translation failed: %s. Using original.", e)
         return query
+
+    async def _run_knowledge_search(self, query: str, language: str, source_lang: str) -> str:
+        """Search the local wiki and the web, and render the hits as prompt text.
+
+        Web failures are absorbed: the local wiki alone is still a useful answer,
+        and a search that raises would otherwise abort the chat turn.
+        """
+        local_results = await self.local_searcher.search(query, num_results=3)
+
+        web_results = []
+        searcher = None
+        try:
+            searcher = WebSearcher()
+            lang_name = _LANG_CODE_TO_NAME.get(source_lang, source_lang)
+            translated_query = await self.translate_query(query, lang_name)
+            web_results = await searcher.dual_search(
+                query=query,
+                target_lang=language,
+                translated_query=translated_query,
+                source_lang=source_lang,
+            )
+        except Exception as e:
+            logger.warning("Web search failed: %s. Relying on local wiki.", e)
+        finally:
+            if searcher is not None:
+                await searcher.close()
+
+        if web_results:
+            content_lines = []
+            for r in web_results:
+                title = r.get("title", "No Title")
+                href = markdown_http_https_url_or_none(r.get("url", ""))
+                if href:
+                    content_lines.append(f"### [{title}]({href})")
+                else:
+                    content_lines.append(
+                        f"### {title}\n*(source URL omitted — unsupported or disallowed scheme)*"
+                    )
+                content_lines.append(r.get("content", ""))
+            WikiCompiler(wiki_dir=self.wiki_dir).compile(
+                query, "\n".join(content_lines), metadata={"sources": web_results}
+            )
+
+        summary_parts = []
+        for i, r in enumerate((local_results + web_results)[:6], 1):
+            summary_parts.append(
+                f"--- Source {i}: {r.get('title', 'Untitled')} ---\n"
+                f"URL: {r.get('url', '')}\n"
+                f"{r.get('content', '')}\n"
+            )
+        return "\n".join(summary_parts)
 
     @staticmethod
     def sanitize_tool_tags(message: str) -> str:
@@ -1432,58 +1488,11 @@ class VLProcessor:
                                 tool_result = {"status": "success", "analysis": analysis}
                                 
                             elif func_name in ("perform_web_search", "search_knowledge"):
-                                query = args.get("query", "")
-                                language = args.get("language", "zh-CN")
-                                
-                                local_searcher = LocalWikiSearcher(wiki_dir=self.wiki_dir)
-                                local_results = local_searcher.search(query, num_results=3)
-
-                                web_results = []
-                                searcher = None
-                                try:
-                                    searcher = WebSearcher()
-                                    lang_name = _LANG_CODE_TO_NAME.get(source_lang, source_lang)
-                                    translated_query = await self.translate_query(query, lang_name)
-                                    web_results = await searcher.dual_search(
-                                        query=query,
-                                        target_lang=language,
-                                        translated_query=translated_query,
-                                        source_lang=source_lang,
-                                    )
-                                except Exception as e:
-                                    logger.warning("Web search failed: %s. Relying on local wiki.", e)
-                                finally:
-                                    if searcher is not None:
-                                        await searcher.close()
-
-                                results = local_results + web_results
-
-                                if web_results:
-                                    compiler = WikiCompiler(wiki_dir=self.wiki_dir)
-                                    content_lines = []
-                                    for r in web_results:
-                                        title = r.get("title", "No Title")
-                                        href = markdown_http_https_url_or_none(r.get("url", ""))
-                                        if href:
-                                            content_lines.append(f"### [{title}]({href})")
-                                        else:
-                                            content_lines.append(
-                                                f"### {title}\n*(source URL omitted — unsupported or disallowed scheme)*"
-                                            )
-                                        content_lines.append(r.get("content", ""))
-                                    compiler.compile(query, "\n".join(content_lines), metadata={"sources": web_results})
-
-                                summary_parts = []
-                                for i, r in enumerate(results[:6], 1):
-                                    title = r.get('title', 'Untitled')
-                                    content = r.get('content', '')
-                                    url = r.get('url', '')
-                                    summary_parts.append(
-                                        f"--- Source {i}: {title} ---\n"
-                                        f"URL: {url}\n"
-                                        f"{content}\n"
-                                    )
-                                summary = "\n".join(summary_parts)
+                                summary = await self._run_knowledge_search(
+                                    args.get("query", ""),
+                                    args.get("language", "zh-CN"),
+                                    source_lang,
+                                )
                                 tool_result = {"status": "success", "search_results": summary}
                             else:
                                 tool_result = {"error": f"Unknown function: {func_name}"}
@@ -1525,55 +1534,7 @@ class VLProcessor:
 
                     if query:
                         logger.info("Agent requested search for: %s (lang: %s, source: %s)", query, language, source_lang)
-                        local_searcher = LocalWikiSearcher(wiki_dir=self.wiki_dir)
-                        local_results = local_searcher.search(query, num_results=3)
-
-                        web_results = []
-                        searcher = None
-                        try:
-                            searcher = WebSearcher()
-                            lang_name = _LANG_CODE_TO_NAME.get(source_lang, source_lang)
-                            translated_query = await self.translate_query(query, lang_name)
-                            web_results = await searcher.dual_search(
-                                query=query,
-                                target_lang=language,
-                                translated_query=translated_query,
-                                source_lang=source_lang,
-                            )
-                        except Exception as e:
-                            logger.warning("Web search failed: %s. Relying on local wiki.", e)
-                        finally:
-                            if searcher is not None:
-                                await searcher.close()
-
-                        results = local_results + web_results
-
-                        if web_results:
-                            compiler = WikiCompiler(wiki_dir=self.wiki_dir)
-                            content_lines = []
-                            for r in web_results:
-                                title = r.get("title", "No Title")
-                                href = markdown_http_https_url_or_none(r.get("url", ""))
-                                if href:
-                                    content_lines.append(f"### [{title}]({href})")
-                                else:
-                                    content_lines.append(
-                                        f"### {title}\n*(source URL omitted — unsupported or disallowed scheme)*"
-                                    )
-                                content_lines.append(r.get("content", ""))
-                            compiler.compile(query, "\n".join(content_lines), metadata={"sources": web_results})
-
-                        summary_parts = []
-                        for i, r in enumerate(results[:6], 1):
-                            title = r.get('title', 'Untitled')
-                            content = r.get('content', '')
-                            url = r.get('url', '')
-                            summary_parts.append(
-                                f"--- Source {i}: {title} ---\n"
-                                f"URL: {url}\n"
-                                f"{content}\n"
-                            )
-                        summary = "\n".join(summary_parts)
+                        summary = await self._run_knowledge_search(query, language, source_lang)
 
                         openai_messages.append({
                             "role": "assistant",
@@ -1593,8 +1554,7 @@ class VLProcessor:
                 # No tool calls or match, break out of loop
                 break
 
-            cleaned_output = re.sub(r'<think>.*?</think>', '', final_output, flags=re.DOTALL).strip()
-            cleaned_output = re.sub(r'<think>.*$', '', cleaned_output, flags=re.DOTALL).strip()
+            cleaned_output = strip_thinking(final_output)
             cleaned_output = re.sub(r'<tool_call>.*?</tool_call>', '', cleaned_output, flags=re.DOTALL).strip()
 
             # Add assistant message to context

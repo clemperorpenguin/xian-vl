@@ -30,7 +30,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any  # Any has no builtin equivalent
+from typing import Any
 
 from PIL import Image
 

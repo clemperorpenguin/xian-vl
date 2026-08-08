@@ -118,7 +118,13 @@ def main() -> None:
     start_lemond_if_embedded()
 
     # Bound to a name so the app object isn't garbage-collected during exec().
-    xian = XianApp()  # noqa: F841
+    xian = XianApp()
+    # XianApp is never shown, so it never receives a closeEvent on its own — and
+    # tray Quit calls QApplication.quit(), which leaves the event loop without
+    # closing anything. Without this hook the whole teardown in XianApp.closeEvent
+    # (flushing session memory, joining worker threads, stopping the async engine)
+    # would be skipped on every exit.
+    app.aboutToQuit.connect(xian.close)
 
     exit_code = app.exec()
     

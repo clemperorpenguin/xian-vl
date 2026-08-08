@@ -104,6 +104,37 @@ def voice_for_language(language: str) -> str:
     return "af_heart"
 
 
+_JSON_TRANSLATE_SYSTEM_PROMPT = (
+    "You are a translation API. You MUST respond with valid JSON ONLY. "
+    "Do NOT include markdown formatting, backticks, or any other text outside the JSON object. "
+    "The JSON object must have exactly one key: 'translation'."
+)
+
+
+async def _json_translate(processor, text: str, source_lang: str, target_lang: str,
+                          *, timeout: float) -> str:
+    """Ask the LLM for a one-key JSON translation; return its raw reply.
+
+    Callers parse with :func:`extract_translation_json` and handle their own
+    failures, because what to show on a failure differs per surface.
+    """
+    response = await asyncio.wait_for(
+        processor.client.chat.completions.create(
+            model=processor.get_model_name(),
+            messages=[
+                {"role": "system", "content": _JSON_TRANSLATE_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Translate from {source_lang} to {target_lang}:\n\n{text}"},
+            ],
+            max_tokens=processor.config.max_tokens,
+            temperature=0.1,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        timeout=timeout,
+    )
+    choice = response.choices[0] if response.choices else None
+    return (choice.message.content or "").strip() if choice else ""
+
+
 def _queue_put_drop_oldest(q: "asyncio.Queue", item) -> None:
     """Put *item* on a bounded queue, discarding the oldest entry if it is full.
 
@@ -125,9 +156,9 @@ def _queue_put_drop_oldest(q: "asyncio.Queue", item) -> None:
 class InferenceWorker(QThread):
     """Run a single VLM inference off the main thread.
 
-    Accepts image bytes and a target language, calls VLProcessor.process_frame(),
-    and emits the list of TranslationResult objects when done.  For chat messages
-    it calls VLProcessor.process_chat() and emits the response string.
+    Streams ``VLProcessor.stream_frame()``, emitting partial text as it arrives
+    and the list of ``TranslationResult`` objects at the end. For chat messages
+    it calls ``VLProcessor.process_chat()`` and emits the response string.
     """
 
     translation_done = pyqtSignal(list, str)
@@ -424,37 +455,19 @@ class ChatTranslationWorker(QThread):
         self.source_lang = source_lang
 
     async def _run_async(self):
-        system_prompt = (
-            "You are a translation API. You MUST respond with valid JSON ONLY. "
-            "Do NOT include markdown formatting, backticks, or any other text outside the JSON object. "
-            "The JSON object must have exactly one key: 'translation'."
-        )
-        user_prompt = f"Translate from {self.target_lang} to {self.source_lang}:\n\n{self.text}"
-        
+        # Reversed on purpose: "How do I say this?" translates what the player
+        # typed in their own (target) language into the game's language.
         try:
-            response = await asyncio.wait_for(
-                self.processor.client.chat.completions.create(
-                    model=self.processor.get_model_name(),
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    max_tokens=self.processor.config.max_tokens,
-                    temperature=0.1,
-                    extra_body={"chat_template_kwargs": {"enable_thinking": False}}
-                ),
+            final_output = await _json_translate(
+                self.processor, self.text, self.target_lang, self.source_lang,
                 timeout=CHAT_TIMEOUT_SECONDS,
             )
-            
-            choice = response.choices[0] if response.choices else None
-            final_output = (choice.message.content or "").strip() if choice else ""
-            
             translation = extract_translation_json(final_output)
             if translation:
                 return translation
-                
+
             raise ValueError("Failed to parse translation from model output.")
-            
+
         except Exception as e:
             logger.error("Error during chat translation inference: %s", e)
             raise e
@@ -597,7 +610,7 @@ class RaidWorker(QThread):
                     ),
                     timeout=15.0,
                 )
-            except (asyncio.TimeoutError, Exception) as e:
+            except Exception as e:
                 logger.warning("Raid Mode transcription failed or timed out: %s", e)
                 err_msg = str(e).lower()
                 if "500" in err_msg or "internal server error" in err_msg or "model_load_error" in err_msg:
@@ -616,30 +629,12 @@ class RaidWorker(QThread):
                 continue
 
             self.progress.emit("Translating text...")
-            system_prompt = (
-                "You are a translation API. You MUST respond with valid JSON ONLY. "
-                "Do NOT include markdown formatting, backticks, or any other text outside the JSON object. "
-                "The JSON object must have exactly one key: 'translation'."
-            )
-            user_prompt = f"Translate from {self.source_lang} to {self.target_lang}:\n\n{transcript}"
-
             try:
-                response = await asyncio.wait_for(
-                    self.processor.client.chat.completions.create(
-                        model=self.processor.get_model_name(),
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt}
-                        ],
-                        max_tokens=self.processor.config.max_tokens,
-                        temperature=0.1,
-                        extra_body={"chat_template_kwargs": {"enable_thinking": False}}
-                    ),
+                final_output = await _json_translate(
+                    self.processor, transcript, self.source_lang, self.target_lang,
                     timeout=CHAT_AUX_TIMEOUT_SECONDS,
                 )
-                choice = response.choices[0] if response.choices else None
-                final_output = (choice.message.content or "").strip() if choice else ""
-            except (asyncio.TimeoutError, Exception) as e:
+            except Exception as e:
                 logger.warning("Raid Mode translation failed or timed out: %s", e)
                 self.progress.emit(f"Translation failed ({e}), listening...")
                 continue

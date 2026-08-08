@@ -195,8 +195,9 @@ class LemonadeClient:
             payload["model"] = model
         resp = await self._client.post("/v1/audio/speech", json=payload)
         if not resp.is_success:
-            raise RuntimeError(f"Lemonade TTS failed (500). Server said: {resp.text}")
-        resp.raise_for_status()
+            # Reported here rather than via raise_for_status() so the server's
+            # own explanation reaches the log — it is usually the useful part.
+            raise RuntimeError(f"Lemonade TTS failed ({resp.status_code}): {resp.text}")
         return resp.content
 
     async def generate_image(

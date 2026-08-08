@@ -231,17 +231,6 @@ async def install_collection(client, tier: CollectionTier | str) -> str:
     return collection.name
 
 
-async def get_collection_status(client, tier: CollectionTier | str) -> dict[str, bool]:
-    """Map each component of a tier to whether it is currently loaded."""
-    collection = get_collection(tier)
-    try:
-        health = await client.health()
-        loaded = set(health.get("all_models_loaded") or health.get("loaded_models") or [])
-    except Exception:
-        loaded = set()
-    return {name: name in loaded for name in collection.components}
-
-
 def _main(argv: list[str] | None = None) -> int:
     """``python -m xian.collections <tier>`` prints a tier's /v1/pull body.
 

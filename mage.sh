@@ -112,23 +112,22 @@ install_build_deps() {
     echo "── Detecting Linux distribution family… ──"
     local distro=""
     if [[ -f /etc/os-release ]]; then
-        # Source /etc/os-release in a subshell to keep the variables local
+        # Sourced in a subshell so ID/ID_LIKE don't leak into this shell. POSIX
+        # `case` rather than bash's [[ =~ ]]: /bin/sh is dash on the Debian
+        # family, which would syntax-error on a bashism here — precisely on the
+        # distros this is meant to detect.
         distro=$(sh -c '
             . /etc/os-release
-            ID_NORM=$(echo "${ID:-}" | tr "[:upper:]" "[:lower:]")
-            ID_LIKE_NORM=$(echo "${ID_LIKE:-}" | tr "[:upper:]" "[:lower:]")
-            
-            if [[ "$ID_NORM" =~ (ubuntu|debian|pop|mint) ]] || [[ "$ID_LIKE_NORM" =~ (ubuntu|debian) ]]; then
-                echo "debian"
-            elif [[ "$ID_NORM" =~ (fedora|rhel|centos|rocky|almalinux) ]] || [[ "$ID_LIKE_NORM" =~ (fedora|rhel) ]]; then
-                echo "fedora"
-            elif [[ "$ID_NORM" =~ (opensuse|sles) ]] || [[ "$ID_LIKE_NORM" =~ (suse|opensuse) ]]; then
-                echo "opensuse"
-            elif [[ "$ID_NORM" =~ (arch|manjaro) ]] || [[ "$ID_LIKE_NORM" =~ (arch) ]]; then
-                echo "arch"
-            else
-                echo "unknown"
-            fi
+            ids=$(printf "%s %s" "${ID:-}" "${ID_LIKE:-}" | tr "[:upper:]" "[:lower:]")
+            for id in $ids; do
+                case "$id" in
+                    ubuntu|debian|pop|mint|raspbian) echo "debian"; exit ;;
+                    fedora|rhel|centos|rocky|almalinux) echo "fedora"; exit ;;
+                    opensuse*|sles|suse) echo "opensuse"; exit ;;
+                    arch|manjaro|endeavouros) echo "arch"; exit ;;
+                esac
+            done
+            echo "unknown"
         ')
     fi
 
