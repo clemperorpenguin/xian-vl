@@ -33,6 +33,13 @@ DEFAULT_API_URL = os.environ.get("XIAN_API_URL", "http://localhost:13305/v1")
 # choice, it is just not what we install.
 DEFAULT_MODEL = "Xian-Ultra"
 DEFAULT_COLLECTION_TIER = "ultra"
+
+# A single vision model, offered on first run as the small alternative to a
+# full collection. It covers screen translation and nothing else — no speech,
+# no TTS — which makes it the quick way to try the overlay without waiting on
+# several gigabytes of download.
+SINGLE_MODEL_NAME = "Qwen3.5-0.8B-GGUF"
+SINGLE_MODEL_SIZE_GB = 0.8
 DEFAULT_MAX_TOKENS = 2048
 MODE_MAX_TOKENS: dict[str, int] = {
     "Game": 4096,

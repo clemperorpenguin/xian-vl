@@ -686,5 +686,33 @@
   "model.loading": {
     "value": "⏳ The model is still loading — please wait a moment and try again.",
     "context": "Shown when a translation is attempted before the model has finished loading"
+  },
+  "model_choice.title": {
+    "value": "Xian — Choose your models",
+    "context": "Window title for the first-run model download picker"
+  },
+  "model_choice.intro": {
+    "value": "MAGE needs a model before it can translate. Pick what to download — you can change this later in Settings.",
+    "context": "Introductory text at the top of the first-run model picker"
+  },
+  "model_choice.option.collection": {
+    "value": "{name} — {size} GB",
+    "context": "A model collection option. {name} is e.g. Xian-Ultra, {size} is its download size in gigabytes"
+  },
+  "model_choice.option.single": {
+    "value": "{name} — {size} GB",
+    "context": "The single translation-only model option. {name} is the model id, {size} its size in gigabytes"
+  },
+  "model_choice.single.detail": {
+    "value": "Screen translation only — no speech recognition or text-to-speech. The quickest way to try the overlay.",
+    "context": "Explains what the single-model option leaves out"
+  },
+  "model_choice.recommended": {
+    "value": "(recommended for this machine)",
+    "context": "Marks the collection that suits the detected system memory"
+  },
+  "model_choice.note": {
+    "value": "Downloading starts right away and continues in the background.",
+    "context": "Note below the options warning that the download begins immediately"
   }
 }

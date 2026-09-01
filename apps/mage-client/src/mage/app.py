@@ -818,15 +818,20 @@ class XianApp(QWidget):
         )
 
     def _seed_collection_tier(self):
-        """Choose a collection tier on first run, from installed memory.
+        """Ask, on first run, which models to download.
 
-        Only the *first* run: once a tier is stored, the user's choice stands.
-        Total RAM is a proxy — on a discrete-GPU machine VRAM is what actually
-        binds — but it is the one figure available before the server has been
-        contacted, and Settings has a picker for when it guesses low.
+        Only the *first* run: once a tier or model is stored, the user's choice
+        stands. Installed memory picks the dialog's default — it is the one
+        figure available before the server has been contacted — but it no
+        longer decides on its own. It used to, and a machine with plenty of RAM
+        would silently start fetching 25.8 GB.
+
+        Declining the dialog is not offered: MAGE cannot translate without a
+        model, so the choice is which one, not whether.
         """
-        if self.settings.value(KEY_COLLECTION_TIER):
+        if self.settings.value(KEY_COLLECTION_TIER) or self.settings.value(KEY_API_MODEL):
             return
+
         memory_gb = 0.0
         try:
             import psutil
@@ -835,15 +840,40 @@ class XianApp(QWidget):
         except Exception as e:  # psutil missing, or an unreadable /proc
             logger.debug("Could not read system memory for tier selection: %s", e)
 
-        tier = recommended_tier(memory_gb) if memory_gb else constants.DEFAULT_COLLECTION_TIER
-        collection = get_collection(tier)
-        logger.info(
-            "First run: %.0f GB of memory detected, choosing collection %s.",
-            memory_gb, collection.name,
+        recommended = str(
+            recommended_tier(memory_gb) if memory_gb else constants.DEFAULT_COLLECTION_TIER
         )
-        self.settings.setValue(KEY_COLLECTION_TIER, str(tier))
-        if not self.settings.value(KEY_API_MODEL):
-            self.settings.setValue(KEY_API_MODEL, collection.name)
+
+        tier, model = self._ask_for_models(recommended, memory_gb)
+
+        if tier is not None:
+            self.settings.setValue(KEY_COLLECTION_TIER, tier)
+        self.settings.setValue(KEY_API_MODEL, model)
+        # Only the settings are written: this runs before ``self.processor``
+        # exists, and the processor is constructed from KEY_API_MODEL on the
+        # next line of __init__, so it picks the choice up from here.
+        logger.info("First run: chose %s (tier %s)", model, tier or "none")
+
+    def _ask_for_models(self, recommended: str, memory_gb: float) -> tuple[str | None, str]:
+        """Show the first-run picker; fall back to the recommendation if it fails.
+
+        A dialog that cannot be shown — no display, a Qt problem — must not
+        stop the app starting, so the old memory-based behaviour stands in.
+        """
+        try:
+            from mage.ui.model_choice_dialog import ModelChoiceDialog
+
+            dialog = ModelChoiceDialog(recommended)
+            dialog.exec()
+            return dialog.chosen_tier, dialog.chosen_model
+        except Exception as e:
+            logger.warning("Model picker unavailable (%s); using the recommendation", e)
+            collection = get_collection(recommended)
+            logger.info(
+                "First run: %.0f GB of memory detected, choosing collection %s.",
+                memory_gb, collection.name,
+            )
+            return recommended, collection.name
 
     def _init_session_memory(self):
         """Open the durable play-session log and hand it to the processor.
