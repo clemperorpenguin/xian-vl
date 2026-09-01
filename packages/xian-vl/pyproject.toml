@@ -26,6 +26,9 @@ ocr = ["onnxruntime>=1.17", "rapidocr-onnxruntime>=1.3"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "benchmark: measures the live pipeline against the real screenshot corpus",
+]
 
 [build-system]
 requires = ["hatchling"]
