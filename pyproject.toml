@@ -25,6 +25,9 @@ testpaths = [
 ]
 addopts = "-q --import-mode=importlib"
 asyncio_mode = "auto"
+markers = [
+    "benchmark: measures the live pipeline against the real screenshot corpus",
+]
 # The ad-hoc client tests live next to source as test_*.py; only pick those up,
 # not the runnable scripts.
 python_files = ["test_*.py"]

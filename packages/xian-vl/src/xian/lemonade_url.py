@@ -21,7 +21,11 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
+import os
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_lemonade_api_base_url(raw: str) -> str:
@@ -48,12 +52,6 @@ def is_loopback_http_api_host(host: str | None) -> bool:
     except ValueError:
         return False
     return bool(ip.is_loopback)
-
-
-import logging
-import os
-
-logger = logging.getLogger(__name__)
 
 
 def should_warn_http_to_non_loopback(url: str) -> bool:

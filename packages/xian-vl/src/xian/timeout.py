@@ -16,39 +16,14 @@
 #
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
-"""Timeout-aware inference wrapper with AccuracyScore generation.
+"""Deadlines for the inference calls, by what kind of work they are.
 
-Wraps async inference calls with ``asyncio.wait_for()`` and returns a
-partial result with a degraded :class:`~shared_types.models.AccuracyScore`
-when the deadline fires.
-
-Default timeouts for :func:`run_with_timeout` (text-style deadlines; not used for VLM):
-
-* Game / Web / Document: conservative values if you wire ``run_with_timeout`` to mode.
-
-Vision (VLM) OCR + translation needs much longer; see :data:`VISION_TIMEOUTS` and
-:func:`vision_timeout_for_mode`.
+Whole-frame vision work gets far longer than a chat sub-request: a local VLM
+routinely needs tens of seconds on a large image or a cold model load, while a
+query translation that takes 30 s has already failed in practice.
 """
 
 from __future__ import annotations
-
-import asyncio
-import logging
-from typing import Any, Coroutine, TypeVar
-
-from shared_types.models import AccuracyScore
-
-logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
-
-# ── Default Timeouts by Mode ─────────────────────────────────────────
-
-MODE_TIMEOUTS: dict[str, float] = {
-    "Game": 3.0,
-    "Web": 5.0,
-    "Document": 10.0,
-}
 
 # Whole-frame VLM calls (screenshot → OCR + translate). Lemonade / local models
 # routinely need tens of seconds, especially on first load or large images.
@@ -65,44 +40,6 @@ CHAT_TIMEOUT_SECONDS = 120.0
 CHAT_AUX_TIMEOUT_SECONDS = 30.0
 
 
-def timeout_for_mode(mode: str) -> float:
-    """Return the default timeout (seconds) for a translation mode."""
-    return MODE_TIMEOUTS.get(mode, 5.0)
-
-
 def vision_timeout_for_mode(mode: str) -> float:
     """Return the asyncio deadline (seconds) for a vision-language completion."""
     return VISION_TIMEOUTS.get(mode, 120.0)
-
-
-async def run_with_timeout(
-    coro: Coroutine[Any, Any, T],
-    timeout_seconds: float,
-    *,
-    partial_result: T | None = None,
-) -> tuple[T, AccuracyScore]:
-    """Execute *coro* under a deadline.
-
-    Returns
-    -------
-    (result, accuracy)
-        If the coroutine finishes in time, ``accuracy.reason`` is
-        ``"full_pass"`` with a score of 1.0.  On timeout, the
-        *partial_result* fallback is returned with a degraded score.
-
-    Raises
-    ------
-    Exception
-        Any non-timeout exception from *coro* propagates unchanged.
-    """
-    try:
-        result = await asyncio.wait_for(coro, timeout=timeout_seconds)
-        return result, AccuracyScore(score=1.0, reason="full_pass")
-    except asyncio.TimeoutError:
-        logger.warning(
-            "Inference timed out after %.1f s — returning partial result.",
-            timeout_seconds,
-        )
-        if partial_result is None:
-            raise
-        return partial_result, AccuracyScore(score=0.3, reason="timeout")

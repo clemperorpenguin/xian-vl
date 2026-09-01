@@ -107,6 +107,31 @@ OMNI_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "search_knowledge",
+            "description": (
+                "Search the local lore wiki and the web for facts about games, lore, "
+                "characters, or the real world. Use this instead of answering from memory."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What to search for, in the language most likely to have sources.",
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "BCP-47 code for the results to prefer, e.g. zh-CN or en-US.",
+                        "default": "zh-CN",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "analyze_image",
             "description": "Analyze an image or screenshot to answer questions about its content.",
             "parameters": {

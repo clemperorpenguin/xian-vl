@@ -12,7 +12,7 @@ same prompt approach used by MAGE.
 - **Context-aware**: uses the page title + surrounding section as reference, translating only your selection. (e.g. Spanish *banco* → "bench" in a park sentence, "bank" in a finance sentence.)
 - **Non-destructive overlay**: read-only page text shows the translation in a bubble with **Show original** / **Copy**; the page is never overwritten.
 - **Replace-in-place for inputs**: in an editable `<input>`/`<textarea>`, the selection is replaced so you can translate text you are composing.
-- **Lemonade integration**: OpenAI-compatible, defaults to the canonical `LMX-Omni-5.5B-Lite` model; reasoning (`<think>`) output is stripped automatically.
+- **Lemonade integration**: OpenAI-compatible, defaults to the canonical `Xian-Ultra` collection; reasoning (`<think>`) output is stripped automatically.
 - **Configurable**: server URL, source/target language, and optional style terms.
 
 ## Browser support

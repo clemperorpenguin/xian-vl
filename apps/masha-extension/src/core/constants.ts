@@ -29,8 +29,14 @@
 /** Default OpenAI-compatible Lemonade base URL (already includes ``/v1``). */
 export const DEFAULT_LEMONADE_URL = 'http://localhost:13305/v1';
 
-/** Canonical default model. Mirror of shared_types ``DEFAULT_MODEL``. */
-export const DEFAULT_MODEL = 'LMX-Omni-5.5B-Lite';
+/**
+ * Canonical default model. Mirror of shared_types ``DEFAULT_MODEL``.
+ *
+ * A Xian collection registered by MAGE (see ``xian.collections``). Masha does
+ * not install it — if it is absent the user picks a model in the options page,
+ * as they always could.
+ */
+export const DEFAULT_MODEL = 'Xian-Ultra';
 
 /** ``"Auto"`` lets the model detect the source language (general web use). */
 export const DEFAULT_SOURCE_LANG = 'Auto';

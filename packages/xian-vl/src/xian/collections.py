@@ -16,116 +16,237 @@
 #
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
-"""Xian Collection definitions for Lemonade Server.
+"""Xian's own Omni collections for Lemonade Server.
 
-A *collection* is a curated bundle of models that, when loaded together,
-give Xian all the modalities it needs (VLM, ASR, TTS).  Two tiers ship
-out of the box:
+A *collection* is a Lemonade model with ``recipe: "collection.omni"``: a virtual
+model whose components cover several modalities at once.  Xian registers its own
+rather than depending on a vendor bundle like ``LMX-Omni-5.5B-Lite``, because:
 
-* **Xian Lite** — targets ≤ 8 GB VRAM (integrated GPUs, GTX 1660-class).
-* **Xian Ultra** — targets ≥ 12 GB VRAM (RTX 3060+).
+* those are *registry-backed* — their registry entry is a bare pointer with no
+  ``components`` until the Hugging Face manifest has been pulled, and a
+  ``POST /v1/load`` against one in that state falls through to the llama.cpp
+  backend and fails with ``GGUF file not found for checkpoint``;
+* their component choices are not ours.  Xian needs a **vision** planner above
+  all else, and pays download weight for an image generator it never calls.
 
-Users may also pick ``CollectionTier.CUSTOM`` and manually select models.
+Three tiers ship, each a separate registered collection so the model id in
+settings names exactly what is installed:
+
+======================  =========================  ==========
+Collection              Planner (vision + tools)   Footprint
+======================  =========================  ==========
+``Xian-Lite``           ``Qwen3.5-4B-GGUF``        ~4.0 GB
+``Xian-Ultra``          ``Qwen3.5-9B-GGUF``        ~8.9 GB
+``Xian-Halo``           ``Qwen3.6-35B-A3B-MTP``    ~25.8 GB
+======================  =========================  ==========
+
+Registration goes through ``POST /v1/pull``, which registers *and* downloads
+every component in one streamed call.  Two constraints of that endpoint shape
+the bodies built here, both learned from the Lemonade server source:
+
+* the name must carry the ``user.`` prefix whenever the body sets ``recipe``
+  (the server rejects it otherwise); it is surfaced publicly under the bare
+  name, so ``user.Xian-Ultra`` appears in ``/v1/models`` as ``Xian-Ultra``;
+* the collection's own ``checkpoint`` must stay **empty**.  A non-empty
+  checkpoint marks a collection as registry-backed, and the server then discards
+  the authored component list in favour of a downloaded manifest.
+
+Components are referenced by bare built-in name with no inline ``models`` array.
+The server validates that every one is already registered, so a name that has
+gone stale fails loudly at install time instead of silently registering a
+smaller collection.  Every name is checked against the pinned Lemonade registry
+in ``tests/test_collections.py``.
+
+**No NPU components.**  Every recipe here (llamacpp, whispercpp, kokoro) is
+portable.  ``flm`` models exist only on machines with FastFlowLM installed, so
+naming one would make ``/v1/pull`` fail everywhere else — and a collection is
+hidden from ``/v1/models`` until *all* of its components are downloaded, which
+would silently disable routing.  NPU work is steered by
+:mod:`xian.omni_router` on top of whichever collection is installed.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+from dataclasses import dataclass, field
 
 from shared_types.enums import CollectionTier
-from shared_types.models import CollectionModel
 
 logger = logging.getLogger(__name__)
 
-# ── Collection Specs ─────────────────────────────────────────────────
+#: Prefix the Lemonade server requires for user-registered models.
+USER_PREFIX = "user."
 
-XIAN_LITE: list[CollectionModel] = [
-    CollectionModel(
-        name="Qwen3-4B-Instruct-GGUF",
-        labels=["vision", "tool-calling"],
-        load_options={"gpu_memory_utilization": 0.5},
-    ),
-    CollectionModel(
-        name="whisper-tiny-GGUF",
-        labels=["audio", "transcription"],
-        load_options={},
-    ),
-    CollectionModel(
-        name="kokoro-v1",
-        labels=["tts", "speech"],
-        load_options={},
-    ),
-]
+#: Recipe marking an Omni collection.
+OMNI_RECIPE = "collection.omni"
 
-XIAN_ULTRA: list[CollectionModel] = [
-    CollectionModel(
-        name="Qwen3.5-9B-Instruct-GGUF",
-        labels=["vision", "tool-calling"],
-        load_options={"gpu_memory_utilization": 0.75},
-    ),
-    CollectionModel(
-        name="whisper-large-v3-turbo-GGUF",
-        labels=["audio", "transcription"],
-        load_options={},
-    ),
-    CollectionModel(
-        name="kokoro-v1",
-        labels=["tts", "speech"],
-        load_options={},
-    ),
-]
 
-COLLECTIONS: dict[CollectionTier, list[CollectionModel]] = {
+@dataclass(frozen=True)
+class XianCollection:
+    """One tier: a registered Omni collection and the models it bundles."""
+
+    #: Public model id, as it appears in ``/v1/models`` and in settings.
+    name: str
+    tier: CollectionTier
+    #: Vision-capable, tool-calling planner. Everything text and vision uses it.
+    planner: str
+    #: Speech-to-text component.
+    asr: str
+    #: Text-to-speech component.
+    tts: str
+    #: Approximate total download, GB. Informational — the server is the truth.
+    size_gb: float
+    #: Minimum usable memory this tier expects, GB.
+    min_memory_gb: float
+    #: Extra components, if a tier ever needs one.
+    extra: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def registered_name(self) -> str:
+        """The name to register under (``user.``-prefixed)."""
+        return f"{USER_PREFIX}{self.name}"
+
+    @property
+    def components(self) -> list[str]:
+        return [self.planner, self.asr, self.tts, *self.extra]
+
+
+XIAN_LITE = XianCollection(
+    name="Xian-Lite",
+    tier=CollectionTier.LITE,
+    planner="Qwen3.5-4B-GGUF",
+    asr="Whisper-Tiny",
+    tts="kokoro-v1",
+    size_gb=4.01,
+    min_memory_gb=0.0,
+)
+
+XIAN_ULTRA = XianCollection(
+    name="Xian-Ultra",
+    tier=CollectionTier.ULTRA,
+    planner="Qwen3.5-9B-GGUF",
+    asr="Whisper-Large-v3-Turbo",
+    tts="kokoro-v1",
+    size_gb=8.85,
+    min_memory_gb=12.0,
+)
+
+# A sparse MoE rather than a dense 27B of similar footprint: on a unified-memory
+# APU only the ~3B active parameters are read per token, so it answers several
+# times faster at comparable quality — which is what a HUD needs.
+XIAN_HALO = XianCollection(
+    name="Xian-Halo",
+    tier=CollectionTier.HALO,
+    planner="Qwen3.6-35B-A3B-MTP-GGUF",
+    asr="Whisper-Large-v3-Turbo",
+    tts="kokoro-v1",
+    size_gb=25.77,
+    min_memory_gb=48.0,
+)
+
+COLLECTIONS: dict[CollectionTier, XianCollection] = {
     CollectionTier.LITE: XIAN_LITE,
     CollectionTier.ULTRA: XIAN_ULTRA,
+    CollectionTier.HALO: XIAN_HALO,
 }
 
+#: Public ids of every Xian collection, for "is this one of ours?" checks.
+COLLECTION_NAMES: frozenset[str] = frozenset(c.name for c in COLLECTIONS.values())
 
-def get_collection(tier: CollectionTier) -> list[CollectionModel]:
-    """Return the model list for the requested tier.
 
-    Raises ``KeyError`` for ``CollectionTier.CUSTOM`` — the caller is
-    responsible for providing the model list in that case.
+def get_collection(tier: CollectionTier | str) -> XianCollection:
+    """Return the collection for a tier.
+
+    Raises ``KeyError`` for ``CollectionTier.CUSTOM`` — the caller picks its own
+    models in that case.
     """
-    return COLLECTIONS[tier]
+    return COLLECTIONS[CollectionTier(tier)]
 
 
-async def install_collection(
-    client,  # xian.lemonade_client.LemonadeClient (avoid circular import)
-    tier: CollectionTier,
-) -> None:
-    """Pull and load every model in a collection.
+def collection_for_name(name: str | None) -> XianCollection | None:
+    """Return the collection a model id names, accepting the ``user.`` form."""
+    if not name:
+        return None
+    bare = name[len(USER_PREFIX):] if name.startswith(USER_PREFIX) else name
+    for collection in COLLECTIONS.values():
+        if collection.name == bare:
+            return collection
+    return None
+
+
+def is_xian_collection(name: str | None) -> bool:
+    return collection_for_name(name) is not None
+
+
+def recommended_tier(memory_gb: float) -> CollectionTier:
+    """Pick the largest tier that fits in ``memory_gb`` of usable memory."""
+    fitting = [c for c in COLLECTIONS.values() if memory_gb >= c.min_memory_gb]
+    if not fitting:
+        return CollectionTier.LITE
+    return max(fitting, key=lambda c: c.min_memory_gb).tier
+
+
+def build_pull_body(tier: CollectionTier | str, *, stream: bool = True) -> dict:
+    """Build the ``POST /v1/pull`` body that registers and downloads a tier.
+
+    The shape is Lemonade's exported-collection format, so the same document can
+    later be published to a Hugging Face repo named after the collection and
+    pulled by name.  ``checkpoints.main`` is deliberately empty: see the module
+    docstring.
+    """
+    collection = get_collection(tier)
+    body: dict = {
+        "model_name": collection.registered_name,
+        "recipe": OMNI_RECIPE,
+        "checkpoints": {"main": ""},
+        "components": collection.components,
+        "labels": [],
+        "recipe_options": {},
+    }
+    if stream:
+        body["stream"] = True
+    return body
+
+
+async def install_collection(client, tier: CollectionTier | str) -> str:
+    """Register, download, and load a tier.  Returns its public model id.
 
     Parameters
     ----------
     client:
         A :class:`~xian.lemonade_client.LemonadeClient` instance.
     tier:
-        Which collection to install.
+        Which tier to install.
     """
-    models = get_collection(tier)
-    for model in models:
-        logger.info("Pulling %s …", model.name)
-        await client.pull_model(model.name)
-        logger.info("Loading %s …", model.name)
-        # Pass None if load_options is empty to avoid passing empty dict to API
-        opts = model.load_options if model.load_options else None
-        await client.load_model(model.name, opts)
-    logger.info("Collection '%s' ready (%d models).", tier.value, len(models))
+    collection = get_collection(tier)
+    logger.info(
+        "Registering collection %s (%s, ~%.1f GB)…",
+        collection.name, ", ".join(collection.components), collection.size_gb,
+    )
+    await client.pull_model_body(build_pull_body(tier, stream=False))
+    logger.info("Loading collection %s …", collection.name)
+    await client.load_model(collection.name)
+    logger.info("Collection '%s' ready.", collection.name)
+    return collection.name
 
 
-async def get_collection_status(
-    client,
-    tier: CollectionTier,
-) -> dict[str, bool]:
-    """Check which models in a collection are currently loaded.
+def _main(argv: list[str] | None = None) -> int:
+    """``python -m xian.collections <tier>`` prints a tier's /v1/pull body.
 
-    Returns a dict mapping model name → ``True`` if loaded.
+    Lets ``mage.sh`` install a collection with plain ``curl`` while keeping this
+    module the single source of truth for what is in one.
     """
-    models = get_collection(tier)
-    try:
-        health = await client.health()
-        loaded = set(health.get("loaded_models", []))
-    except Exception:
-        loaded = set()
-    return {m.name: m.name in loaded for m in models}
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Print a Xian collection's /v1/pull body.")
+    parser.add_argument("tier", choices=[t.value for t in COLLECTIONS], help="Collection tier.")
+    parser.add_argument("--no-stream", action="store_true", help="Omit the SSE stream flag.")
+    args = parser.parse_args(argv)
+
+    print(json.dumps(build_pull_body(args.tier, stream=not args.no_stream), indent=2))
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry point
+    raise SystemExit(_main())

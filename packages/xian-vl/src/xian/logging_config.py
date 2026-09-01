@@ -81,5 +81,3 @@ def _quiet_noisy_dependencies(level):
         return
     for noisy in ("httpx", "httpcore", "urllib3", "openai", "asyncio"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
-
-# Create a default logger instance removed to avoid duplicate handlers on import

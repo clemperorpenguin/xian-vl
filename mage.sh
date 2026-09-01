@@ -59,6 +59,12 @@ Options:
                 instead of downloading a pre-built binary.
   --uninstall   Remove the application entry created by --install.
   --build       Build embeddable Lemonade from source without registering.
+  --doctor-npu  Check whether this machine can run inference on the Ryzen AI
+                NPU (driver, XRT runtime, FastFlowLM, and installed models).
+  --install-collection [TIER]
+                Register and download a Xian model collection against a running
+                Lemonade server. TIER is lite, ultra, or halo; omitted, the
+                tier that fits this machine's memory is chosen.
   --help        Show this help message.
 
 With no options, MAGE is launched directly. If uv or project dependencies
@@ -106,23 +112,22 @@ install_build_deps() {
     echo "── Detecting Linux distribution family… ──"
     local distro=""
     if [[ -f /etc/os-release ]]; then
-        # Source /etc/os-release in a subshell to keep the variables local
+        # Sourced in a subshell so ID/ID_LIKE don't leak into this shell. POSIX
+        # `case` rather than bash's [[ =~ ]]: /bin/sh is dash on the Debian
+        # family, which would syntax-error on a bashism here — precisely on the
+        # distros this is meant to detect.
         distro=$(sh -c '
             . /etc/os-release
-            ID_NORM=$(echo "${ID:-}" | tr "[:upper:]" "[:lower:]")
-            ID_LIKE_NORM=$(echo "${ID_LIKE:-}" | tr "[:upper:]" "[:lower:]")
-            
-            if [[ "$ID_NORM" =~ (ubuntu|debian|pop|mint) ]] || [[ "$ID_LIKE_NORM" =~ (ubuntu|debian) ]]; then
-                echo "debian"
-            elif [[ "$ID_NORM" =~ (fedora|rhel|centos|rocky|almalinux) ]] || [[ "$ID_LIKE_NORM" =~ (fedora|rhel) ]]; then
-                echo "fedora"
-            elif [[ "$ID_NORM" =~ (opensuse|sles) ]] || [[ "$ID_LIKE_NORM" =~ (suse|opensuse) ]]; then
-                echo "opensuse"
-            elif [[ "$ID_NORM" =~ (arch|manjaro) ]] || [[ "$ID_LIKE_NORM" =~ (arch) ]]; then
-                echo "arch"
-            else
-                echo "unknown"
-            fi
+            ids=$(printf "%s %s" "${ID:-}" "${ID_LIKE:-}" | tr "[:upper:]" "[:lower:]")
+            for id in $ids; do
+                case "$id" in
+                    ubuntu|debian|pop|mint|raspbian) echo "debian"; exit ;;
+                    fedora|rhel|centos|rocky|almalinux) echo "fedora"; exit ;;
+                    opensuse*|sles|suse) echo "opensuse"; exit ;;
+                    arch|manjaro|endeavouros) echo "arch"; exit ;;
+                esac
+            done
+            echo "unknown"
         ')
     fi
 
@@ -291,9 +296,9 @@ _install_lemonade_from_dir() {
         exit 1
     fi
     
-    echo "lemond daemon is ready. Pulling model LMX-Omni-5.5B-Lite…"
-    if ! "${HOME}/.local/bin/lemonade" pull LMX-Omni-5.5B-Lite; then
-        echo "Error: Failed to pull model LMX-Omni-5.5B-Lite." >&2
+    echo "lemond daemon is ready. Installing the Xian model collection…"
+    if ! install_collection; then
+        echo "Error: Failed to install the Xian model collection." >&2
         kill "${lemond_pid}" 2>/dev/null || true
         exit 1
     fi
@@ -302,7 +307,51 @@ _install_lemonade_from_dir() {
     kill "${lemond_pid}" 2>/dev/null || true
     wait "${lemond_pid}" 2>/dev/null || true
     
-    echo "✓ Model LMX-Omni-5.5B-Lite pulled and cached successfully."
+    echo "✓ Xian model collection installed and cached successfully."
+}
+
+# Register and download a Xian collection through POST /v1/pull.
+#
+# The collection is a "collection.omni" model of our own: a vision planner plus
+# speech-to-text and a voice, registered under user.Xian-<tier>. Its definition
+# lives in xian.collections, which prints the exact request body — one source of
+# truth for the installer, the app, and the tests.
+#
+# $1: tier (lite | ultra | halo). Defaults to the tier that fits this machine.
+install_collection() {
+    local tier="${1:-}"
+    local port="${2:-13305}"
+
+    cd "${REPO_DIR}"
+
+    if [[ -z "${tier}" ]]; then
+        tier="$(uv run --package mage-client python - <<'PY'
+import psutil
+from xian.collections import recommended_tier
+print(recommended_tier(psutil.virtual_memory().total / (1024 ** 3)))
+PY
+        )" || tier="ultra"
+    fi
+
+    local body
+    body="$(uv run --package mage-client python -m xian.collections "${tier}" --no-stream)" || return 1
+
+    echo "Installing collection tier '${tier}' (this downloads several GB)…"
+    local http_code
+    http_code="$(curl -sS -o /tmp/xian-pull-$$.json -w '%{http_code}' \
+        -X POST "http://127.0.0.1:${port}/v1/pull" \
+        -H 'Content-Type: application/json' \
+        --data "${body}" \
+        --max-time 7200)" || return 1
+
+    if [[ "${http_code}" != "200" ]]; then
+        echo "Error: /v1/pull returned HTTP ${http_code}:" >&2
+        cat "/tmp/xian-pull-$$.json" >&2
+        rm -f "/tmp/xian-pull-$$.json"
+        return 1
+    fi
+    rm -f "/tmp/xian-pull-$$.json"
+    return 0
 }
 
 # ── Actions ───────────────────────────────────────────────────────────────────
@@ -522,10 +571,86 @@ do_run() {
     exec uv run --package mage-client mage "$@"
 }
 
+# Report whether this machine can run inference on the Ryzen AI NPU.
+# Every requirement below is a real gate — failing any one of them means
+# Lemonade silently falls back to CPU/GPU rather than erroring.
+do_doctor_npu() {
+    echo "── Ryzen AI NPU diagnostics ──"
+
+    if [[ "${PLATFORM}" != "Linux" ]]; then
+        echo "✗ NPU diagnostics only apply to Linux (found ${PLATFORM})."
+        return 1
+    fi
+
+    local failures=0
+
+    echo "Kernel:        $(uname -r)"
+
+    if [[ -e /dev/accel/accel0 ]]; then
+        echo "✓ NPU device:  /dev/accel/accel0 present"
+    else
+        echo "✗ NPU device:  /dev/accel/accel0 missing — the amdxdna driver is not bound."
+        failures=$((failures + 1))
+    fi
+
+    if lsmod 2>/dev/null | grep -q '^amdxdna'; then
+        echo "✓ Driver:      amdxdna module loaded"
+    else
+        echo "✗ Driver:      amdxdna module not loaded (needs a kernel with the XDNA driver)."
+        failures=$((failures + 1))
+    fi
+
+    # XDNA 2 (Ryzen AI 300/400 series) is required — FastFlowLM does not
+    # support the XDNA 1 NPUs in 7040/8040 and 200-series parts.
+    if command -v lscpu &>/dev/null; then
+        local cpu_model cpu_model_lc
+        # `|| true`: under `set -euo pipefail` a grep that matches nothing (or
+        # a SIGPIPE from head) would otherwise abort the whole diagnostic run.
+        cpu_model="$(lscpu | grep -i 'model name' | head -1 | cut -d: -f2- | sed 's/^ *//' || true)"
+        cpu_model_lc="$(printf '%s' "${cpu_model}" | tr '[:upper:]' '[:lower:]')"
+        echo "CPU:           ${cpu_model:-unknown}"
+        if [[ "${cpu_model_lc}" == *"ryzen ai"* ]]; then
+            echo "✓ Generation:  Ryzen AI part detected (confirm XDNA 2 — 300/400 series only)"
+        else
+            echo "⚠ Generation:  not a Ryzen AI part; NPU inference will be unavailable."
+        fi
+    fi
+
+    if command -v xrt-smi &>/dev/null; then
+        echo "✓ XRT:         $(command -v xrt-smi)"
+        xrt-smi examine 2>/dev/null | head -20 || true
+    else
+        echo "✗ XRT:         xrt-smi not found — install the Ryzen AI runtime (XRT)."
+        failures=$((failures + 1))
+    fi
+
+    if command -v flm &>/dev/null; then
+        echo "✓ FastFlowLM:  $(command -v flm)"
+    else
+        echo "✗ FastFlowLM:  flm not found — Lemonade needs it to serve models on the NPU."
+        failures=$((failures + 1))
+    fi
+
+    if [[ -d "${HOME}/.flm/models" ]]; then
+        echo "✓ FLM models:  $(find "${HOME}/.flm/models" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l) installed"
+    else
+        echo "⚠ FLM models:  ~/.flm/models is empty — pull an NPU model before selecting 'Prefer NPU'."
+    fi
+
+    echo
+    if (( failures == 0 )); then
+        echo "✓ NPU inference prerequisites look satisfied."
+    else
+        echo "✗ ${failures} prerequisite(s) missing — MAGE will keep using the GPU."
+    fi
+    return "${failures}"
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 ACTION="run"
 BUILD_LEMONADE=false
+COLLECTION_TIER=""
 
 case "${1:-}" in
     --install)
@@ -540,6 +665,13 @@ case "${1:-}" in
     --build)
         ACTION="build"
         BUILD_LEMONADE=true
+        ;;
+    --doctor-npu)
+        ACTION="doctor-npu"
+        ;;
+    --install-collection)
+        ACTION="install-collection"
+        COLLECTION_TIER="${2:-}"
         ;;
     --help|-h)
         print_usage
@@ -557,6 +689,14 @@ case "${ACTION}" in
     build)
         install_build_deps
         build_lemonade
+        ;;
+    doctor-npu)
+        do_doctor_npu
+        ;;
+    install-collection)
+        ensure_uv
+        sync_deps
+        install_collection "${COLLECTION_TIER:-}"
         ;;
     *)
         do_run "$@"

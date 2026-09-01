@@ -105,4 +105,32 @@ def clean_subprocess_env() -> dict[str, str]:
     elif "LC_ALL" not in env:
         env["LC_ALL"] = "en_US.UTF-8"
 
+    # 7. Re-add the Ryzen AI runtime library path. Step 1 rebuilds
+    # LD_LIBRARY_PATH from scratch, which drops the XRT directory that lemond
+    # and FastFlowLM need to dlopen the NPU driver shim.
+    _restore_xrt_library_path(env)
+
     return env
+
+
+#: Where the Ryzen AI / XRT runtime installs its shared libraries on Linux.
+XRT_LIBRARY_DIRS = ("/opt/xilinx/xrt/lib",)
+
+
+def _restore_xrt_library_path(env: dict[str, str]) -> None:
+    """Append XRT's library directory to LD_LIBRARY_PATH when it exists."""
+    if sys.platform != "linux":
+        return
+
+    xrt_root = env.get("XILINX_XRT")
+    candidates = [os.path.join(xrt_root, "lib")] if xrt_root else []
+    candidates.extend(XRT_LIBRARY_DIRS)
+
+    existing = env.get("LD_LIBRARY_PATH", "")
+    parts = [p for p in existing.split(os.pathsep) if p]
+    for candidate in candidates:
+        if os.path.isdir(candidate) and candidate not in parts:
+            parts.append(candidate)
+
+    if parts:
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(parts)

@@ -30,21 +30,12 @@ from shared_types.enums import (
 )
 from shared_types.models import (
     AccuracyScore,
-    TranslationRequest,
     TranslationResult,
     TextStyle,
-    CinematicPayload,
-    ChatRequest,
-    ChatResponse,
-    FeedbackPayload,
-    GroundingResult,
-    RobobookRequest,
-    RobobookChapter,
-    CollectionModel,
-    LemonadeHealth,
 )
 from shared_types.constants import (
     DEFAULT_API_URL,
+    DEFAULT_COLLECTION_TIER,
     DEFAULT_MODEL,
     DEFAULT_MAX_TOKENS,
 )
@@ -58,20 +49,11 @@ __all__ = [
     "CollectionTier",
     # Models
     "AccuracyScore",
-    "TranslationRequest",
     "TranslationResult",
     "TextStyle",
-    "CinematicPayload",
-    "ChatRequest",
-    "ChatResponse",
-    "FeedbackPayload",
-    "GroundingResult",
-    "RobobookRequest",
-    "RobobookChapter",
-    "CollectionModel",
-    "LemonadeHealth",
     # Constants
     "DEFAULT_API_URL",
+    "DEFAULT_COLLECTION_TIER",
     "DEFAULT_MODEL",
     "DEFAULT_MAX_TOKENS",
 ]

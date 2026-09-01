@@ -16,6 +16,7 @@
 #
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
+import os
 from unittest.mock import patch
 
 def test_clean_subprocess_env_not_frozen():
@@ -127,3 +128,34 @@ def test_clean_subprocess_env_meipass_stripping_windows():
         assert "LD_LIBRARY_PATH_ORIG" not in cleaned
         assert "DYLD_LIBRARY_PATH_ORIG" not in cleaned
 
+
+
+def test_xrt_library_path_is_restored_for_the_npu_runtime(tmp_path, monkeypatch):
+    """clean_subprocess_env rebuilds LD_LIBRARY_PATH, which would otherwise
+    drop the XRT directory that lemond/FastFlowLM dlopen for NPU access."""
+    from mage.utils import env as env_mod
+
+    xrt_root = tmp_path / "xrt"
+    (xrt_root / "lib").mkdir(parents=True)
+
+    monkeypatch.setattr(env_mod.sys, "platform", "linux")
+    monkeypatch.setenv("XILINX_XRT", str(xrt_root))
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/usr/lib")
+
+    result = env_mod.clean_subprocess_env()
+
+    assert str(xrt_root / "lib") in result["LD_LIBRARY_PATH"].split(os.pathsep)
+    assert "/usr/lib" in result["LD_LIBRARY_PATH"].split(os.pathsep)
+
+
+def test_xrt_path_is_not_invented_when_the_runtime_is_absent(monkeypatch):
+    from mage.utils import env as env_mod
+
+    monkeypatch.setattr(env_mod.sys, "platform", "linux")
+    monkeypatch.setattr(env_mod, "XRT_LIBRARY_DIRS", ("/nonexistent/xrt/lib",))
+    monkeypatch.delenv("XILINX_XRT", raising=False)
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/usr/lib")
+
+    result = env_mod.clean_subprocess_env()
+
+    assert "/nonexistent/xrt/lib" not in result.get("LD_LIBRARY_PATH", "")

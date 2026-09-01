@@ -26,11 +26,12 @@ from html.parser import HTMLParser
 from PyQt6.QtWidgets import (
     QVBoxLayout, QLineEdit, QPushButton, QHBoxLayout, QTextBrowser
 )
-from PyQt6.QtCore import pyqtSignal, QThread, QRect, QSettings, QBuffer, QIODevice
+from PyQt6.QtCore import pyqtSignal, QThread, QRect, QBuffer, QIODevice
 from PyQt6.QtGui import QGuiApplication
 from mage.ui.grounding import GroundingHighlight
 from mage.ui.theme import accent_hex, accent_hover_hex
 from mage.ui.overlay_base import MageOverlayWindow
+from mage.settings_keys import KEY_SOURCE_LANG
 from shared_types import constants
 from shared_types.state import t
 
@@ -201,42 +202,13 @@ class ChatSidebar(MageOverlayWindow):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         
-        _text_size = 14
+        base_size = 13
         if self.app and hasattr(self.app, "settings") and self.app.settings:
-            _text_size = int(self.app.settings.value("overlay_text_size", 13)) + 1
+            base_size = int(self.app.settings.value("overlay_text_size", 13))
 
-        # Style
-        self.setStyleSheet(f"""
-            QWidget {{
-                background-color: rgba(20, 20, 20, 240);
-                color: white;
-                border-left: 1px solid {accent_hex()};
-            }}
-            QTextEdit, QTextBrowser {{
-                background-color: transparent;
-                border: none;
-                font-size: {_text_size}px;
-            }}
-            QLineEdit {{
-                background-color: #333;
-                border: 1px solid #555;
-                border-radius: 0px;
-                padding: 8px;
-                font-size: {_text_size}px;
-            }}
-            QPushButton {{
-                background-color: {accent_hex()};
-                color: white;
-                border: none;
-                padding: 8px 12px;
-                border-radius: 0px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {accent_hover_hex()};
-            }}
-        """)
-        
+        self.setStyleSheet(self._sidebar_stylesheet(base_size))
+
+
         # History
         self.history_display = QTextBrowser()
         self.history_display.setReadOnly(True)
@@ -322,10 +294,9 @@ class ChatSidebar(MageOverlayWindow):
         if "where" in text.lower() and "click" in text.lower():
             prompt += "\n(Please output the bounding box coordinates of the element I should click in the format [ymin, xmin, ymax, xmax] relative to the image size from 0 to 1000.)"
         
-        # Read source language from settings
-        settings = QSettings(constants.ORGANIZATION_NAME, constants.APPLICATION_NAME)
-        source_lang = settings.value("source_lang", "zh-CN")
-        
+        source_lang = self.app.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
+
+
         self.worker = ChatWorker(self.processor, prompt, source_lang=source_lang)
         self.worker.result_ready.connect(self._handle_response)
         self.worker.start()
@@ -439,11 +410,11 @@ class ChatSidebar(MageOverlayWindow):
             except Exception as e:
                 logger.error("Failed to replay audio: %s", e)
         
-    def set_opacity(self, value: int):
-        self.setWindowOpacity(value / 100)
-
-    def set_text_size(self, px: int):
-        self.setStyleSheet(f"""
+    @staticmethod
+    def _sidebar_stylesheet(base_size: int) -> str:
+        """The sidebar's sheet. Chat text sits one step above the HUD size."""
+        font_size = base_size + 1
+        return f"""
             QWidget {{
                 background-color: rgba(20, 20, 20, 240);
                 color: white;
@@ -452,14 +423,14 @@ class ChatSidebar(MageOverlayWindow):
             QTextEdit, QTextBrowser {{
                 background-color: transparent;
                 border: none;
-                font-size: {px + 1}px;
+                font-size: {font_size}px;
             }}
             QLineEdit {{
                 background-color: #333;
                 border: 1px solid #555;
                 border-radius: 0px;
                 padding: 8px;
-                font-size: {px + 1}px;
+                font-size: {font_size}px;
             }}
             QPushButton {{
                 background-color: {accent_hex()};
@@ -472,7 +443,13 @@ class ChatSidebar(MageOverlayWindow):
             QPushButton:hover {{
                 background-color: {accent_hover_hex()};
             }}
-        """)
+        """
+
+    def set_opacity(self, value: int):
+        self.setWindowOpacity(value / 100)
+
+    def set_text_size(self, px: int):
+        self.setStyleSheet(self._sidebar_stylesheet(px))
 
     def showEvent(self, event):
         super().showEvent(event)

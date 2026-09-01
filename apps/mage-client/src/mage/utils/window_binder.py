@@ -24,6 +24,7 @@ and handles graceful fallback on non-supported platforms (like Wayland or macOS)
 
 import atexit
 import logging
+import os
 import sys
 import ctypes
 from ctypes import c_int, c_long, c_ulong, c_void_p, c_char_p, POINTER, Structure, byref
@@ -129,6 +130,20 @@ if X11:
             POINTER(c_ulong)   # Window* child_return
         ]
         X11.XTranslateCoordinates.restype = c_int
+
+        # Signatures for the property/event calls used by the keep-on-top
+        # helpers. Declared once here rather than inside those functions, which
+        # run for every visible overlay on a 0.75 s tick.
+        X11.XChangeProperty.argtypes = [
+            c_void_p, c_ulong, c_ulong, c_ulong, c_int, c_int, POINTER(c_ulong), c_int
+        ]
+        X11.XChangeProperty.restype = c_int
+
+        X11.XSendEvent.argtypes = [c_void_p, c_ulong, c_int, c_long, c_void_p]
+        X11.XSendEvent.restype = c_int
+
+        X11.XFlush.argtypes = [c_void_p]
+        X11.XFlush.restype = c_int
     except AttributeError as e:
         logger.error("Failed to map X11 ctypes: %s", e)
         X11 = None
@@ -376,28 +391,37 @@ def get_active_window_titles_windows() -> list[str]:
 
 
 # --- Main Wrapper Class ---
+def _detect_platform() -> str | None:
+    """Which windowing API can answer geometry questions here.
+
+    Wayland forbids clients from inspecting other windows, so it resolves to
+    "wayland" and every query below returns nothing — callers fall back to
+    floating overlays rather than tracking a bound window.
+    """
+    if sys.platform == "win32":
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+
+    # Qt's platform name is authoritative once an app exists; before that, the
+    # presence of DISPLAY is the best available hint.
+    from PyQt6.QtGui import QGuiApplication
+    qt_platform = QGuiApplication.platformName() if QGuiApplication.instance() else None
+
+    if qt_platform == "xcb" or (not qt_platform and "DISPLAY" in os.environ):
+        return "x11"
+    if qt_platform == "wayland":
+        return "wayland"
+    return None
+
+
 class WindowBinder:
     def __init__(self, target_title: str):
         self.target_title = target_title.strip()
-        self.platform = None
         self._win_id = None
         self._x11_display = None
-        
-        # Detect platform and environment
-        if sys.platform == "win32":
-            self.platform = "windows"
-        elif sys.platform == "darwin":
-            self.platform = "macos"
-        else:
-            # Check Qt platform name if QApplication is running, otherwise check environment variables
-            from PyQt6.QtGui import QGuiApplication
-            qt_platform = QGuiApplication.platformName() if QGuiApplication.instance() else None
-            
-            if qt_platform == "xcb" or (not qt_platform and "DISPLAY" in os_environ_check()):
-                self.platform = "x11"
-            elif qt_platform == "wayland":
-                self.platform = "wayland"
-                
+        self.platform = _detect_platform()
+
         # Initialize Display for X11 if needed
         if self.platform == "x11" and X11:
             try:
@@ -518,19 +542,7 @@ class WindowBinder:
 
     @classmethod
     def get_active_window_titles(cls) -> list[str]:
-        import sys
-        platform = None
-        if sys.platform == "win32":
-            platform = "windows"
-        elif sys.platform == "darwin":
-            platform = "macos"
-        else:
-            from PyQt6.QtGui import QGuiApplication
-            qt_platform = QGuiApplication.platformName() if QGuiApplication.instance() else None
-            
-            if qt_platform == "xcb" or (not qt_platform and "DISPLAY" in os_environ_check()):
-                platform = "x11"
-                
+        platform = _detect_platform()
         if platform == "windows":
             return get_active_window_titles_windows()
         elif platform == "x11" and X11:
@@ -546,68 +558,76 @@ class WindowBinder:
         return []
 
 
-def os_environ_check():
-    import os
-    return os.environ
+#: One shared connection for the window-hint helpers below. They run for every
+#: visible overlay on a 0.75 s tick, so the connection is opened once and kept.
+_hint_display = None
 
 
-_bypass_hint_display = None
+def _close_hint_display():
+    global _hint_display
+    if _hint_display and X11:
+        try:
+            X11.XCloseDisplay(_hint_display)
+        except Exception:
+            pass
+    _hint_display = None
+
+
+def _hint_target(win_id):
+    """Resolve (display, win_id) for a hint call, or (None, None) to skip.
+
+    Returns None off Linux, without libX11, when Qt is not on the xcb backend
+    (a native Wayland session has no X server to talk to), or for an unusable
+    window id.
+    """
+    global _hint_display
+    if not sys.platform.startswith("linux") or not X11:
+        return None, None
+
+    from PyQt6.QtGui import QGuiApplication
+    qt_platform = QGuiApplication.platformName() if QGuiApplication.instance() else None
+    if qt_platform != "xcb":
+        return None, None
+
+    try:
+        win_id = int(win_id)
+    except (TypeError, ValueError):
+        return None, None
+    if not win_id:
+        return None, None
+
+    if _hint_display is None:
+        _hint_display = X11.XOpenDisplay(None)
+        if _hint_display:
+            atexit.register(_close_hint_display)
+    if not _hint_display:
+        return None, None
+    return _hint_display, win_id
 
 
 def set_bypass_compositor_hint_x11(win_id):
     """Set _NET_WM_BYPASS_COMPOSITOR to 2 (don't bypass) to keep compositor active on Linux."""
-    global _bypass_hint_display
-    if not sys.platform.startswith("linux"):
+    display, win_id = _hint_target(win_id)
+    if display is None:
         return
-    if not X11:
-        return
-    
-    # Do not execute X11 calls if running natively under Wayland
-    from PyQt6.QtGui import QGuiApplication
-    qt_platform = QGuiApplication.platformName() if QGuiApplication.instance() else None
-    if qt_platform != "xcb":
-        return
-        
+
     try:
-        if win_id is not None:
-            try:
-                win_id = int(win_id)
-            except (TypeError, ValueError):
-                pass
-        if _bypass_hint_display is None:
-            _bypass_hint_display = X11.XOpenDisplay(None)
-        display = _bypass_hint_display
-        if not display:
-            return
-        
         atom = X11.XInternAtom(display, b"_NET_WM_BYPASS_COMPOSITOR", False)
         cardinal_atom = X11.XInternAtom(display, b"CARDINAL", False)
-        
+
         # 2 = Don't bypass compositor (forces composition to stay enabled)
         data = (c_ulong * 1)(2)
-        
-        # Define argtypes dynamically
-        X11.XChangeProperty.argtypes = [
-            c_void_p, c_ulong, c_ulong, c_ulong, c_int, c_int, POINTER(c_ulong), c_int
-        ]
-        X11.XChangeProperty.restype = c_int
-        
-        if hasattr(X11, "XFlush"):
-            X11.XFlush.argtypes = [c_void_p]
-            X11.XFlush.restype = c_int
-            
         X11.XChangeProperty(
             display,
             win_id,
             atom,
             cardinal_atom,
             32,
-            0, # PropModeReplace
+            0,  # PropModeReplace
             data,
             1
         )
-        if hasattr(X11, "XFlush"):
-            X11.XFlush(display)
+        X11.XFlush(display)
         # DEBUG: re-applied on every overlay show and ~every 0.75s by the
         # keep-on-top promote() tick — far too frequent for INFO.
         logger.debug("Set _NET_WM_BYPASS_COMPOSITOR to 2 on window XID: %s", win_id)
@@ -642,20 +662,6 @@ _NET_WM_STATE_ADD = 1
 _SUBSTRUCTURE_NOTIFY = 1 << 19
 _SUBSTRUCTURE_REDIRECT = 1 << 20
 
-_above_state_display = None
-
-
-def _close_above_state_display():
-    """Close the dedicated _NET_WM_STATE display connection at interpreter exit."""
-    global _above_state_display
-    if _above_state_display and X11:
-        try:
-            X11.XCloseDisplay(_above_state_display)
-        except Exception:
-            pass
-    _above_state_display = None
-
-
 def set_above_state_x11(win_id):
     """Add _NET_WM_STATE_ABOVE to a mapped window so the WM keeps it on top.
 
@@ -663,35 +669,11 @@ def set_above_state_x11(win_id):
     _NET_WM_STATE on a mapped window). Does NOT take focus, so the overlay's
     no-focus / click-through contract is preserved. No-op off X11.
     """
-    global _above_state_display
-    if not sys.platform.startswith("linux"):
-        return
-    if not X11:
-        return
-
-    # Only run real X11 calls when Qt is actually using the xcb backend.
-    from PyQt6.QtGui import QGuiApplication
-    qt_platform = QGuiApplication.platformName() if QGuiApplication.instance() else None
-    if qt_platform != "xcb":
+    display, win_id = _hint_target(win_id)
+    if display is None:
         return
 
     try:
-        if win_id is not None:
-            try:
-                win_id = int(win_id)
-            except (TypeError, ValueError):
-                return
-        if not win_id:
-            return
-
-        if _above_state_display is None:
-            _above_state_display = X11.XOpenDisplay(None)
-            if _above_state_display:
-                atexit.register(_close_above_state_display)
-        display = _above_state_display
-        if not display:
-            return
-
         root = X11.XDefaultRootWindow(display)
         wm_state_atom = X11.XInternAtom(display, b"_NET_WM_STATE", False)
         above_atom = X11.XInternAtom(display, b"_NET_WM_STATE_ABOVE", False)
@@ -710,8 +692,6 @@ def set_above_state_x11(win_id):
         evt.data.l[3] = 1  # source indication: normal application
         evt.data.l[4] = 0
 
-        X11.XSendEvent.argtypes = [c_void_p, c_ulong, c_int, c_long, c_void_p]
-        X11.XSendEvent.restype = c_int
         X11.XSendEvent(
             display,
             root,
@@ -719,11 +699,7 @@ def set_above_state_x11(win_id):
             _SUBSTRUCTURE_NOTIFY | _SUBSTRUCTURE_REDIRECT,
             byref(evt),
         )
-
-        if hasattr(X11, "XFlush"):
-            X11.XFlush.argtypes = [c_void_p]
-            X11.XFlush.restype = c_int
-            X11.XFlush(display)
+        X11.XFlush(display)
     except Exception as e:
         logger.debug("Failed to set _NET_WM_STATE_ABOVE: %s", e)
 
@@ -731,8 +707,6 @@ def set_above_state_x11(win_id):
 # XA_ATOM is a predefined X11 atom (value 4); used as the property type when
 # storing a list of atoms in _NET_WM_WINDOW_TYPE.
 _XA_ATOM = 4
-
-_window_type_display = None
 
 
 def _running_under_xwayland() -> bool:
@@ -749,7 +723,6 @@ def _running_under_xwayland() -> bool:
     qt_platform = QGuiApplication.platformName() if QGuiApplication.instance() else None
     if qt_platform != "xcb":
         return False
-    import os
     return os.environ.get("XDG_SESSION_TYPE") == "wayland"
 
 
@@ -769,29 +742,13 @@ def set_overlay_window_type_x11(win_id):
     Scoped to XWayland sessions (see ``_running_under_xwayland``); a no-op
     everywhere else.
     """
-    global _window_type_display
-    if not sys.platform.startswith("linux"):
-        return
-    if not X11:
-        return
     if not _running_under_xwayland():
+        return
+    display, win_id = _hint_target(win_id)
+    if display is None:
         return
 
     try:
-        if win_id is not None:
-            try:
-                win_id = int(win_id)
-            except (TypeError, ValueError):
-                return
-        if not win_id:
-            return
-
-        if _window_type_display is None:
-            _window_type_display = X11.XOpenDisplay(None)
-        display = _window_type_display
-        if not display:
-            return
-
         type_atom = X11.XInternAtom(display, b"_NET_WM_WINDOW_TYPE", False)
         crit_atom = X11.XInternAtom(
             display, b"_KDE_NET_WM_WINDOW_TYPE_CRITICAL_NOTIFICATION", False
@@ -801,11 +758,6 @@ def set_overlay_window_type_x11(win_id):
         # Ordered most-specific first: KWin honours the critical-notification
         # type; other EWMH WMs fall through to the generic notification type.
         data = (c_ulong * 2)(crit_atom, notif_atom)
-
-        X11.XChangeProperty.argtypes = [
-            c_void_p, c_ulong, c_ulong, c_ulong, c_int, c_int, POINTER(c_ulong), c_int
-        ]
-        X11.XChangeProperty.restype = c_int
         X11.XChangeProperty(
             display,
             win_id,
@@ -816,10 +768,7 @@ def set_overlay_window_type_x11(win_id):
             data,
             2,
         )
-        if hasattr(X11, "XFlush"):
-            X11.XFlush.argtypes = [c_void_p]
-            X11.XFlush.restype = c_int
-            X11.XFlush(display)
+        X11.XFlush(display)
         # DEBUG: re-applied ~every 0.75s by the keep-on-top promote() tick for
         # every visible overlay — the single noisiest line at INFO.
         logger.debug(

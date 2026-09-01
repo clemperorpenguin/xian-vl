@@ -83,11 +83,15 @@ class TranslationStyle(StrEnum):
 class CollectionTier(StrEnum):
     """Xian-specific Lemonade collection tiers.
 
-    Lite targets ≤ 8 GB VRAM (integrated / GTX 1660-class).
-    Ultra targets ≥ 12 GB VRAM (RTX 3060+).
+    Lite targets ≤ 12 GB of usable memory (integrated / GTX 1660-class).
+    Ultra targets ≥ 12 GB (RTX 3060+).
+    Halo targets the large unified-memory APUs (Ryzen AI MAX / Strix Halo)
+    where a sparse MoE fits comfortably and runs faster than a dense model
+    of the same footprint.
     Custom allows manual model selection.
     """
 
     LITE = "lite"
     ULTRA = "ultra"
+    HALO = "halo"
     CUSTOM = "custom"

@@ -95,6 +95,50 @@ class ScreenCapture:
         return None
 
     @staticmethod
+    def capture_region(rect: QRect) -> tuple[bytes | None, bool]:
+        """Capture a single region of the desktop.
+
+        Returns ``(png_bytes, already_cropped)``.  When ``already_cropped`` is
+        False the caller still has to crop the returned full-desktop frame —
+        only grim can capture a sub-rectangle directly, and it is the fast path
+        that continuous modes depend on (no full-desktop encode, no temp file).
+        """
+        if rect is None or rect.isEmpty():
+            return None, False
+
+        if sys.platform == "linux" and os.environ.get("XDG_SESSION_TYPE") == "wayland":
+            data = ScreenCapture._capture_grim_region(rect)
+            if data:
+                return data, True
+
+        return ScreenCapture.capture_screen(), False
+
+    @staticmethod
+    def _capture_grim_region(rect: QRect) -> bytes | None:
+        """Capture a sub-rectangle using grim's geometry flag."""
+        geometry = f"{rect.x()},{rect.y()} {rect.width()}x{rect.height()}"
+        try:
+            result = subprocess.run(
+                ["grim", "-g", geometry, "-"],
+                capture_output=True, env=clean_subprocess_env(), timeout=5,
+            )
+            if result.returncode == 0 and result.stdout:
+                # No all-black check here, unlike the full-desktop path. That
+                # heuristic exists because some compositors return a black
+                # frame instead of failing; grim reports failure with a
+                # non-zero exit code. Applying it to regions would reject
+                # legitimately dark HUD panels and silently drop every frame
+                # back to a full-desktop capture — losing the fast path
+                # continuous translation depends on.
+                logger.debug("Captured region %s via grim", geometry)
+                return result.stdout
+        except FileNotFoundError:
+            logger.debug("grim not installed; region capture unavailable")
+        except Exception as e:
+            logger.debug("grim region capture error: %s", e)
+        return None
+
+    @staticmethod
     def _capture_pyqt() -> bytes | None:
         """Capture entire virtual desktop using PyQt (X11, Windows, macOS).
 
@@ -227,15 +271,17 @@ class ScreenCapture:
         img = QImage.fromData(data)
         if img.isNull(): return True
 
-        # Check a 5x5 grid of points (25 points total)
+        # Sample a grid of up to 5x5 points. Region captures can be narrower
+        # than the grid, so the step count adapts rather than rejecting them.
         w, h = img.width(), img.height()
-        if w < 5 or h < 5: return True
+        if w < 1 or h < 1: return True
 
+        cols, rows = min(5, w), min(5, h)
         points = []
-        for i in range(5):
-            for j in range(5):
-                x = int(i * (w - 1) / 4.0)
-                y = int(j * (h - 1) / 4.0)
+        for i in range(cols):
+            for j in range(rows):
+                x = int(i * (w - 1) / (cols - 1)) if cols > 1 else 0
+                y = int(j * (h - 1) / (rows - 1)) if rows > 1 else 0
                 points.append(img.pixelColor(x, y))
 
         # Only reject if all sampled points are truly black or white

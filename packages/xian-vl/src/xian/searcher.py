@@ -22,6 +22,7 @@ import asyncio
 import glob
 import logging
 import os
+import random
 import re
 import urllib.parse
 
@@ -34,6 +35,13 @@ logger = logging.getLogger(__name__)
 _BROWSER_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+#: Used when searx.space is unreachable or lists nothing fast enough.
+_SEARXNG_FALLBACK_INSTANCES = (
+    "https://searx.be/",
+    "https://searxng.site/",
+    "https://paulgo.io/",
 )
 
 
@@ -177,16 +185,11 @@ class SearXNGSearcher:
             # If list is empty, fallback to some known defaults
             if not self.instances:
                 logger.warning("No high-performance instances found on searx.space. Using defaults.")
-                self.instances = [
-                    "https://searx.be/",
-                    "https://searxng.site/",
-                    "https://paulgo.io/",
-                ]
+                self.instances = list(_SEARXNG_FALLBACK_INSTANCES)
 
             # Shuffle the top entries to distribute load
             top_n = min(10, len(self.instances))
             top_instances = self.instances[:top_n]
-            import random
             random.shuffle(top_instances)
             self.instances[:top_n] = top_instances
 
@@ -194,11 +197,7 @@ class SearXNGSearcher:
 
         except Exception as e:
             logger.error("Failed to discover instances: %s. Using fallback defaults.", e)
-            self.instances = [
-                "https://searx.be/",
-                "https://searxng.site/",
-                "https://paulgo.io/",
-            ]
+            self.instances = list(_SEARXNG_FALLBACK_INSTANCES)
 
     def _get_next_instance(self) -> str:
         if not self.instances:
@@ -385,9 +384,11 @@ class WebSearcher:
                 logger.debug("Skipping enrich for non-http(s) URL: %s", url)
                 continue
 
-            # Skip domains that won't have useful text
-            domain = parsed_url.netloc.lower()
-            if any(skip in domain for skip in self._SKIP_DOMAINS):
+            # Skip domains that won't have useful text. Matched on label
+            # boundaries, not as substrings: "x.com" would otherwise skip
+            # netflix.com, xbox.com, and every other host containing it.
+            domain = parsed_url.netloc.lower().split(":")[0]
+            if any(domain == skip or domain.endswith("." + skip) for skip in self._SKIP_DOMAINS):
                 continue
 
             try:

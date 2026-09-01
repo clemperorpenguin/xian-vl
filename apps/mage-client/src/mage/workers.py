@@ -104,6 +104,37 @@ def voice_for_language(language: str) -> str:
     return "af_heart"
 
 
+_JSON_TRANSLATE_SYSTEM_PROMPT = (
+    "You are a translation API. You MUST respond with valid JSON ONLY. "
+    "Do NOT include markdown formatting, backticks, or any other text outside the JSON object. "
+    "The JSON object must have exactly one key: 'translation'."
+)
+
+
+async def _json_translate(processor, text: str, source_lang: str, target_lang: str,
+                          *, timeout: float) -> str:
+    """Ask the LLM for a one-key JSON translation; return its raw reply.
+
+    Callers parse with :func:`extract_translation_json` and handle their own
+    failures, because what to show on a failure differs per surface.
+    """
+    response = await asyncio.wait_for(
+        processor.client.chat.completions.create(
+            model=processor.get_model_name(),
+            messages=[
+                {"role": "system", "content": _JSON_TRANSLATE_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Translate from {source_lang} to {target_lang}:\n\n{text}"},
+            ],
+            max_tokens=processor.config.max_tokens,
+            temperature=0.1,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        timeout=timeout,
+    )
+    choice = response.choices[0] if response.choices else None
+    return (choice.message.content or "").strip() if choice else ""
+
+
 def _queue_put_drop_oldest(q: "asyncio.Queue", item) -> None:
     """Put *item* on a bounded queue, discarding the oldest entry if it is full.
 
@@ -125,9 +156,9 @@ def _queue_put_drop_oldest(q: "asyncio.Queue", item) -> None:
 class InferenceWorker(QThread):
     """Run a single VLM inference off the main thread.
 
-    Accepts image bytes and a target language, calls VLProcessor.process_frame(),
-    and emits the list of TranslationResult objects when done.  For chat messages
-    it calls VLProcessor.process_chat() and emits the response string.
+    Streams ``VLProcessor.stream_frame()``, emitting partial text as it arrives
+    and the list of ``TranslationResult`` objects at the end. For chat messages
+    it calls ``VLProcessor.process_chat()`` and emits the response string.
     """
 
     translation_done = pyqtSignal(list, str)
@@ -136,7 +167,7 @@ class InferenceWorker(QThread):
     chat_done = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, processor, *, image_data: bytes = None,
+    def __init__(self, processor, *, image_data=None,
                  source_lang: str = "Chinese", target_lang: str = "English",
                  mode: str = "Game", styles: list[str] = None,
                  action: str = "translate",
@@ -336,13 +367,14 @@ class ContinueWorker(QThread):
 class CinematicWorker(QThread):
     """Run Cinematic inference handling audio transcription and visual OCR.
 
-    Accepts image bytes, captures audio, transcribes it, and calls VLProcessor.process_cinematic().
+    Accepts an image (encoded bytes or a decoded PIL image), captures audio,
+    transcribes it, and calls VLProcessor.process_cinematic().
     """
 
     translation_done = pyqtSignal(list, str)
     error = pyqtSignal(str)
 
-    def __init__(self, processor, *, image_data: bytes = None,
+    def __init__(self, processor, *, image_data=None,
                  target_lang: str = "English", styles: list[str] = None,
                  anchor_rect: QRect = None, source_lang: str = "Chinese"):
         super().__init__()
@@ -423,37 +455,19 @@ class ChatTranslationWorker(QThread):
         self.source_lang = source_lang
 
     async def _run_async(self):
-        system_prompt = (
-            "You are a translation API. You MUST respond with valid JSON ONLY. "
-            "Do NOT include markdown formatting, backticks, or any other text outside the JSON object. "
-            "The JSON object must have exactly one key: 'translation'."
-        )
-        user_prompt = f"Translate from {self.target_lang} to {self.source_lang}:\n\n{self.text}"
-        
+        # Reversed on purpose: "How do I say this?" translates what the player
+        # typed in their own (target) language into the game's language.
         try:
-            response = await asyncio.wait_for(
-                self.processor.client.chat.completions.create(
-                    model=self.processor.get_model_name(),
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    max_tokens=self.processor.config.max_tokens,
-                    temperature=0.1,
-                    extra_body={"chat_template_kwargs": {"enable_thinking": False}}
-                ),
+            final_output = await _json_translate(
+                self.processor, self.text, self.target_lang, self.source_lang,
                 timeout=CHAT_TIMEOUT_SECONDS,
             )
-            
-            choice = response.choices[0] if response.choices else None
-            final_output = (choice.message.content or "").strip() if choice else ""
-            
             translation = extract_translation_json(final_output)
             if translation:
                 return translation
-                
+
             raise ValueError("Failed to parse translation from model output.")
-            
+
         except Exception as e:
             logger.error("Error during chat translation inference: %s", e)
             raise e
@@ -596,7 +610,7 @@ class RaidWorker(QThread):
                     ),
                     timeout=15.0,
                 )
-            except (asyncio.TimeoutError, Exception) as e:
+            except Exception as e:
                 logger.warning("Raid Mode transcription failed or timed out: %s", e)
                 err_msg = str(e).lower()
                 if "500" in err_msg or "internal server error" in err_msg or "model_load_error" in err_msg:
@@ -615,30 +629,12 @@ class RaidWorker(QThread):
                 continue
 
             self.progress.emit("Translating text...")
-            system_prompt = (
-                "You are a translation API. You MUST respond with valid JSON ONLY. "
-                "Do NOT include markdown formatting, backticks, or any other text outside the JSON object. "
-                "The JSON object must have exactly one key: 'translation'."
-            )
-            user_prompt = f"Translate from {self.source_lang} to {self.target_lang}:\n\n{transcript}"
-
             try:
-                response = await asyncio.wait_for(
-                    self.processor.client.chat.completions.create(
-                        model=self.processor.get_model_name(),
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt}
-                        ],
-                        max_tokens=self.processor.config.max_tokens,
-                        temperature=0.1,
-                        extra_body={"chat_template_kwargs": {"enable_thinking": False}}
-                    ),
+                final_output = await _json_translate(
+                    self.processor, transcript, self.source_lang, self.target_lang,
                     timeout=CHAT_AUX_TIMEOUT_SECONDS,
                 )
-                choice = response.choices[0] if response.choices else None
-                final_output = (choice.message.content or "").strip() if choice else ""
-            except (asyncio.TimeoutError, Exception) as e:
+            except Exception as e:
                 logger.warning("Raid Mode translation failed or timed out: %s", e)
                 self.progress.emit(f"Translation failed ({e}), listening...")
                 continue
@@ -752,17 +748,31 @@ class ModelPullWorker(QThread):
     # (file being downloaded, percent 0-100) — throttled to whole-percent steps.
     pull_progress = pyqtSignal(str, float)
 
-    def __init__(self, api_url: str, model_name: str, gpu_memory_utilization: str = "Default"):
+    def __init__(
+        self,
+        api_url: str,
+        model_name: str,
+        gpu_memory_utilization: str = "Default",
+        body: dict | None = None,
+    ):
         super().__init__()
         self.api_url = api_url
         self.model_name = model_name
         self.gpu_memory_utilization = gpu_memory_utilization
+        #: Full registration body, for a model the server does not already know
+        #: by name — a Xian collection carries its recipe and components here
+        #: (see :mod:`xian.collections`).  ``None`` pulls by name.
+        self.body = body
 
     def run(self):
         try:
             base_url = os.environ.get("LEMONADE_API_URL", self.api_url)
-            payload: dict = {"model": self.model_name, "stream": True}
-            if self.gpu_memory_utilization != "Default":
+            payload: dict = dict(self.body) if self.body else {"model": self.model_name}
+            payload["stream"] = True
+            # A collection has no backend of its own, so a VRAM fraction on its
+            # pull body would have nothing to apply to — each component carries
+            # its own options.
+            if self.body is None and self.gpu_memory_utilization != "Default":
                 try:
                     payload["gpu_memory_utilization"] = float(self.gpu_memory_utilization)
                 except ValueError:
@@ -866,8 +876,13 @@ class PrewarmWorker(QThread):
 
 
 class CaptureWorker(QThread):
-    """Asynchronously captures, crops, composites, and encodes screenshots."""
-    capture_done = pyqtSignal(bytes, QRect)
+    """Asynchronously captures, crops, and composites screenshots.
+
+    Emits a decoded PIL image rather than re-encoded bytes: the pipeline
+    decodes whatever it is given anyway, so encoding here only to decode again
+    downstream wastes time on every dialogue frame.
+    """
+    capture_done = pyqtSignal(object, QRect)
     error = pyqtSignal(str)
 
     def __init__(self, mode: str, rects: list[QRect], total_geo: QRect):
@@ -878,10 +893,30 @@ class CaptureWorker(QThread):
 
     def run(self):
         from mage.capture.screen import ScreenCapture
+        from mage.utils.images import qimage_to_pil
         from PyQt6.QtGui import QImage, QPainter
-        from PyQt6.QtCore import QBuffer, QIODevice
 
         try:
+            if self.mode == "dialogue":
+                rect = self.rects[0]
+                data, already_cropped = ScreenCapture.capture_region(rect)
+                if not data:
+                    self.error.emit("Failed to capture screen")
+                    return
+
+                img = QImage.fromData(data)
+                if img.isNull():
+                    self.error.emit("Failed to load screen capture image")
+                    return
+
+                if not already_cropped:
+                    safe_rect = rect.translated(-self.total_geo.left(), -self.total_geo.top())
+                    safe_rect = safe_rect.intersected(img.rect())
+                    img = img.copy(safe_rect)
+
+                self.capture_done.emit(qimage_to_pil(img), rect)
+                return
+
             data = ScreenCapture.capture_screen()
             if not data:
                 self.error.emit("Failed to capture screen")
@@ -892,20 +927,7 @@ class CaptureWorker(QThread):
                 self.error.emit("Failed to load screen capture image")
                 return
 
-            if self.mode == "dialogue":
-                rect = self.rects[0]
-                safe_rect = rect.translated(-self.total_geo.left(), -self.total_geo.top())
-                safe_rect = safe_rect.intersected(img.rect())
-                cropped = img.copy(safe_rect)
-                
-                buf = QBuffer()
-                buf.open(QIODevice.OpenModeFlag.WriteOnly)
-                cropped.save(buf, "JPG", 85)
-                cropped_data = bytes(buf.buffer())
-                
-                self.capture_done.emit(cropped_data, rect)
-
-            elif self.mode == "cinematic":
+            if self.mode == "cinematic":
                 total_height = sum(r.height() for r in self.rects)
                 max_width = max(r.width() for r in self.rects)
 
@@ -922,13 +944,8 @@ class CaptureWorker(QThread):
                     y_offset += r.height()
                 painter.end()
 
-                buf = QBuffer()
-                buf.open(QIODevice.OpenModeFlag.WriteOnly)
-                composite.save(buf, "JPG", 85)
-                composite_data = bytes(buf.buffer())
-
                 anchor_rect = self.rects[-1] if self.rects else QRect()
-                self.capture_done.emit(composite_data, anchor_rect)
+                self.capture_done.emit(qimage_to_pil(composite), anchor_rect)
         except Exception as e:
             logger.error("CaptureWorker error: %s", e)
             self.error.emit(str(e))

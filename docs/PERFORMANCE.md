@@ -53,7 +53,7 @@ To ensure a stutter-free 60 FPS overlay experience during gameplay, all heavy ta
 * To support seamless gaming HUD functionality, visual translations and OCR responses should stream back or populate as close to real-time as the hardware accelerators permit.
 
 ### Target Benchmarking Hardware
-We target local acceleration of the virtual multi-model collection `LMX-Omni-5.5B-Lite` (which routes chat/vision commands to the ~4B parameter `Qwen3.5-4B-MTP-GGUF` model). Key benchmark environments include:
+We target local acceleration of Xian's own virtual multi-model collection `Xian-Ultra` (which routes chat and vision commands to the ~9B parameter `Qwen3.5-9B-GGUF` model); `Xian-Lite` is the ~4B comparison point on constrained hardware. Key benchmark environments include:
 1. **AMD Radeon™ RX 7900 XTX** (Vulkan/ROCm acceleration)
 2. **Apple Silicon M4** (Metal acceleration)
 

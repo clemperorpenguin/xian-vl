@@ -34,12 +34,20 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QWidget, QCheckBox, QMessageBox, QInputDialog, QTabWidget, QSlider,
     QFileDialog
 )
-from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, pyqtSignal
-from PyQt6.QtGui import QIcon, QCursor
+from PyQt6.QtCore import Qt, QSettings, QRect, QTimer, QStandardPaths, pyqtSignal
+from PyQt6.QtGui import QIcon, QCursor, QColor
 
 from mage.ui.theme import accent_hex, accent_hover_hex
 
 from xian.pipeline import VLProcessor, VLConfig
+from xian.collections import (
+    COLLECTIONS,
+    build_pull_body,
+    collection_for_name,
+    get_collection,
+    recommended_tier,
+)
+from xian.session_store import SessionStore
 from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker, ChatTranslationWorker, RaidWorker, voice_for_language
 from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
 from mage.ui.chat_sidebar import ChatSidebar
@@ -65,7 +73,9 @@ from mage.settings_keys import (
     KEY_GPU_UTIL, KEY_DIALOGUE_DELAY,
     KEY_AUTO_CONTINUE, KEY_AUTO_SPEAK, KEY_TARGET_WINDOW_TITLE, KEY_UI_LANG,
     KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS, KEY_FAMILIAR_TYPE,
-    KEY_FAMILIAR_CUSTOM_RECIPE,
+    KEY_FAMILIAR_CUSTOM_RECIPE, KEY_MEMORY_ENABLED, KEY_MEMORY_RETENTION_DAYS,
+    KEY_BACKEND_PREFERENCE, KEY_NPU_POWER_MODE, KEY_LIVE_INTERVAL_MS,
+    KEY_COLLECTION_TIER, is_true,
 )
 from mage.utils.window_binder import WindowBinder
 from shared_types.state import state, t
@@ -93,6 +103,9 @@ class SettingsDialog(QDialog):
     """Small modal dialog for configuring the Lemonade backend."""
     
     layout_edit_requested = pyqtSignal()
+
+    #: Set on save when the collection tier changed, so the caller installs it.
+    tier_changed = False
 
     def __init__(self, settings: QSettings, models: list, parent=None, app=None):
         super().__init__(parent)
@@ -182,6 +195,20 @@ class SettingsDialog(QDialog):
         self.model_combo.setCurrentText(settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL))
         backend_layout.addRow(t("settings.label.model"), self.model_combo)
 
+        # Which Xian collection to install. Picking one here re-registers it and
+        # points the model above at it; the model field stays editable for
+        # anyone who would rather drive a model of their own choosing.
+        self.tier_combo = QComboBox()
+        for tier, collection in COLLECTIONS.items():
+            label = f"{t(f'settings.option.collection.{tier.value}')} — {collection.size_gb:.1f} GB"
+            self.tier_combo.addItem(label, tier.value)
+        self._initial_tier = settings.value(KEY_COLLECTION_TIER, constants.DEFAULT_COLLECTION_TIER)
+        tier_idx = self.tier_combo.findData(self._initial_tier)
+        if tier_idx >= 0:
+            self.tier_combo.setCurrentIndex(tier_idx)
+        self.tier_combo.setToolTip(t("settings.tooltip.collection_tier"))
+        backend_layout.addRow(t("settings.label.collection_tier"), self.tier_combo)
+
         self.tokens_spin = QSpinBox()
         self.tokens_spin.setRange(256, 32768)
         self.tokens_spin.setValue(int(settings.value(KEY_MAX_TOKENS, constants.DEFAULT_MAX_TOKENS)))
@@ -191,6 +218,33 @@ class SettingsDialog(QDialog):
         self.gpu_combo.addItems(["Default", "0.5", "0.75"])
         self.gpu_combo.setCurrentText(settings.value(KEY_GPU_UTIL, constants.DEFAULT_GPU_MEMORY_UTILIZATION))
         backend_layout.addRow(t("settings.label.gpu_memory_utilization"), self.gpu_combo)
+
+        # Accelerator choice. Only text and speech can move to the NPU — the
+        # vision model always runs on the GPU, so this never affects OCR speed.
+        self.backend_combo = QComboBox()
+        for pref in constants.BACKEND_PREFERENCES:
+            self.backend_combo.addItem(t(f"settings.option.backend.{pref}"), pref)
+        b_idx = self.backend_combo.findData(
+            settings.value(KEY_BACKEND_PREFERENCE, constants.DEFAULT_BACKEND_PREFERENCE)
+        )
+        if b_idx >= 0:
+            self.backend_combo.setCurrentIndex(b_idx)
+        self.backend_combo.setToolTip(t("settings.tooltip.backend_preference"))
+        backend_layout.addRow(t("settings.label.backend_preference"), self.backend_combo)
+
+        self.npu_power_combo = QComboBox()
+        for mode in constants.NPU_POWER_MODES:
+            self.npu_power_combo.addItem(t(f"settings.option.npu_power.{mode}"), mode)
+        p_idx = self.npu_power_combo.findData(
+            settings.value(KEY_NPU_POWER_MODE, constants.DEFAULT_NPU_POWER_MODE)
+        )
+        if p_idx >= 0:
+            self.npu_power_combo.setCurrentIndex(p_idx)
+        npu_available = bool(app and app.processor.router.npu_available())
+        self.npu_power_combo.setEnabled(npu_available)
+        if not npu_available:
+            self.npu_power_combo.setToolTip(t("settings.tooltip.npu_unavailable"))
+        backend_layout.addRow(t("settings.label.npu_power_mode"), self.npu_power_combo)
 
         self.tabs.addTab(backend_tab, "Backend")
 
@@ -262,17 +316,46 @@ class SettingsDialog(QDialog):
 
         self.auto_continue_cb = QCheckBox(t("settings.checkbox.auto_continue"))
         auto_val = settings.value(KEY_AUTO_CONTINUE, "false")
-        self.auto_continue_cb.setChecked(auto_val == "true" or auto_val is True)
+        self.auto_continue_cb.setChecked(is_true(auto_val))
         features_layout.addRow(self.auto_continue_cb)
 
         self.auto_speak_cb = QCheckBox(t("settings.checkbox.auto_speak"))
         speak_val = settings.value(KEY_AUTO_SPEAK, "false")
-        self.auto_speak_cb.setChecked(speak_val == "true" or speak_val is True)
+        self.auto_speak_cb.setChecked(is_true(speak_val))
         features_layout.addRow(self.auto_speak_cb)
+
+        self.live_interval_spin = QSpinBox()
+        self.live_interval_spin.setRange(200, 5000)
+        self.live_interval_spin.setSingleStep(100)
+        self.live_interval_spin.setSuffix(" ms")
+        self.live_interval_spin.setValue(int(settings.value(
+            KEY_LIVE_INTERVAL_MS, constants.DEFAULT_LIVE_INTERVAL_MS
+        )))
+        self.live_interval_spin.setToolTip(t("settings.tooltip.live_interval"))
+        features_layout.addRow(t("settings.label.live_interval"), self.live_interval_spin)
+
+
+        self.memory_enabled_cb = QCheckBox(t("settings.checkbox.memory_enabled"))
+        self.memory_enabled_cb.setToolTip(t("settings.tooltip.memory_enabled"))
+        self.memory_enabled_cb.setChecked(is_true(settings.value(KEY_MEMORY_ENABLED, "true")))
+        features_layout.addRow(self.memory_enabled_cb)
+
+        memory_row = QHBoxLayout()
+        self.memory_retention_spin = QSpinBox()
+        self.memory_retention_spin.setRange(1, 365)
+        self.memory_retention_spin.setSuffix(" d")
+        self.memory_retention_spin.setValue(int(settings.value(
+            KEY_MEMORY_RETENTION_DAYS, constants.DEFAULT_MEMORY_RETENTION_DAYS
+        )))
+        memory_row.addWidget(self.memory_retention_spin, 1)
+        self.clear_memory_btn = QPushButton(t("settings.button.clear_memory"))
+        self.clear_memory_btn.clicked.connect(self._on_clear_memory_clicked)
+        memory_row.addWidget(self.clear_memory_btn)
+        features_layout.addRow(t("settings.label.memory_retention"), memory_row)
 
         self.familiar_enabled_cb = QCheckBox(t("settings.checkbox.familiar_enabled"))
         fam_val = settings.value(KEY_FAMILIAR_ENABLED, "false")
-        self.familiar_enabled_cb.setChecked(fam_val == "true" or fam_val is True)
+        self.familiar_enabled_cb.setChecked(is_true(fam_val))
         features_layout.addRow(self.familiar_enabled_cb)
 
         self.familiar_type_combo = QComboBox()
@@ -292,22 +375,22 @@ class SettingsDialog(QDialog):
 
         self.familiar_tts_cb = QCheckBox(t("settings.checkbox.familiar_tts"))
         fam_tts_val = settings.value(KEY_FAMILIAR_TTS, "false")
-        self.familiar_tts_cb.setChecked(fam_tts_val == "true" or fam_tts_val is True)
+        self.familiar_tts_cb.setChecked(is_true(fam_tts_val))
         features_layout.addRow(self.familiar_tts_cb)
 
         self.live_voice_raid_cb = QCheckBox(t("settings.checkbox.live_voice_raid"))
         lv_raid_val = settings.value("live_voice_raid", "false")
-        self.live_voice_raid_cb.setChecked(lv_raid_val == "true" or lv_raid_val is True)
+        self.live_voice_raid_cb.setChecked(is_true(lv_raid_val))
         features_layout.addRow(self.live_voice_raid_cb)
         
         self.live_raid_lore_save_cb = QCheckBox(t("settings.checkbox.live_raid_lore_save"))
         lr_lore_val = settings.value("live_raid_lore_save", "false")
-        self.live_raid_lore_save_cb.setChecked(lr_lore_val == "true" or lr_lore_val is True)
+        self.live_raid_lore_save_cb.setChecked(is_true(lr_lore_val))
         features_layout.addRow(self.live_raid_lore_save_cb)
 
         self.dev_options_cb = QCheckBox(t("settings.checkbox.dev_options"))
         dev_options_val = settings.value("developer_options", "false")
-        self.dev_options_cb.setChecked(dev_options_val == "true" or dev_options_val is True)
+        self.dev_options_cb.setChecked(is_true(dev_options_val))
         features_layout.addRow(self.dev_options_cb)
         self.dev_options_cb.toggled.connect(self._update_dev_visibility)
         self._update_dev_visibility(self.dev_options_cb.isChecked())
@@ -424,6 +507,13 @@ class SettingsDialog(QDialog):
         self.url_edit.setText(normalized)
         self.settings.setValue(KEY_API_URL, normalized)
         self.settings.setValue(KEY_API_MODEL, self.model_combo.currentText())
+        # A changed tier names a different collection, so it also decides the
+        # model — otherwise the combo above would keep pointing at the old one.
+        selected_tier = self.tier_combo.currentData()
+        self.tier_changed = selected_tier != self._initial_tier
+        self.settings.setValue(KEY_COLLECTION_TIER, selected_tier)
+        if self.tier_changed:
+            self.settings.setValue(KEY_API_MODEL, get_collection(selected_tier).name)
         self.settings.setValue("layout_preset", self.preset_combo.currentText())
         self.settings.setValue(KEY_SOURCE_LANG, self.source_lang_combo.currentText())
         self.settings.setValue(KEY_TARGET_LANG, self.lang_combo.currentText())
@@ -437,9 +527,14 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_LEADER_KEY, self.leader_combo.currentData())
         self.settings.setValue(KEY_OVERLAY_TOGGLE_KEY, self.overlay_toggle_combo.currentData())
         self.settings.setValue(KEY_GPU_UTIL, self.gpu_combo.currentText())
+        self.settings.setValue(KEY_BACKEND_PREFERENCE, self.backend_combo.currentData())
+        self.settings.setValue(KEY_NPU_POWER_MODE, self.npu_power_combo.currentData())
         self.settings.setValue(KEY_DIALOGUE_DELAY, self.delay_spin.value())
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
+        self.settings.setValue(KEY_LIVE_INTERVAL_MS, self.live_interval_spin.value())
+        self.settings.setValue(KEY_MEMORY_ENABLED, "true" if self.memory_enabled_cb.isChecked() else "false")
+        self.settings.setValue(KEY_MEMORY_RETENTION_DAYS, self.memory_retention_spin.value())
         self.settings.setValue(KEY_FAMILIAR_ENABLED, "true" if self.familiar_enabled_cb.isChecked() else "false")
         self.settings.setValue(KEY_FAMILIAR_TYPE, self.familiar_type_combo.currentData())
         self.settings.setValue(KEY_FAMILIAR_TTS, "true" if self.familiar_tts_cb.isChecked() else "false")
@@ -457,6 +552,20 @@ class SettingsDialog(QDialog):
     def _on_edit_layout(self):
         self.layout_edit_requested.emit()
         self.accept()
+
+    def _on_clear_memory_clicked(self):
+        """Settings 'Clear memory' button: erase the whole play history."""
+        confirm = QMessageBox.question(
+            self,
+            t("settings.button.clear_memory"),
+            t("settings.confirm.clear_memory"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        if self.app is not None:
+            self.app.clear_session_memory()
 
     def _on_conjure_clicked(self):
         """Settings 'Conjure…' button: generate via the app, then select custom."""
@@ -488,14 +597,19 @@ class XianApp(QWidget):
         self.settings = QSettings(ORGANIZATION, APP_NAME)
         state.load_locale(self.settings.value(KEY_UI_LANG, "en"))
 
-        if self.settings.value(KEY_API_MODEL) == "MAGE":
-            self.settings.setValue(KEY_API_MODEL, constants.DEFAULT_MODEL)
+        self._seed_collection_tier()
         self._available_models: list = []
 
         self.processor = VLProcessor(VLConfig(
             model_name=self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL),
             api_url=_normalized_api_url_from_settings(self.settings),
             max_tokens=int(self.settings.value(KEY_MAX_TOKENS, constants.DEFAULT_MAX_TOKENS)),
+            backend_preference=self.settings.value(
+                KEY_BACKEND_PREFERENCE, constants.DEFAULT_BACKEND_PREFERENCE
+            ),
+            npu_power_mode=self.settings.value(
+                KEY_NPU_POWER_MODE, constants.DEFAULT_NPU_POWER_MODE
+            ),
         ))
         self.dictionary = LocalDictionary()
 
@@ -535,7 +649,6 @@ class XianApp(QWidget):
         self.cinematic_mode_active = False
         self.cinematic_bubble = None
 
-        self.raid_bubble = None
         self.raid_window = None
         self._raid_worker = None
 
@@ -557,7 +670,7 @@ class XianApp(QWidget):
             model=self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
         )
         dev_val = self.settings.value("developer_options", "false")
-        self.osd.set_developer_options_visible(dev_val == "true" or dev_val is True)
+        self.osd.set_developer_options_visible(is_true(dev_val))
         self.osd.setting_changed.connect(self._on_osd_setting_changed)
         self.osd.command_triggered.connect(self._on_osd_command)
         self.osd.osd_hidden.connect(self._on_osd_hidden)
@@ -565,6 +678,12 @@ class XianApp(QWidget):
         self.osd_timer = QTimer(self)
         self.osd_timer.setSingleShot(True)
         self.osd_timer.timeout.connect(self.hide_osd)
+
+        self._init_session_memory()
+
+        # Live (inpainted) translation state.
+        self._live_lens_worker = None
+        self.inpaint_overlay = None
 
         self.chat_sidebar = ChatSidebar(self.processor, parent=self)
         self.notes_sidebar = NotesSidebar(self)
@@ -609,12 +728,12 @@ class XianApp(QWidget):
         """Create the desktop familiar companion if Familiar Mode is enabled."""
         self.familiar = None
         fam_val = self.settings.value(KEY_FAMILIAR_ENABLED, "false")
-        if fam_val == "true" or fam_val is True:
+        if is_true(fam_val):
             self._create_familiar()
 
     def _developer_mode(self) -> bool:
         val = self.settings.value("developer_options", "false")
-        return val == "true" or val is True
+        return is_true(val)
 
     def _create_familiar(self):
         if getattr(self, "familiar", None):
@@ -698,6 +817,251 @@ class XianApp(QWidget):
             and action != "cinematic"
         )
 
+    def _seed_collection_tier(self):
+        """Ask, on first run, which models to download.
+
+        Only the *first* run: once a tier or model is stored, the user's choice
+        stands. Installed memory picks the dialog's default — it is the one
+        figure available before the server has been contacted — but it no
+        longer decides on its own. It used to, and a machine with plenty of RAM
+        would silently start fetching 25.8 GB.
+
+        Declining the dialog is not offered: MAGE cannot translate without a
+        model, so the choice is which one, not whether.
+        """
+        if self.settings.value(KEY_COLLECTION_TIER) or self.settings.value(KEY_API_MODEL):
+            return
+
+        memory_gb = 0.0
+        try:
+            import psutil
+
+            memory_gb = psutil.virtual_memory().total / (1024 ** 3)
+        except Exception as e:  # psutil missing, or an unreadable /proc
+            logger.debug("Could not read system memory for tier selection: %s", e)
+
+        recommended = str(
+            recommended_tier(memory_gb) if memory_gb else constants.DEFAULT_COLLECTION_TIER
+        )
+
+        tier, model = self._ask_for_models(recommended, memory_gb)
+
+        if tier is not None:
+            self.settings.setValue(KEY_COLLECTION_TIER, tier)
+        self.settings.setValue(KEY_API_MODEL, model)
+        # Only the settings are written: this runs before ``self.processor``
+        # exists, and the processor is constructed from KEY_API_MODEL on the
+        # next line of __init__, so it picks the choice up from here.
+        logger.info("First run: chose %s (tier %s)", model, tier or "none")
+
+    def _ask_for_models(self, recommended: str, memory_gb: float) -> tuple[str | None, str]:
+        """Show the first-run picker; fall back to the recommendation if it fails.
+
+        A dialog that cannot be shown — no display, a Qt problem — must not
+        stop the app starting, so the old memory-based behaviour stands in.
+        """
+        try:
+            from mage.ui.model_choice_dialog import ModelChoiceDialog
+
+            dialog = ModelChoiceDialog(recommended)
+            dialog.exec()
+            return dialog.chosen_tier, dialog.chosen_model
+        except Exception as e:
+            logger.warning("Model picker unavailable (%s); using the recommendation", e)
+            collection = get_collection(recommended)
+            logger.info(
+                "First run: %.0f GB of memory detected, choosing collection %s.",
+                memory_gb, collection.name,
+            )
+            return recommended, collection.name
+
+    def _init_session_memory(self):
+        """Open the durable play-session log and hand it to the processor.
+
+        The client owns the storage location; the engine stays Qt-free and only
+        receives the ready-made store.  Failure here is never fatal — memory is
+        an enhancement, and translation must keep working without it.
+        """
+        self.session_store = None
+        if not is_true(self.settings.value(KEY_MEMORY_ENABLED, "true")):
+            logger.info("Session memory disabled by settings")
+            return
+
+        try:
+            base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
+            db_path = os.path.join(base, "session", "sessions.db")
+            retention = int(self.settings.value(
+                KEY_MEMORY_RETENTION_DAYS, constants.DEFAULT_MEMORY_RETENTION_DAYS
+            ))
+
+            self.session_store = SessionStore(db_path, retention_days=retention)
+            self.session_store.purge_older_than()
+            self.session_store.begin_session(
+                window_title=self.settings.value(KEY_TARGET_WINDOW_TITLE, "") or None,
+                game_profile=self.settings.value(KEY_MODE, constants.DEFAULT_MODE),
+            )
+            self.processor.attach_session_store(self.session_store)
+        except Exception as e:
+            logger.warning("Session memory unavailable: %s", e)
+            self.session_store = None
+
+    # ── Live (inpainted) translation ─────────────────────────────────
+
+    def start_live_lens(self, rect: QRect):
+        """Continuously translate a region, painting over the original text."""
+        if not self._ensure_model_ready():
+            return
+        self.stop_live_lens()
+
+        from mage.capture.stream import FrameStream, screen_for_rect
+        from mage.live_lens import LiveLensWorker
+        from mage.ui.inpaint_overlay import InpaintOverlay
+
+        LensOverlayWindow._last_rect = rect
+
+        self.inpaint_overlay = InpaintOverlay()
+        self.inpaint_overlay.bind_to_rect(rect)
+        self.inpaint_overlay.show()
+
+        # Opened here rather than in the worker: the capture session delivers
+        # frames through a signal and so has to live on the GUI thread. A
+        # refusal is not an error — the worker falls back to screenshots.
+        self._frame_stream = FrameStream(screen_for_rect(rect))
+        if not self._frame_stream.start():
+            self._frame_stream = None
+
+        self._live_lens_worker = LiveLensWorker(
+            self.processor,
+            rect,
+            frame_stream=self._frame_stream,
+            source_lang=self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG),
+            target_lang=self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG),
+            interval_ms=int(self.settings.value(KEY_LIVE_INTERVAL_MS, constants.DEFAULT_LIVE_INTERVAL_MS)),
+            session_recorder=lambda orig, trans: self.processor.record_event("inpaint", orig, trans),
+        )
+        self._live_lens_worker.regions_ready.connect(self._on_live_regions)
+        self._live_lens_worker.error.connect(self._on_live_lens_error)
+        self._workers.append(self._live_lens_worker)
+        self._live_lens_worker.start()
+
+        bubble = ResultBubble(t("live_lens.status.started"), anchor_rect=rect, auto_close_ms=3000)
+        self._add_bubble(bubble)
+        logger.info("Live lens started on %s", rect)
+
+    def stop_live_lens(self):
+        """Tear down the live translation loop and its overlay."""
+        worker = getattr(self, "_live_lens_worker", None)
+        if worker is not None:
+            still_running = True
+            try:
+                worker.stop()
+                worker.requestInterruption()
+                # The loop only checks its stop flag between ticks, so a vision
+                # call already in flight can outlive this wait by tens of
+                # seconds.  Dropping the last reference then would destroy a
+                # running QThread and abort the process, so hand cleanup to
+                # finished() instead and keep the worker in _workers meanwhile.
+                still_running = not worker.wait(2000)
+            except Exception as e:
+                logger.error("Error stopping live lens: %s", e)
+            if still_running:
+                logger.info("Live lens still finishing; deferring cleanup to its finished signal")
+                worker.finished.connect(lambda w=worker: self._cleanup_worker(w))
+            else:
+                self._cleanup_worker(worker)
+            self._live_lens_worker = None
+
+        # Closed after the worker so a tick already in flight still finds a
+        # frame rather than tripping over a half-torn-down session.
+        stream = getattr(self, "_frame_stream", None)
+        if stream is not None:
+            stream.stop()
+            self._frame_stream = None
+
+        overlay = getattr(self, "inpaint_overlay", None)
+        if overlay is not None and self._is_valid_widget(overlay):
+            overlay.close()
+            overlay.deleteLater()
+        self.inpaint_overlay = None
+
+    def _on_live_regions(self, regions, rect: QRect, scale: float = 1.0):
+        """Paint newly translated regions in place."""
+        overlay = getattr(self, "inpaint_overlay", None)
+        if overlay is None or not self._is_valid_widget(overlay):
+            return
+
+        from mage.ui.inpaint_overlay import InpaintRegion, contrasting_text_color
+
+        # Boxes arrive in capture pixels; Qt paints in logical coordinates.
+        # The worker measures the ratio from the frame it actually captured —
+        # the display's devicePixelRatio would be wrong for the PyQt capture
+        # path, which already composites in logical pixels.
+        ratio = scale if scale and scale > 0 else 1.0
+        painted = []
+        for region in regions:
+            left, top, right, bottom = region.box
+            local = QRect(
+                int(left / ratio), int(top / ratio),
+                int((right - left) / ratio), int((bottom - top) / ratio),
+            )
+            fill = QColor(*region.fill)
+            painted.append(InpaintRegion(
+                rect=local,
+                text=region.translated,
+                fill=fill,
+                text_color=contrasting_text_color(fill),
+            ))
+
+        overlay.bind_to_rect(rect)
+        overlay.set_regions(painted)
+        overlay.show()
+        overlay.promote()
+
+    def _on_live_lens_error(self, message: str):
+        logger.warning("Live lens error: %s", message)
+
+    def clear_session_memory(self):
+        """Erase all stored play history and start a fresh session."""
+        store = getattr(self, "session_store", None)
+        if store is None:
+            return
+        try:
+            store.clear_all()
+            store.begin_session(
+                window_title=self.settings.value(KEY_TARGET_WINDOW_TITLE, "") or None,
+                game_profile=self.settings.value(KEY_MODE, constants.DEFAULT_MODE),
+            )
+            logger.info("Session memory cleared")
+        except Exception as e:
+            logger.error("Error clearing session memory: %s", e)
+
+    def _reload_session_memory(self):
+        """Re-apply the memory settings after the settings dialog closes.
+
+        Covers both directions: turning memory off must detach the store
+        immediately, and turning it on (or changing the retention window)
+        should take effect without a restart.
+        """
+        self._close_session_memory()
+        self._init_session_memory()
+
+    def _close_session_memory(self):
+        """Flush and close the session log on shutdown."""
+        store = getattr(self, "session_store", None)
+        if store is None:
+            return
+        try:
+            self.processor.attach_session_store(None)
+        except Exception as e:
+            logger.error("Error detaching session memory: %s", e)
+        try:
+            store.end_session()
+            store.close()
+        except Exception as e:
+            logger.error("Error closing session memory: %s", e)
+        finally:
+            self.session_store = None
+
     def _setup_telemetry(self):
         """Start periodic host-resource sampling (CPU/GPU/RAM/VRAM).
 
@@ -734,7 +1098,7 @@ class XianApp(QWidget):
         self.familiar_action = menu.addAction(t("tray.menu.familiar"))
         self.familiar_action.setCheckable(True)
         fam_val = self.settings.value(KEY_FAMILIAR_ENABLED, "false")
-        self.familiar_action.setChecked(fam_val == "true" or fam_val is True)
+        self.familiar_action.setChecked(is_true(fam_val))
         self.familiar_action.triggered.connect(self.toggle_familiar)
         # Developer-only while the art is in progress.
         self.familiar_action.setVisible(self._developer_mode())
@@ -850,7 +1214,7 @@ class XianApp(QWidget):
 
     def _on_command_mode_started(self):
         dev_val = self.settings.value("developer_options", "false")
-        self.osd.set_developer_options_visible(dev_val == "true" or dev_val is True)
+        self.osd.set_developer_options_visible(is_true(dev_val))
         self.osd.show_centered()
         if self.target_binder:
             self._apply_transient_parent(self.osd)
@@ -868,10 +1232,9 @@ class XianApp(QWidget):
         logger.info("OSD updated %s to %s", key, value)
         self.settings.setValue(key, value)
         if key == KEY_API_MODEL:
+            # No engine reconfigure: the model travels per-request, and the
+            # server URL has not changed.
             self.processor.config.model_name = value
-            self.processor.engine.reconfigure(
-                base_url=self.processor.config.api_url
-            )
             self._run_health_check()
             self._safe_stop_worker("_prewarm_worker")
             self._start_prewarm()
@@ -938,6 +1301,18 @@ class XianApp(QWidget):
             logger.info("Dialogue Mode Activated via Lens")
             return
 
+        if action == "live":
+            # Choosing Live again is how the user turns it off; there is no
+            # stop button on a click-through overlay.
+            if getattr(self, "_live_lens_worker", None) is not None:
+                self.stop_live_lens()
+                self._add_bubble(ResultBubble(
+                    t("live_lens.status.stopped"), anchor_rect=rect, auto_close_ms=2500
+                ))
+            else:
+                self.start_live_lens(rect)
+            return
+
         if action == "chat":
             # Push image into chat context and open sidebar
             self.chat_sidebar.add_image_context(image_data)
@@ -968,8 +1343,12 @@ class XianApp(QWidget):
 
         logger.warning("Unknown lens action: %s", action)
 
-    def _run_inference(self, image_data: bytes, action: str, anchor_rect: QRect):
-        """Spawn an InferenceWorker for the given image crop."""
+    def _run_inference(self, image_data, action: str, anchor_rect: QRect):
+        """Spawn an InferenceWorker for the given image crop.
+
+        ``image_data`` is either encoded bytes (lens/chat paths) or an already
+        decoded PIL image (capture worker path).
+        """
         if not self._ensure_model_ready():
             return
         source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
@@ -1144,6 +1523,9 @@ class XianApp(QWidget):
             entry = (original_combined, translation_combined)
             if not self._dialogue_session or self._dialogue_session[-1] != entry:
                 self._dialogue_session.append(entry)
+                # Dialogue lines are the story the player is living through, so
+                # they are logged separately from ambient OCR.
+                self.processor.record_event("dialogue", original_combined, translation_combined)
 
         # If a thinking bubble is active, reuse it and update in-place
         if bubble and bubble.isVisible():
@@ -1222,7 +1604,7 @@ class XianApp(QWidget):
         # Auto-continue if enabled
         if any_truncated:
             auto_continue = self.settings.value(KEY_AUTO_CONTINUE, "false")
-            if auto_continue == "true" or auto_continue is True:
+            if is_true(auto_continue):
                 if target_bubble:
                     count = getattr(target_bubble, "_continue_count", 0)
                     if count < MAX_AUTO_CONTINUES:
@@ -1239,7 +1621,7 @@ class XianApp(QWidget):
         # Auto-speak if in Cinematic Mode, or if Auto-speak setting is checked
         auto_speak = self.settings.value(KEY_AUTO_SPEAK, "false")
         spoke = False
-        if action == "cinematic" or auto_speak == "true" or auto_speak is True:
+        if action == "cinematic" or is_true(auto_speak):
             self._speak_text(translation_combined, source=False, voice_ref_bytes=getattr(worker, "audio_bytes", None))
             spoke = True
 
@@ -1257,7 +1639,7 @@ class XianApp(QWidget):
             elif results:
                 familiar.on_result(translation_combined, with_bubble=False)
             fam_tts = self.settings.value(KEY_FAMILIAR_TTS, "false")
-            if (fam_tts == "true" or fam_tts is True) and not spoke and results and translation_combined.strip():
+            if (is_true(fam_tts)) and not spoke and results and translation_combined.strip():
                 self._speak_text(translation_combined, source=False, voice_ref_bytes=getattr(worker, "audio_bytes", None))
 
     def _on_inference_error(self, msg, worker):
@@ -1323,12 +1705,16 @@ class XianApp(QWidget):
             stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
             title = f"{t('notes.title.dialogue_session')} — {stamp}"
             self.notes_sidebar.add_note(title, content, tags=["dialogue"])
+            self.processor.record_event("note", translated=f"{title}\n{content}")
         else:
             original = getattr(bubble, "_original", "") or ""
             translation = getattr(bubble, "_text", "") or ""
             if not translation.strip():
                 return
             self.notes_sidebar.add_note_from_translation(original, translation)
+            # A note is the player flagging something as worth remembering —
+            # exactly the material the assistant should weight most heavily.
+            self.processor.record_event("note", original, translation)
         bubble.mark_note_saved()
 
     def _on_raid_add_to_notes(self):
@@ -1396,8 +1782,6 @@ class XianApp(QWidget):
                     logger.warning("Voice cloning requires Lemonade to be on localhost. Falling back to default voice.")
             
             try:
-                client = LemonadeClient(base_url=base_url_no_v1)
-                
                 # Discover downloaded TTS model via router
                 active_model = self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
                 if not self.processor.router.tts(active_model):
@@ -1405,9 +1789,9 @@ class XianApp(QWidget):
                 tts_model = self.processor.router.tts(active_model)
                 if not tts_model:
                     raise ValueError("No TTS model available on the server.")
-                
-                audio_bytes = await client.tts(text, voice=voice_param, model=tts_model)
-                await client.close()
+
+                async with LemonadeClient(base_url=base_url_no_v1) as client:
+                    audio_bytes = await client.tts(text, voice=voice_param, model=tts_model)
                 play_audio_async(audio_bytes)
             except Exception as e:
                 logger.error("TTS synthesis failed: %s", e)
@@ -1478,7 +1862,7 @@ class XianApp(QWidget):
         # Auto-continue again if enabled and still truncated
         if still_truncated:
             auto_continue = self.settings.value(KEY_AUTO_CONTINUE, "false")
-            if auto_continue == "true" or auto_continue is True:
+            if is_true(auto_continue):
                 count = getattr(bubble, "_continue_count", 0)
                 if count < MAX_AUTO_CONTINUES:
                     bubble._continue_count = count + 1
@@ -1568,50 +1952,21 @@ class XianApp(QWidget):
 
 
     def clear_active_bubbles(self):
-        """Close and clear all translation bubbles to avoid capture and layering issues."""
-        if hasattr(self, "_bubbles") and self._bubbles:
-            for bubble in self._bubbles:
-                try:
-                    bubble.close()
-                except Exception:
-                    pass
-            self._bubbles.clear()
-
-        if hasattr(self, "_active_bubbles") and self._active_bubbles:
-            for worker, bubble in list(self._active_bubbles.items()):
-                try:
-                    bubble.close()
-                except Exception:
-                    pass
-            self._active_bubbles.clear()
-
-        if hasattr(self, "dialogue_bubble") and self.dialogue_bubble:
+        """Close every result window, so none of them lands in the next capture."""
+        for widget in [*self._bubbles, *self._active_bubbles.values(),
+                       self.dialogue_bubble, self.cinematic_bubble, self.raid_window]:
+            if widget is None:
+                continue
             try:
-                self.dialogue_bubble.close()
+                widget.close()
             except Exception:
-                pass
-            self.dialogue_bubble = None
+                logger.debug("Error closing %s", type(widget).__name__, exc_info=True)
 
-        if hasattr(self, "cinematic_bubble") and self.cinematic_bubble:
-            try:
-                self.cinematic_bubble.close()
-            except Exception:
-                pass
-            self.cinematic_bubble = None
-
-        if hasattr(self, "raid_bubble") and self.raid_bubble:
-            try:
-                self.raid_bubble.close()
-            except Exception:
-                pass
-            self.raid_bubble = None
-
-        if hasattr(self, "raid_window") and self.raid_window:
-            try:
-                self.raid_window.close()
-            except Exception:
-                pass
-            self.raid_window = None
+        self._bubbles.clear()
+        self._active_bubbles.clear()
+        self.dialogue_bubble = None
+        self.cinematic_bubble = None
+        self.raid_window = None
 
     def on_dialogue_click(self):
         if self.dialogue_mode_active:
@@ -1626,55 +1981,22 @@ class XianApp(QWidget):
             self.dialogue_timer.start(delay)
 
     def _is_click_inside_mage(self, pos) -> bool:
-        if hasattr(self, "_bubbles") and self._bubbles:
-            for bubble in self._bubbles:
-                try:
-                    if bubble.isVisible() and bubble.geometry().contains(pos):
-                        return True
-                except Exception:
-                    pass
-        if hasattr(self, "dialogue_bubble") and self.dialogue_bubble:
+        """Whether a global click landed on one of our own windows.
+
+        Dialogue mode re-captures on every click, so a click on the HUD itself
+        must not trigger a capture of the HUD.
+        """
+        # The lens is not an overlay (it is a full-screen capture window), so
+        # it is checked alongside the registry rather than being in it.
+        candidates = [*self._collect_overlays(), getattr(self, "_lens", None)]
+        for widget in candidates:
+            if widget is None or not self._is_valid_widget(widget):
+                continue
             try:
-                if self.dialogue_bubble.isVisible() and self.dialogue_bubble.geometry().contains(pos):
+                if widget.isVisible() and widget.geometry().contains(pos):
                     return True
             except Exception:
-                pass
-        if hasattr(self, "cinematic_bubble") and self.cinematic_bubble:
-            try:
-                if self.cinematic_bubble.isVisible() and self.cinematic_bubble.geometry().contains(pos):
-                    return True
-            except Exception:
-                pass
-        if hasattr(self, "raid_window") and self.raid_window:
-            try:
-                if self.raid_window.isVisible() and self.raid_window.geometry().contains(pos):
-                    return True
-            except Exception:
-                pass
-        if hasattr(self, "chat_sidebar") and self.chat_sidebar:
-            try:
-                if self.chat_sidebar.isVisible() and self.chat_sidebar.geometry().contains(pos):
-                    return True
-            except Exception:
-                pass
-        if hasattr(self, "osd") and self.osd:
-            try:
-                if self.osd.isVisible() and self.osd.geometry().contains(pos):
-                    return True
-            except Exception:
-                pass
-        if hasattr(self, "how_to_say_dialog") and self.how_to_say_dialog:
-            try:
-                if self.how_to_say_dialog.isVisible() and self.how_to_say_dialog.geometry().contains(pos):
-                    return True
-            except Exception:
-                pass
-        if hasattr(self, "_lens") and self._lens:
-            try:
-                if self._lens.isVisible() and self._lens.geometry().contains(pos):
-                    return True
-            except Exception:
-                pass
+                logger.debug("Hit-test failed for %s", type(widget).__name__, exc_info=True)
         return False
 
     def capture_dialogue(self):
@@ -1709,7 +2031,7 @@ class XianApp(QWidget):
     def toggle_cinematic_mode(self):
         self.hide_osd()
         dev_val = self.settings.value("developer_options", "false")
-        if not (dev_val == "true" or dev_val is True):
+        if not (is_true(dev_val)):
             logger.info("Cinematic mode bypassed: developer options disabled")
             return
             
@@ -1812,7 +2134,7 @@ class XianApp(QWidget):
     def start_raid_mode(self):
         self.hide_osd()
         dev_val = self.settings.value("developer_options", "false")
-        if not (dev_val == "true" or dev_val is True):
+        if not (is_true(dev_val)):
             logger.info("Raid mode bypassed: developer options disabled")
             return
             
@@ -1848,8 +2170,8 @@ class XianApp(QWidget):
             self.processor,
             target_lang=target_lang,
             source_lang=source_lang,
-            save_lore=(save_lore == "true" or save_lore is True),
-            audio_enabled=(live_voice_raid == "true" or live_voice_raid is True)
+            save_lore=(is_true(save_lore)),
+            audio_enabled=(is_true(live_voice_raid))
         )
 
         worker.chunk_translated.connect(
@@ -1915,6 +2237,7 @@ class XianApp(QWidget):
 
     def _on_chunk_translated(self, transcript, translation, worker):
         logger.info("Raid chunk translated: %s -> %s", transcript, translation)
+        self.processor.record_event("raid", transcript, translation)
 
         if hasattr(self, "raid_window") and self.raid_window and self.raid_window.isVisible():
             self.raid_window.append_translation(transcript, translation)
@@ -1951,42 +2274,51 @@ class XianApp(QWidget):
             
             # Update the central router
             self.processor.router.update_with_models(raw_models or [])
-            
-            # Prefer Omni model as default if detected
+
+            # Prefer an installed Omni collection as the default
             target_model = self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
-            if target_model == "MAGE":
-                target_model = constants.DEFAULT_MODEL
-                self.settings.setValue(KEY_API_MODEL, target_model)
 
             if self.processor.router.omni_detected:
                 omni_id = self.processor.router.omni_model_id
-                if omni_id == "MAGE":
-                    omni_id = constants.DEFAULT_MODEL
                 if omni_id and (target_model in (None, "", constants.DEFAULT_MODEL, "omni-router", "default")):
                     logger.info("Omni model '%s' detected, setting as default.", omni_id)
                     self.settings.setValue(KEY_API_MODEL, omni_id)
                     self.processor.config.model_name = omni_id
                     target_model = omni_id
 
-            # Ensure the default model is pulled
+            # Ensure the default model is installed. A Xian collection needs its
+            # full registration body — it does not exist on the server by name
+            # until we send one (see xian.collections).
             all_downloaded = [m.get("id") for m in (raw_models or []) if m.get("downloaded", True)]
             if target_model not in all_downloaded and not self._model_pull_attempted:
-                logger.info("Model '%s' not found on server, pulling...", target_model)
                 self._model_pull_attempted = True
-                self._pull_model(target_model)
-            
+                collection = collection_for_name(target_model)
+                if collection is not None:
+                    logger.info(
+                        "Collection '%s' not installed, registering and downloading (~%.1f GB)...",
+                        collection.name, collection.size_gb,
+                    )
+                    self._pull_model(collection.name, body=build_pull_body(collection.tier, stream=False))
+                else:
+                    logger.info("Model '%s' not found on server, pulling...", target_model)
+                    self._pull_model(target_model)
+
             # Set the active model on the router to rebuild modality mappings
             self.processor.router.active_model = target_model
         else:
             logger.warning("Lemonade server not reachable")
             self._available_models = []
 
-    def _pull_model(self, model_name: str):
-        """Download a model via the Lemonade /v1/pull endpoint."""
+    def _pull_model(self, model_name: str, body: dict | None = None):
+        """Download a model via the Lemonade /v1/pull endpoint.
+
+        ``body`` carries a full registration document for models the server does
+        not already know by name, such as a Xian collection.
+        """
         self._safe_stop_worker("_pull_worker")
         api_url = _normalized_api_url_from_settings(self.settings)
         gpu_util = self.settings.value(KEY_GPU_UTIL, constants.DEFAULT_GPU_MEMORY_UTILIZATION)
-        self._pull_worker = ModelPullWorker(api_url, model_name, gpu_util)
+        self._pull_worker = ModelPullWorker(api_url, model_name, gpu_util, body=body)
         self._pull_worker.pull_done.connect(self._on_pull_done)
         self._pull_worker.pull_progress.connect(self._on_pull_progress)
         self._pull_worker.start()
@@ -2022,14 +2354,32 @@ class XianApp(QWidget):
             self.processor.config.api_url = _normalized_api_url_from_settings(self.settings)
             self.processor.config.model_name = self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)
             self.processor.config.max_tokens = int(self.settings.value(KEY_MAX_TOKENS, constants.DEFAULT_MAX_TOKENS))
+            self.processor.config.backend_preference = self.settings.value(
+                KEY_BACKEND_PREFERENCE, constants.DEFAULT_BACKEND_PREFERENCE
+            )
+            self.processor.config.npu_power_mode = self.settings.value(
+                KEY_NPU_POWER_MODE, constants.DEFAULT_NPU_POWER_MODE
+            )
             self.processor.engine.reconfigure(
                 base_url=self.processor.config.api_url
             )
             from xian.omni_router import OmniModelRouter
-            self.processor.router = OmniModelRouter(self.processor.config.api_url)
+            self.processor.router = OmniModelRouter(
+                self.processor.config.api_url,
+                backend_preference=self.processor.config.backend_preference,
+            )
+            if dlg.tier_changed:
+                # Let the health check install the newly chosen collection: the
+                # attempt latch is per-target, not per-session.
+                self._model_pull_attempted = False
             # Re-run health check
             self._run_health_check()
-            
+
+            # Session memory must follow the checkbox immediately: leaving the
+            # store attached after the user unticks "Remember this play
+            # session" keeps recording everything they see until restart.
+            self._reload_session_memory()
+
             self._safe_stop_worker("_prewarm_worker")
             self._start_prewarm()
             
@@ -2044,7 +2394,7 @@ class XianApp(QWidget):
                 
             self._setup_window_binder()
             dev_val = self.settings.value("developer_options", "false")
-            self.osd.set_developer_options_visible(dev_val == "true" or dev_val is True)
+            self.osd.set_developer_options_visible(is_true(dev_val))
             
             # Restore geometries according to layout preset
             self.osd.restore_geometry()
@@ -2060,7 +2410,7 @@ class XianApp(QWidget):
             dev_on = self._developer_mode()
             self.familiar_action.setVisible(dev_on)
             fam_enabled = self.settings.value(KEY_FAMILIAR_ENABLED, "false")
-            fam_enabled = fam_enabled == "true" or fam_enabled is True
+            fam_enabled = is_true(fam_enabled)
             want_familiar = dev_on and fam_enabled
             if want_familiar and not getattr(self, "familiar", None):
                 self._create_familiar()
@@ -2077,28 +2427,26 @@ class XianApp(QWidget):
 
     def apply_overlay_opacity(self):
         value = int(self.settings.value("overlay_opacity", 85))
-        for overlay in self._all_overlays():
+        for overlay in self._collect_overlays():
             if hasattr(overlay, "set_opacity"):
                 overlay.set_opacity(value)
 
     def apply_overlay_text_size(self):
         px = int(self.settings.value("overlay_text_size", 13))
-        for overlay in self._all_overlays():
+        for overlay in self._collect_overlays():
             if hasattr(overlay, "set_text_size"):
                 overlay.set_text_size(px)
 
-    def _all_overlays(self):
-        overlays = [self.osd, self.chat_sidebar, self.notes_sidebar, self.how_to_say_dialog]
-        if hasattr(self, "raid_window") and self.raid_window:
-            overlays.append(self.raid_window)
-        overlays.extend(self._bubbles)
-        return overlays
-
-    def _collect_overlays(self):
+    def _collect_overlays(self, *, include_familiar: bool = True):
         """Return every live overlay widget (chrome + all bubbles), validated.
 
-        Single source of truth for the binder visibility loop, the periodic
-        promote tick, and the show/hide-all gesture.
+        The single enumeration of MAGE's windows: styling, the binder's
+        visibility loop, the periodic promote tick, the show/hide-all gesture,
+        and click hit-testing all read it.
+
+        ``include_familiar`` is False for the window binder, which hides the HUD
+        when the bound game loses focus — the familiar is a desktop pet that
+        lives outside that contract and stays put.
         """
         raw = [
             getattr(self, "osd", None),
@@ -2108,8 +2456,9 @@ class XianApp(QWidget):
             getattr(self, "cinematic_bubble", None),
             getattr(self, "raid_window", None),
             getattr(self, "dialogue_bubble", None),
-            getattr(self, "familiar", None),
         ]
+        if include_familiar:
+            raw.append(getattr(self, "familiar", None))
         raw.extend(self._bubbles)
         raw.extend(self._active_bubbles.values())
         seen = set()
@@ -2260,50 +2609,20 @@ class XianApp(QWidget):
             is_minimized = self.target_binder.is_minimized()
             is_active = self.target_binder.is_active()
 
-            # Check if focus is on any of our own overlays
-            our_window_active = False
+            # Typing in our own chat sidebar must not read as "the game lost
+            # focus", or the HUD would hide itself mid-sentence.
             active_win = QApplication.activeWindow()
-            if active_win and self._is_valid_widget(active_win):
-                our_window_active = (
-                    active_win == self.osd or
-                    active_win == self.chat_sidebar or
-                    active_win == self.how_to_say_dialog or
-                    any(active_win == b for b in self._bubbles if self._is_valid_widget(b)) or
-                    any(active_win == b for b in self._active_bubbles.values() if self._is_valid_widget(b)) or
-                    active_win == self.cinematic_bubble or
-                    active_win == self.raid_window or
-                    active_win == self.dialogue_bubble
-                )
+            our_window_active = bool(
+                active_win
+                and self._is_valid_widget(active_win)
+                and active_win in self._collect_overlays(include_familiar=False)
+            )
 
             target_should_be_visible = not is_minimized and (is_active or our_window_active)
 
-            # Get list of all overlay windows
-            raw_overlays = []
-            if self.osd:
-                raw_overlays.append(self.osd)
-            if self.chat_sidebar:
-                raw_overlays.append(self.chat_sidebar)
-            if self.how_to_say_dialog:
-                raw_overlays.append(self.how_to_say_dialog)
-
-            raw_overlays.extend(self._bubbles)
-            raw_overlays.extend(self._active_bubbles.values())
-
-            if self.cinematic_bubble:
-                raw_overlays.append(self.cinematic_bubble)
-            if self.raid_window:
-                raw_overlays.append(self.raid_window)
-            if self.dialogue_bubble:
-                raw_overlays.append(self.dialogue_bubble)
-
-            overlays = []
-            for w in raw_overlays:
-                if self._is_valid_widget(w):
-                    overlays.append(w)
-
             # Update visibility based on target active state. A user-initiated
             # hide (toggle gesture) takes precedence over binder auto-show.
-            for overlay in overlays:
+            for overlay in self._collect_overlays(include_familiar=False):
                 if not target_should_be_visible:
                     # Hide overlay if visible and not already marked
                     if overlay.isVisible():
@@ -2361,16 +2680,12 @@ class XianApp(QWidget):
         """Translate or resize overlays based on target window movement delta."""
         tx, ty, tw, th = target_geom
 
-        bubbles = []
-        for b in self._bubbles:
-            if self._is_valid_widget(b):
-                bubbles.append(b)
-        for b in self._active_bubbles.values():
-            if self._is_valid_widget(b):
-                bubbles.append(b)
-        for b in [self.cinematic_bubble, self.raid_bubble, self.dialogue_bubble, self.raid_window]:
-            if self._is_valid_widget(b):
-                bubbles.append(b)
+        # Bubbles ride along with the window; the chrome below is re-anchored.
+        bubbles = [
+            b for b in [*self._bubbles, *self._active_bubbles.values(),
+                        self.cinematic_bubble, self.dialogue_bubble, self.raid_window]
+            if self._is_valid_widget(b)
+        ]
 
         for bubble in bubbles:
             if bubble.isVisible():
@@ -2397,6 +2712,13 @@ class XianApp(QWidget):
             )
 
     def closeEvent(self, event):
+        # Teardown runs once: main.py drives it from aboutToQuit, and a real
+        # close() afterwards must not re-join threads or re-close the store.
+        if getattr(self, "_shutdown_done", False):
+            super().closeEvent(event)
+            return
+        self._shutdown_done = True
+
         # Stop periodic timers first so nothing new is dispatched mid-teardown.
         for timer_attr in ("_telemetry_timer", "dialogue_timer", "osd_timer", "window_tracking_timer"):
             timer = getattr(self, timer_attr, None)
@@ -2411,6 +2733,15 @@ class XianApp(QWidget):
             self.stop_raid_mode()
         except Exception as e:
             logger.error("Error stopping raid mode on close: %s", e)
+
+        # Stop the continuous live-translation loop and drop its overlay.
+        try:
+            self.stop_live_lens()
+        except Exception as e:
+            logger.error("Error stopping live lens on close: %s", e)
+
+        # Flush pending session-memory writes before the writer thread dies.
+        self._close_session_memory()
 
         # Stop the named single-instance workers.
         for worker_attr in ("_status_worker", "_pull_worker", "_prewarm_worker"):

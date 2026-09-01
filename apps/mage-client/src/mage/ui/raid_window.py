@@ -25,6 +25,7 @@ from PyQt6.QtGui import QGuiApplication, QFont, QCursor, QPainter, QColor, QBrus
 
 from mage.ui.theme import accent_hex, accent_hover_hex, accent_qcolor
 from mage.ui.overlay_base import MageOverlayWindow
+from mage.settings_keys import is_true
 from shared_types.state import t
 
 logger = logging.getLogger(__name__)
@@ -203,29 +204,7 @@ class RaidWindow(MageOverlayWindow):
         self.transcript_area = QTextEdit()
         self.transcript_area.setReadOnly(True)
         self.transcript_area.setPlaceholderText("Live translations will stream here...")
-        self.transcript_area.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: rgba(10, 10, 10, 100);
-                color: #E0E0E0;
-                border: 1px solid #2D2D2D;
-                border-radius: 0px;
-                padding: 10px;
-                font-family: sans-serif;
-                font-size: 13px;
-            }}
-            QScrollBar:vertical {{
-                border: none; background: transparent; width: 6px; margin: 0px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: #555; min-height: 20px; border-radius: 0px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {accent_hex()};
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
-        """)
+        self.transcript_area.setStyleSheet(self._transcript_stylesheet(13))
         inner_layout.addWidget(self.transcript_area)
 
         # Bottom Controls
@@ -240,7 +219,7 @@ class RaidWindow(MageOverlayWindow):
 
         self.audio_switch = ToggleSwitch()
         live_voice_raid = self.settings.value("live_voice_raid", "false")
-        self.audio_switch.setChecked(live_voice_raid == "true" or live_voice_raid is True)
+        self.audio_switch.setChecked(is_true(live_voice_raid))
         self.audio_switch.toggled.connect(self._on_audio_toggled)
         bottom.addWidget(self.audio_switch)
 
@@ -341,8 +320,9 @@ class RaidWindow(MageOverlayWindow):
     def set_opacity(self, value: int):
         self.setWindowOpacity(value / 100)
 
-    def set_text_size(self, px: int):
-        self.transcript_area.setStyleSheet(f"""
+    @staticmethod
+    def _transcript_stylesheet(px: int) -> str:
+        return f"""
             QTextEdit {{
                 background-color: rgba(10, 10, 10, 100);
                 color: #E0E0E0;
@@ -364,7 +344,10 @@ class RaidWindow(MageOverlayWindow):
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
                 height: 0px;
             }}
-        """)
+        """
+
+    def set_text_size(self, px: int):
+        self.transcript_area.setStyleSheet(self._transcript_stylesheet(px))
 
     # --- Window Placement & Geometry Persistence ------------------------------
     def showEvent(self, event):
