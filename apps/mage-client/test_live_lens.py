@@ -30,6 +30,8 @@ from PIL import Image, ImageDraw
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from mage.live_lens import (  # noqa: E402
+    CHANGE_THRESHOLD_RATIO,
+    DEFAULT_CHANGE_THRESHOLD,
     LIVE_HASH_SIZE,
     LiveLensWorker,
     LiveRegion,
@@ -56,20 +58,19 @@ def _hash(image: Image.Image):
 class _Gate(LiveLensWorker):
     """Exercise the change gate without constructing a QThread's async loop."""
 
-    def __init__(self, threshold=6):
+    def __init__(self, threshold=DEFAULT_CHANGE_THRESHOLD, painted=()):
         # Deliberately skip LiveLensWorker.__init__ (it needs a processor and
         # a QThread); only the gate's state matters here.
         self.change_threshold = threshold
         self._clean_hash = None
-        self._painted_hash = None
+        self._painted_boxes = list(painted)
         self._last_signature = ()
-        self._needs_clean_frame = False
+        self._warned_untranslated = False
 
 
 def test_first_frame_always_translates():
     gate = _Gate()
     assert gate._should_translate(_hash(_frame(2))) is True
-    assert gate._needs_clean_frame is False
 
 
 def test_an_unchanged_frame_is_skipped():
@@ -88,32 +89,51 @@ def test_new_dialogue_on_screen_triggers_a_translation():
 
 
 def test_our_own_overlay_does_not_look_like_a_content_change():
-    """The overlay sits inside the captured region; without this the loop
-    would re-translate its own output forever."""
-    gate = _Gate()
+    """The overlay sits inside the captured region.
+
+    Without masking, the loop re-translates its own output forever. The painted
+    areas are blanked in both the reference and the candidate, so whatever we
+    drew there cannot register as the game changing.
+    """
     clean = _frame(2)
-    painted = _frame(2, seed=1)  # what the screen looks like once we render
-    gate._clean_hash = _hash(clean)
-    gate._painted_hash = _hash(painted)
+    painted_box = (20, 20, 360, 120)
+    gate = _Gate(painted=[painted_box])
+    gate._clean_hash = gate._masked_hash(clean)
 
-    assert gate._should_translate(_hash(painted)) is False
+    # The screen now carries our translations across that whole band.
+    painted = clean.copy()
+    ImageDraw.Draw(painted).rectangle(painted_box, fill=(200, 30, 30))
+
+    assert gate._should_translate(gate._masked_hash(painted)) is False
 
 
-def test_a_real_change_while_the_overlay_is_up_requests_a_clean_frame():
+def test_a_change_outside_the_painted_area_still_triggers_a_translation():
+    """Masking must not blind the gate to the rest of the region."""
+    clean = _frame(2)
+    painted_box = (20, 20, 360, 60)
+    gate = _Gate(painted=[painted_box])
+    gate._clean_hash = gate._masked_hash(clean)
+
+    changed = clean.copy()
+    ImageDraw.Draw(changed).rectangle([20, 150, 380, 190], fill=(255, 255, 255))
+
+    assert gate._should_translate(gate._masked_hash(changed)) is True
+
+
+def test_masking_is_a_no_op_before_anything_is_painted():
     gate = _Gate()
-    gate._clean_hash = _hash(_frame(2))
-    gate._painted_hash = _hash(_frame(2, seed=1))
-
-    assert gate._should_translate(_hash(_frame(6))) is True
-    assert gate._needs_clean_frame is True, "must recapture without the overlay"
+    frame = _frame(2)
+    assert gate._mask_painted(frame) is frame
 
 
-def test_a_change_with_no_overlay_up_needs_no_clean_frame():
-    gate = _Gate()
-    gate._clean_hash = _hash(_frame(2))
+def test_the_threshold_is_a_fraction_of_the_hash_bits():
+    """Expressed as a ratio so it survives a change of hash size.
 
-    assert gate._should_translate(_hash(_frame(6))) is True
-    assert gate._needs_clean_frame is False
+    Measured on the screenshot corpus: re-captures of one screen reach 20 and
+    distinct screens start at 22, so the threshold has to sit between them.
+    """
+    assert DEFAULT_CHANGE_THRESHOLD == round(LIVE_HASH_SIZE**2 * CHANGE_THRESHOLD_RATIO)
+    assert 20 <= DEFAULT_CHANGE_THRESHOLD < 22
 
 
 def test_threshold_of_zero_reacts_to_any_difference():
@@ -159,3 +179,91 @@ def test_background_sampling_survives_a_box_flush_against_the_edge():
 def test_background_sampling_handles_greyscale_frames():
     image = Image.new("L", (120, 60), 128)
     assert sample_background(image, (30, 20, 90, 40)) == (128, 128, 128)
+
+
+# ── silent-failure detection ─────────────────────────────────────────
+
+class _Publisher(LiveLensWorker):
+    """_publish without a QThread, capturing what would reach the UI."""
+
+    def __init__(self):
+        self.change_threshold = DEFAULT_CHANGE_THRESHOLD
+        self._clean_hash = None
+        self._painted_boxes = []
+        self._last_signature = ()
+        self._warned_untranslated = False
+        self._session_recorder = None
+        self.rect = None
+        self.errors = []
+        self.emitted = []
+
+    # Stand in for the Qt signals.
+    class _Sig:
+        def __init__(self, sink):
+            self._sink = sink
+
+        def emit(self, *args):
+            self._sink.append(args)
+
+    @property
+    def error(self):
+        return self._Sig(self.errors)
+
+    @property
+    def regions_ready(self):
+        return self._Sig(self.emitted)
+
+    def _capture_scale(self, frame):
+        return 1.0
+
+
+def _region(original, translated):
+    from xian.grounding import TextRegion
+
+    return TextRegion((10, 10, 100, 40), original, translated)
+
+
+def test_an_all_untranslated_screen_is_reported():
+    """Every failure path falls back to the source text on purpose.
+
+    That makes a model which cannot follow the prompt look identical to a
+    working overlay — the user sees their own game text, neatly boxed, and no
+    error anywhere. One small model really did answer with an empty json fence
+    and drop all twelve lines through.
+    """
+    worker = _Publisher()
+    frame = Image.new("RGB", (200, 100), (30, 30, 30))
+
+    worker._publish([_region("前往長安城", "前往長安城"), _region("已完成", "已完成")], frame)
+
+    assert worker.errors, "the user must be told nothing was translated"
+    assert "translated" in worker.errors[0][0]
+
+
+def test_a_partly_translated_screen_is_not_reported():
+    worker = _Publisher()
+    frame = Image.new("RGB", (200, 100), (30, 30, 30))
+
+    worker._publish([_region("前往長安城", "Head to the city"), _region("已完成", "已完成")], frame)
+
+    assert worker.errors == []
+
+
+def test_the_untranslated_warning_fires_only_once():
+    """A whole session of untranslatable frames should not spam."""
+    worker = _Publisher()
+    frame = Image.new("RGB", (200, 100), (30, 30, 30))
+
+    worker._publish([_region("已完成", "已完成")], frame)
+    worker._publish([_region("確定", "確定")], frame)
+
+    assert len(worker.errors) == 1
+
+
+def test_publishing_records_the_boxes_the_change_gate_must_mask():
+    worker = _Publisher()
+    frame = Image.new("RGB", (200, 100), (30, 30, 30))
+
+    worker._publish([_region("前往", "Go")], frame)
+
+    assert worker._painted_boxes == [(10, 10, 100, 40)]

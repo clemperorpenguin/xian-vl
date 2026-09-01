@@ -31,10 +31,12 @@ practical:
   while one is running are dropped rather than queued, so the overlay always
   reflects recent state instead of working through a backlog.
 
-* **Overlay-aware capture.** Our own overlay is on screen, inside the region we
-  are about to capture.  Hiding it before every capture — what dialogue mode
-  does — makes it flicker continuously.  Instead the worker remembers what it
-  painted and only hides when the capture stops matching its own output.
+* **Masked comparison.** Our own overlay is on screen, inside the region we are
+  about to capture, so a naive hash sees our translations as a change and
+  re-translates forever.  Rather than hide the overlay and re-grab — which cost
+  two extra captures and 270ms of compositor sleeps per frame, and flickered —
+  the areas we painted are blanked in *both* frames before hashing.  The gate
+  then only ever looks at pixels the game controls.
 """
 
 from __future__ import annotations
@@ -51,12 +53,30 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["LiveLensWorker", "LiveRegion", "phash_distance", "regions_signature"]
 
-#: Perceptual-hash size for the change gate. Smaller than the bubble path's 16:
-#: we want "did this line change", not "is this the identical frame".
-LIVE_HASH_SIZE = 8
+#: Perceptual-hash size for the change gate.
+#:
+#: 8 (64 bits) was too coarse to do the job. Measured over 33 real game frames:
+#: re-captures of one unchanged screen reach a distance of 4, while two
+#: genuinely different screens start at 2 — the two classes *overlap*, so no
+#: threshold separates them. A loot panel opening over a busy scene scored 2,
+#: and the overlay would have kept showing the previous translation.
+#:
+#: At 16 (256 bits) they separate: re-captures top out at 20, distinct frames
+#: start at 22. See ``test_live_lens_benchmark.py``.
+LIVE_HASH_SIZE = 16
+
+#: Fraction of the hash's bits that must differ before a frame counts as
+#: changed. Expressed as a ratio rather than a bit count so it keeps its
+#: meaning if the hash size moves again — 21/256 sits in the measured gap.
+CHANGE_THRESHOLD_RATIO = 21 / 256
 
 #: Hamming distance above which a frame counts as changed.
-DEFAULT_CHANGE_THRESHOLD = 6
+DEFAULT_CHANGE_THRESHOLD = round(LIVE_HASH_SIZE**2 * CHANGE_THRESHOLD_RATIO)
+
+#: Pixels of slack around a painted box when masking it out of the change
+#: check. The overlay draws a rounded rect with antialiased edges, so masking
+#: the exact box leaves a fringe of our own paint in the comparison.
+PAINT_MASK_PADDING = 2
 
 #: How often to look at the region, in milliseconds.
 DEFAULT_INTERVAL_MS = 700
@@ -146,8 +166,6 @@ class LiveLensWorker(QThread):
     #: fallback composites in logical ones, so a fixed devicePixelRatio would
     #: be wrong for one of them on any HiDPI screen.
     regions_ready = pyqtSignal(object, object, float)  # (list[LiveRegion], QRect, scale)
-    #: Ask the UI to hide the overlay so the next capture sees clean pixels.
-    overlay_hide = pyqtSignal()
     status = pyqtSignal(str)
     error = pyqtSignal(str)
 
@@ -162,10 +180,14 @@ class LiveLensWorker(QThread):
         change_threshold: int = DEFAULT_CHANGE_THRESHOLD,
         backend: str = "auto",
         session_recorder=None,
+        frame_stream=None,
     ):
         super().__init__()
         self.processor = processor
         self.rect = rect
+        # Owned and started by the GUI thread; None when continuous capture is
+        # unavailable, which leaves every grab on the screenshot path.
+        self._frame_stream = frame_stream
         self.source_lang = source_lang
         self.target_lang = target_lang
         self.interval_ms = max(200, interval_ms)
@@ -175,12 +197,12 @@ class LiveLensWorker(QThread):
         self._running = True
         self._ocr_engine = None
 
-        # What we last painted, so a capture containing our own overlay can be
-        # told apart from a genuine content change.
+        # The last frame we translated, hashed with our own overlay masked out
+        # so the paint we put on screen is never mistaken for the game moving.
         self._clean_hash = None
-        self._painted_hash = None
+        self._painted_boxes: list[tuple[int, int, int, int]] = []
         self._last_signature: tuple = ()
-        self._needs_clean_frame = False
+        self._warned_untranslated = False
 
     def stop(self):
         self._running = False
@@ -188,10 +210,23 @@ class LiveLensWorker(QThread):
     # ── capture ──────────────────────────────────────────────────────
 
     def _grab(self) -> Image.Image | None:
-        """Capture the bound region and return it as a PIL image."""
+        """Capture the bound region and return it as a PIL image.
+
+        Prefers the continuous session when one is running: it hands back
+        decoded pixels, where the screenshot path costs a subprocess or a
+        full-desktop composite plus an encode and a decode on every tick.  It
+        can legitimately have nothing yet — the portal may still be
+        negotiating — so an empty result falls through rather than failing the
+        tick.
+        """
         from mage.capture.screen import ScreenCapture
         from mage.utils.images import qimage_to_pil
         from PyQt6.QtGui import QImage
+
+        if self._frame_stream is not None:
+            frame = self._frame_stream.grab(self.rect)
+            if frame is not None and not frame.isNull():
+                return qimage_to_pil(frame)
 
         data, already_cropped = ScreenCapture.capture_region(self.rect)
         if not data:
@@ -243,7 +278,7 @@ class LiveLensWorker(QThread):
         glossary = await self._glossary()
 
         if mode == "ocr":
-            from xian.grounding import TextRegion
+            from xian.grounding import TextRegion, suppress_overlapping_regions
             from xian.ocr import batch_translate
 
             lines = await asyncio.to_thread(self._ocr_engine.run, frame)
@@ -253,15 +288,22 @@ class LiveLensWorker(QThread):
                 self.processor, [ln.text for ln in lines],
                 self.source_lang, self.target_lang, glossary=glossary,
             )
-            return [
+            return suppress_overlapping_regions([
                 TextRegion(ln.box, ln.text, translated)
                 for ln, translated in zip(lines, translations)
-            ]
+            ])
 
         from xian.grounding import ground_and_translate
 
+        # Paint each line as the model describes it rather than waiting for the
+        # whole screen: on a busy frame the last box can be seconds behind the
+        # first, and a partly-translated overlay is useful immediately.
+        def publish_partial(regions):
+            self._publish(regions, frame)
+
         return await ground_and_translate(
-            self.processor, frame, self.source_lang, self.target_lang, glossary=glossary,
+            self.processor, frame, self.source_lang, self.target_lang,
+            glossary=glossary, on_region=publish_partial,
         )
 
     async def _run_async(self):
@@ -284,21 +326,11 @@ class LiveLensWorker(QThread):
                 continue
             failures = 0
 
-            current = imagehash.phash(frame, hash_size=LIVE_HASH_SIZE)
+            current = self._masked_hash(frame)
 
             if inflight or not self._should_translate(current):
                 await self._sleep_remainder(started, interval)
                 continue
-
-            # The frame changed, but it may still contain our own overlay from
-            # the previous render. Take one clean frame before translating.
-            if self._needs_clean_frame:
-                self.overlay_hide.emit()
-                await asyncio.sleep(0.12)  # let the compositor drop the window
-                clean = await asyncio.to_thread(self._grab)
-                if clean is not None:
-                    frame = clean
-                    current = imagehash.phash(frame, hash_size=LIVE_HASH_SIZE)
 
             self._clean_hash = current
             inflight = True
@@ -314,35 +346,56 @@ class LiveLensWorker(QThread):
             finally:
                 inflight = False
 
-            if regions is not None and self._publish(regions, frame):
-                # The overlay now covers part of the region, so the next
-                # capture will not match the clean frame. Record what the
-                # screen looks like *with* our render on it, or that change
-                # would be mistaken for the game moving on.
-                await asyncio.sleep(0.15)
-                painted = await asyncio.to_thread(self._grab)
-                if painted is not None:
-                    self._painted_hash = imagehash.phash(painted, hash_size=LIVE_HASH_SIZE)
+            if regions is not None:
+                self._publish(regions, frame)
+                # The boxes we mask changed with this render, so re-hash the
+                # frame we just translated under the *new* mask. Comparing the
+                # next capture against a hash taken with the old mask would
+                # register our own repaint as a screen change.
+                #
+                # This is why there is no hide-and-re-grab here any more: that
+                # cost two extra captures and 270ms of compositor sleeps on
+                # every published frame, and made the overlay flicker.
+                self._clean_hash = self._masked_hash(frame)
 
             await self._sleep_remainder(started, interval)
+
+    def _mask_painted(self, frame: Image.Image) -> Image.Image:
+        """Blank out the areas our overlay covers.
+
+        The change gate compares captures that contain our own translations.
+        Masking those areas in both the reference and the candidate leaves the
+        comparison looking only at pixels the game controls.
+        """
+        if not self._painted_boxes:
+            return frame
+
+        from PIL import ImageDraw
+
+        masked = frame.copy()
+        draw = ImageDraw.Draw(masked)
+        for left, top, right, bottom in self._painted_boxes:
+            draw.rectangle(
+                (
+                    left - PAINT_MASK_PADDING,
+                    top - PAINT_MASK_PADDING,
+                    right + PAINT_MASK_PADDING,
+                    bottom + PAINT_MASK_PADDING,
+                ),
+                fill=(0, 0, 0),
+            )
+        return masked
+
+    def _masked_hash(self, frame: Image.Image):
+        return imagehash.phash(self._mask_painted(frame), hash_size=LIVE_HASH_SIZE)
 
     def _should_translate(self, current) -> bool:
         """Decide whether this capture reflects real change on screen."""
         if self._clean_hash is None:
-            self._needs_clean_frame = False
             return True
-
-        # Matches what we painted last time: the overlay is showing over
-        # unchanged content. Nothing to do, and crucially no hide/flicker.
-        if self._painted_hash is not None and phash_distance(current, self._painted_hash) <= self.change_threshold:
-            return False
-
-        # Matches the clean frame we translated from: also unchanged.
-        if phash_distance(current, self._clean_hash) <= self.change_threshold:
-            return False
-
-        self._needs_clean_frame = self._painted_hash is not None
-        return True
+        # bool(): imagehash subtraction yields a numpy integer, so the bare
+        # comparison would hand callers a numpy bool that fails an `is True`.
+        return bool(phash_distance(current, self._clean_hash) > self.change_threshold)
 
     def _publish(self, regions, frame: Image.Image) -> bool:
         """Emit regions if they differ from what is already on screen.
@@ -355,6 +408,12 @@ class LiveLensWorker(QThread):
             for r in regions
             if r.is_valid()
         ]
+        self._warn_if_nothing_translated(live)
+
+        # Recorded even when the render is unchanged: these drive the mask the
+        # change gate uses, and they must describe what is currently on screen.
+        self._painted_boxes = [region.box for region in live]
+
         signature = regions_signature(live)
         if signature == self._last_signature:
             return False
@@ -366,6 +425,33 @@ class LiveLensWorker(QThread):
 
         self.regions_ready.emit(live, self.rect, self._capture_scale(frame))
         return True
+
+    def _warn_if_nothing_translated(self, live) -> None:
+        """Say so when every line came back as its own source text.
+
+        Translation failures fall back to the original on purpose — showing the
+        source beats showing a blank box. But that makes a model which cannot
+        follow the prompt indistinguishable from a working overlay: the user
+        sees their own game text neatly boxed and no error anywhere. A small
+        model really does do this; one tested here answered the batch prompt
+        with an empty ``json`` fence, and all twelve lines fell through.
+
+        Warned once per run, not per frame, so a partly-translatable screen
+        does not spam.
+        """
+        if self._warned_untranslated or not live:
+            return
+        if any(region.translated.strip() != region.original.strip() for region in live):
+            return
+
+        self._warned_untranslated = True
+        message = (
+            f"None of the {len(live)} detected lines were translated — the overlay is "
+            "showing the original text. The translation model may be too small to follow "
+            "the prompt, or unable to read this language."
+        )
+        logger.warning("%s", message)
+        self.error.emit(message)
 
     def _capture_scale(self, frame: Image.Image) -> float:
         """Capture pixels per logical pixel, measured from the frame itself."""

@@ -894,6 +894,7 @@ class XianApp(QWidget):
             return
         self.stop_live_lens()
 
+        from mage.capture.stream import FrameStream, screen_for_rect
         from mage.live_lens import LiveLensWorker
         from mage.ui.inpaint_overlay import InpaintOverlay
 
@@ -903,9 +904,17 @@ class XianApp(QWidget):
         self.inpaint_overlay.bind_to_rect(rect)
         self.inpaint_overlay.show()
 
+        # Opened here rather than in the worker: the capture session delivers
+        # frames through a signal and so has to live on the GUI thread. A
+        # refusal is not an error — the worker falls back to screenshots.
+        self._frame_stream = FrameStream(screen_for_rect(rect))
+        if not self._frame_stream.start():
+            self._frame_stream = None
+
         self._live_lens_worker = LiveLensWorker(
             self.processor,
             rect,
+            frame_stream=self._frame_stream,
             source_lang=self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG),
             target_lang=self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG),
             interval_ms=int(self.settings.value(KEY_LIVE_INTERVAL_MS, constants.DEFAULT_LIVE_INTERVAL_MS)),
@@ -913,7 +922,6 @@ class XianApp(QWidget):
             session_recorder=lambda orig, trans: self.processor.record_event("inpaint", orig, trans),
         )
         self._live_lens_worker.regions_ready.connect(self._on_live_regions)
-        self._live_lens_worker.overlay_hide.connect(self._on_live_overlay_hide)
         self._live_lens_worker.error.connect(self._on_live_lens_error)
         self._workers.append(self._live_lens_worker)
         self._live_lens_worker.start()
@@ -944,6 +952,13 @@ class XianApp(QWidget):
             else:
                 self._cleanup_worker(worker)
             self._live_lens_worker = None
+
+        # Closed after the worker so a tick already in flight still finds a
+        # frame rather than tripping over a half-torn-down session.
+        stream = getattr(self, "_frame_stream", None)
+        if stream is not None:
+            stream.stop()
+            self._frame_stream = None
 
         overlay = getattr(self, "inpaint_overlay", None)
         if overlay is not None and self._is_valid_widget(overlay):
@@ -983,12 +998,6 @@ class XianApp(QWidget):
         overlay.set_regions(painted)
         overlay.show()
         overlay.promote()
-
-    def _on_live_overlay_hide(self):
-        """Briefly clear the overlay so the next capture sees clean pixels."""
-        overlay = getattr(self, "inpaint_overlay", None)
-        if overlay is not None and self._is_valid_widget(overlay):
-            overlay.clear_regions()
 
     def _on_live_lens_error(self, message: str):
         logger.warning("Live lens error: %s", message)
