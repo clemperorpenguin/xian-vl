@@ -55,7 +55,6 @@ from mage.live_lens import (  # noqa: E402
     DEFAULT_CHANGE_THRESHOLD,
     LIVE_HASH_SIZE,
     phash_distance,
-    sample_background,
 )
 
 pytestmark = pytest.mark.benchmark
@@ -238,61 +237,3 @@ def test_a_locked_region_gates_more_reliably_than_a_whole_desktop(screenshot_pat
     assert min(p[1] for p in pairs) > DEFAULT_CHANGE_THRESHOLD, (
         "even on a locked region the gate missed a change between consecutive frames"
     )
-
-
-# ── the fill under the translation ───────────────────────────────────
-
-def _ocr_available() -> bool:
-    from xian.ocr.engine import ocr_available
-
-    return ocr_available()
-
-
-@pytest.mark.skipif(not _ocr_available(), reason="optional OCR dependencies not installed")
-def test_the_fill_matches_the_backdrop_rather_than_the_glyphs(screenshot_paths, record_property):
-    """The inpainted patch has to disappear into the UI it covers.
-
-    ``sample_background`` reads a band *outside* the box precisely so the
-    glyphs about to be covered do not tint the fill toward the text colour.
-    On real frames — gradient panels, parchment, translucent HUDs — that band
-    is not a flat colour, so this checks the result still lands on the
-    background side rather than the text side.
-    """
-    import numpy as np
-
-    from xian.ocr.onnx_engine import OnnxOcrEngine
-
-    engine = OnnxOcrEngine()
-    correct = 0
-    total = 0
-
-    for path in screenshot_paths[:12]:
-        with Image.open(path) as opened:
-            image = opened.convert("RGB")
-            pixels = np.asarray(image)
-            for line in engine.run(pixels)[:20]:
-                left, top, right, bottom = line.box
-                patch = pixels[top:bottom, left:right].reshape(-1, 3).astype(float)
-                if patch.size == 0:
-                    continue
-
-                fill = np.array(sample_background(image, line.box), dtype=float)
-                luminance = patch.mean(axis=1)
-                # Polarity varies (light text on dark panels and the reverse), so
-                # compare against both extremes and let the nearer one be the
-                # backdrop rather than assuming which is which.
-                bright = patch[luminance >= np.percentile(luminance, 95)].mean(axis=0)
-                dark = patch[luminance <= np.percentile(luminance, 40)].mean(axis=0)
-
-                to_bright = float(np.linalg.norm(fill - bright))
-                to_dark = float(np.linalg.norm(fill - dark))
-                # The backdrop is whichever cluster dominates the box's area.
-                correct += min(to_bright, to_dark) < max(to_bright, to_dark)
-                total += 1
-
-    assert total, "no lines detected to sample a background from"
-    rate = correct / total
-    record_property("fill_matches_backdrop_rate", round(rate, 3))
-    record_property("fill_samples", total)
-
-    assert rate > 0.95, f"the fill sat closer to the text colour on {1 - rate:.1%} of {total} lines"

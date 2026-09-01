@@ -36,11 +36,9 @@ import io
 import itertools
 import statistics
 import sys
-import time
 from pathlib import Path
 
 import imagehash
-import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -49,10 +47,9 @@ sys.path.insert(0, str(REPO_ROOT / "apps" / "mage-client" / "src"))
 
 from benchmark_corpus import corpus_dir, corpus_paths  # noqa: E402
 
-#: Hash sizes to compare. 8 is the shipped default; 16 is the candidate.
+#: Hash sizes to compare: 8 was the shipped default and could not separate the
+#: two classes; 16 is what replaced it.
 HASH_SIZES = (8, 16)
-
-REGION_MEGAPIXELS = 1.0
 
 
 def _recaptures(image: Image.Image):
@@ -81,46 +78,6 @@ def _summarize(label: str, values: list[float], unit: str = "ms") -> None:
         f"  p95={ordered[int(len(ordered) * 0.95) - 1]:>7.1f}{unit}"
         f"  max={ordered[-1]:>7.1f}{unit}"
     )
-
-
-def report_ocr(paths: list[Path]) -> None:
-    from mage.live_lens import DEFAULT_INTERVAL_MS
-    from xian.ocr.engine import ocr_available
-
-    print("\n── local OCR, per frame ─────────────────────────────────────")
-    if not ocr_available():
-        print("  optional OCR dependencies not installed (uv sync --package xian-vl --extra ocr)")
-        return
-
-    from xian.ocr.onnx_engine import OnnxOcrEngine
-
-    engine = OnnxOcrEngine()
-    engine.run(np.full((64, 256, 3), 255, dtype=np.uint8))  # warm up
-    print(f"  execution provider: {engine.provider_label}")
-    print(f"  live tick budget:   {DEFAULT_INTERVAL_MS}ms\n")
-
-    region, full = [], []
-    print(f"  {'frame':<34}{'size':>12}{'lines':>7}{'conf':>7}{'time':>10}")
-    for path in paths:
-        with Image.open(path) as opened:
-            frame = np.asarray(opened.convert("RGB"))
-        started = time.perf_counter()
-        lines = engine.run(frame)
-        elapsed = (time.perf_counter() - started) * 1000
-
-        height, width = frame.shape[:2]
-        (region if width * height / 1e6 <= REGION_MEGAPIXELS else full).append(elapsed)
-        confidence = statistics.mean([ln.confidence for ln in lines]) if lines else 0.0
-        over = "  <- over tick" if elapsed > DEFAULT_INTERVAL_MS else ""
-        name = path.name if len(path.name) <= 32 else "..." + path.name[-29:]
-        print(
-            f"  {name:<34}{f'{width}x{height}':>12}{len(lines):>7}"
-            f"{confidence:>7.2f}{elapsed:>9.0f}ms{over}"
-        )
-
-    print()
-    _summarize(f"region-sized (<={REGION_MEGAPIXELS:g}MP)", region)
-    _summarize("full screen", full)
 
 
 def report_change_gate(paths: list[Path]) -> None:
@@ -164,7 +121,6 @@ def main() -> int:
     paths = corpus_paths()
     print(f"frames: {len(paths)}")
 
-    report_ocr(paths)
     report_change_gate(paths)
     return 0
 

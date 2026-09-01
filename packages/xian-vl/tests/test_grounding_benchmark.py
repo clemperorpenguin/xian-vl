@@ -18,15 +18,16 @@
 
 """The live path, end to end, against a real vision model.
 
-Every other benchmark here measures a piece: OCR on a corpus, translation
-against a text model, capture against a display. This measures the thing the
-overlay actually does — one changed frame in, located translations out — using
-the real encoder, the real preprocessing, and the real streaming parse.
+Every other benchmark here measures a piece: the change gate on a corpus,
+capture against a display, grounding geometry as pure arithmetic. This measures
+the thing the overlay actually does — one changed frame in, located
+translations out — using the real encoder, the real preprocessing, and the real
+streaming parse.
 
-It is the number that decides whether live mode is viable, and whether the
-local OCR sidecar can be deleted: if grounding a locked region beats the
-sidecar's measured 342ms median plus its translation call, the sidecar is
-carrying no weight.
+It is the measurement that retired the local OCR sidecar. Grounding a locked
+region came in around 1.0s against roughly 2.25s for OCR plus a separate batch
+translation, with the first line painted at ~460ms rather than after the whole
+chain, so the sidecar was carrying no weight.
 
 Needs a Lemonade server with a **vision-capable** model installed; skips
 otherwise. ``XIAN_BENCH_MODEL`` names one explicitly.
@@ -38,6 +39,7 @@ import os
 import statistics
 import sys
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
@@ -61,10 +63,10 @@ LIVE_TICK_MS = 700
 #: Frames at or under this many megapixels stand in for a locked region.
 REGION_MEGAPIXELS = 1.0
 
-#: The OCR sidecar's measured median on a region-sized frame, before its
-#: separate translation call. Grounding has to beat the *sum* to justify
-#: deleting the sidecar; this is the floor it is competing with.
-OCR_SIDECAR_MEDIAN_MS = 342
+#: What the removed OCR sidecar cost on a region-sized frame: ~342ms to detect
+#: and read, plus a separate batch translation (~1.9s measured on a small NPU
+#: model). Kept as the historical bar this path had to clear.
+OCR_SIDECAR_TOTAL_MS = 2250
 
 
 def _base_url() -> str:
@@ -138,13 +140,24 @@ def vision_model() -> str:
     return model
 
 
-@pytest.fixture
-def processor(vision_model):
+@asynccontextmanager
+async def open_processor(model: str):
+    """A client created and closed inside the running loop.
+
+    Deliberately not a fixture: the client owns a connection pool bound to the
+    loop it was made on, and this suite runs under both pytest-asyncio (the
+    workspace sets asyncio_mode = "auto") and an anyio marker. A fixture ends up
+    straddling their loops and dies in teardown with "Event loop is closed",
+    failing tests whose bodies already passed. Opening it inside the test body
+    keeps creation, use and close on one loop.
+    """
     from openai import AsyncOpenAI
 
-    return _Processor(
-        AsyncOpenAI(base_url=_base_url(), api_key="lemonade", max_retries=0), vision_model
-    )
+    client = AsyncOpenAI(base_url=_base_url(), api_key="lemonade", max_retries=0)
+    try:
+        yield _Processor(client, model)
+    finally:
+        await client.close()
 
 
 @pytest.fixture(scope="session")
@@ -170,9 +183,10 @@ async def _ground(processor, path: Path, **kwargs):
 
 # ── does it work at all? ─────────────────────────────────────────────
 
-async def test_a_real_frame_yields_located_translations(processor, region_frames, record_property):
+async def test_a_real_frame_yields_located_translations(vision_model, region_frames, record_property):
     """The whole feature in one assertion: text found, placed, and in English."""
-    elapsed, regions = await _ground(processor, region_frames[0])
+    async with open_processor(vision_model) as processor:
+        elapsed, regions = await _ground(processor, region_frames[0])
 
     record_property("ground_ms", round(elapsed, 1))
     record_property("regions", len(regions))
@@ -184,7 +198,7 @@ async def test_a_real_frame_yields_located_translations(processor, region_frames
         assert 0 <= left < right and 0 <= top < bottom
 
 
-async def test_translations_are_not_silent_fallbacks(processor, region_frames, record_property):
+async def test_translations_are_not_silent_fallbacks(vision_model, region_frames, record_property):
     """``parse_regions`` fills a missing translation with the original.
 
     That is the right behaviour — the source beats a blank box — but it means a
@@ -192,7 +206,8 @@ async def test_translations_are_not_silent_fallbacks(processor, region_frames, r
     painted over Chinese and no error. Same failure mode the batch translator
     has, checked the same way.
     """
-    _elapsed, regions = await _ground(processor, region_frames[0])
+    async with open_processor(vision_model) as processor:
+        _elapsed, regions = await _ground(processor, region_frames[0])
     if not regions:
         pytest.skip("no regions to judge")
 
@@ -208,7 +223,7 @@ async def test_translations_are_not_silent_fallbacks(processor, region_frames, r
 # ── latency ──────────────────────────────────────────────────────────
 
 async def test_grounding_a_locked_region_fits_the_live_budget(
-    processor, region_frames, strict_budget, record_property
+    vision_model, region_frames, strict_budget, record_property
 ):
     """One vision call replacing OCR plus a translation call.
 
@@ -216,16 +231,17 @@ async def test_grounding_a_locked_region_fits_the_live_budget(
     ``XIAN_BENCH_STRICT=1`` holding it to the tick the loop actually polls on.
     """
     timings = []
-    for path in region_frames[:5]:
-        elapsed, regions = await _ground(processor, path)
-        timings.append(elapsed)
+    async with open_processor(vision_model) as processor:
+        for path in region_frames[:5]:
+            elapsed, _regions = await _ground(processor, path)
+            timings.append(elapsed)
 
     median = statistics.median(timings)
     record_property("ground_ms_median", round(median, 1))
     record_property("ground_ms_max", round(max(timings), 1))
     record_property("frames", len(timings))
     record_property("fits_live_tick", bool(median < LIVE_TICK_MS))
-    record_property("ocr_sidecar_median_ms", OCR_SIDECAR_MEDIAN_MS)
+    record_property("retired_ocr_sidecar_total_ms", OCR_SIDECAR_TOTAL_MS)
 
     budget = LIVE_TICK_MS if strict_budget else LIVE_TICK_MS * 10
     assert median < budget, (
@@ -234,7 +250,7 @@ async def test_grounding_a_locked_region_fits_the_live_budget(
 
 
 async def test_streaming_paints_the_first_line_well_before_the_last(
-    processor, region_frames, record_property
+    vision_model, region_frames, record_property
 ):
     """The Phase 2 claim, measured.
 
@@ -252,9 +268,10 @@ async def test_streaming_paints_the_first_line_well_before_the_last(
 
     with Image.open(region_frames[0]) as opened:
         frame = opened.convert("RGB")
-    regions = await ground_and_translate(
-        processor, frame, "Chinese", "English", on_region=on_region
-    )
+    async with open_processor(vision_model) as processor:
+        regions = await ground_and_translate(
+            processor, frame, "Chinese", "English", on_region=on_region
+        )
     total_ms = (time.perf_counter() - started) * 1000
 
     if not first_region_at:

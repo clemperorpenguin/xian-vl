@@ -41,11 +41,11 @@ NPU_RECIPES = ("flm", "ryzenai-llm")
 #: claiming it, so this is inert on a machine without one.
 NPU_MODALITIES = ("llm", "asr", "translation", "vision")
 
-# Machine-translation models: they translate, and do nothing else. Worth routing
-# to on the hottest path in the app (every changed line in live mode), but they
-# have no tool-calling, no vision, and do not follow instructions — they
-# translate them. So they are excluded from every other modality by name, and
-# callers must give them a plain text-in/text-out prompt (xian.ocr.translate).
+# Machine-translation models: they translate, and do nothing else. They have no
+# tool-calling, no usable vision, and do not follow instructions — they
+# translate them. TranslateGemma is labelled `vision` and is genuinely an
+# image-text-to-text model, yet cannot answer a grounding prompt, which is why
+# a name check still guards the modalities its labels would otherwise claim.
 TRANSLATION_KEYWORDS = ("translategemma", "madlad", "nllb", "opus-mt", "seamless", "towerinstruct")
 
 #: Labels a purpose-built translation model may carry.

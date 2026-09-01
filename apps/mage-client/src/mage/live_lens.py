@@ -178,7 +178,6 @@ class LiveLensWorker(QThread):
         target_lang: str = "English",
         interval_ms: int = DEFAULT_INTERVAL_MS,
         change_threshold: int = DEFAULT_CHANGE_THRESHOLD,
-        backend: str = "auto",
         session_recorder=None,
         frame_stream=None,
     ):
@@ -192,10 +191,8 @@ class LiveLensWorker(QThread):
         self.target_lang = target_lang
         self.interval_ms = max(200, interval_ms)
         self.change_threshold = change_threshold
-        self.backend = backend
         self._session_recorder = session_recorder
         self._running = True
-        self._ocr_engine = None
 
         # The last frame we translated, hashed with our own overlay masked out
         # so the paint we put on screen is never mistaken for the game moving.
@@ -247,51 +244,15 @@ class LiveLensWorker(QThread):
 
     # ── pipeline ─────────────────────────────────────────────────────
 
-    def _setup_backend(self) -> str:
-        """Pick between local OCR and the vision model, and say which won.
+    async def _translate_frame(self, frame: Image.Image):
+        """Produce located, translated regions for one frame.
 
-        Local OCR is roughly ten times faster end to end, so it is preferred
-        whenever its optional dependencies are installed. The vision model is
-        the fallback that works on every install.
+        One vision call does detection, reading and translation together.
+        Measured against the local-OCR sidecar this replaced: ~1.0s versus
+        ~2.25s for OCR plus a separate batch translation, with the first line
+        on screen at ~460ms rather than after the whole chain.
         """
-        if self.backend == "vlm":
-            return "vlm"
-
-        from xian.ocr import ocr_available
-
-        if not ocr_available():
-            if self.backend == "ocr":
-                logger.warning("Local OCR was requested but is not installed; using the vision model")
-            return "vlm"
-
-        try:
-            from xian.ocr.onnx_engine import OnnxOcrEngine
-            self._ocr_engine = OnnxOcrEngine()
-            logger.info("Live lens using local OCR on %s", self._ocr_engine.provider_label)
-            return "ocr"
-        except Exception as exc:
-            logger.warning("Local OCR unavailable (%s); using the vision model", exc)
-            return "vlm"
-
-    async def _translate_frame(self, frame: Image.Image, mode: str):
-        """Produce located, translated regions for one frame."""
         glossary = await self._glossary()
-
-        if mode == "ocr":
-            from xian.grounding import TextRegion, suppress_overlapping_regions
-            from xian.ocr import batch_translate
-
-            lines = await asyncio.to_thread(self._ocr_engine.run, frame)
-            if not lines:
-                return []
-            translations = await batch_translate(
-                self.processor, [ln.text for ln in lines],
-                self.source_lang, self.target_lang, glossary=glossary,
-            )
-            return suppress_overlapping_regions([
-                TextRegion(ln.box, ln.text, translated)
-                for ln, translated in zip(lines, translations)
-            ])
 
         from xian.grounding import ground_and_translate
 
@@ -307,7 +268,6 @@ class LiveLensWorker(QThread):
         )
 
     async def _run_async(self):
-        mode = self._setup_backend()
         self.status.emit("live_lens.status.watching")
         interval = self.interval_ms / 1000.0
         failures = 0
@@ -335,7 +295,7 @@ class LiveLensWorker(QThread):
             self._clean_hash = current
             inflight = True
             try:
-                regions = await self._translate_frame(frame, mode)
+                regions = await self._translate_frame(frame)
             except asyncio.TimeoutError:
                 logger.warning("Live lens inference timed out; skipping frame")
                 regions = None
