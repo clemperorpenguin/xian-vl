@@ -27,13 +27,19 @@ from xian.collections import is_xian_collection
 logger = logging.getLogger(__name__)
 
 
-# Lemonade recipes that execute on the Ryzen AI NPU. FastFlowLM ("flm") is
-# the only one available on Linux, and it serves text LLMs, Whisper ASR, and
-# embeddings — there is no NPU vision path, so vision must never route here.
-NPU_RECIPES = ("flm",)
+# Lemonade recipes that execute on the Ryzen AI NPU. FastFlowLM ("flm") is the
+# only one available on Linux; "ryzenai-llm" is the Windows-only equivalent.
+NPU_RECIPES = ("flm", "ryzenai-llm")
 
-#: Modalities FastFlowLM can actually serve.
-NPU_MODALITIES = ("llm", "asr", "translation")
+#: Modalities an NPU model may serve.
+#:
+#: Vision is on this list because FastFlowLM now ships vision models — the
+#: server labels them, and asking it is the only reliable way to know. An
+#: earlier version hard-coded "the NPU has no vision path", which stopped being
+#: true and left the whole live overlay on a CPU OCR fallback. Nothing is
+#: forced: a modality only reaches the NPU if the server actually lists a model
+#: claiming it, so this is inert on a machine without one.
+NPU_MODALITIES = ("llm", "asr", "translation", "vision")
 
 # Machine-translation models: they translate, and do nothing else. Worth routing
 # to on the hottest path in the app (every changed line in live mode), but they
@@ -64,17 +70,33 @@ MODALITY_MATCHERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "edit": (("edit",), ("flux", "sd", "stable-diffusion")),
 }
 
-#: Modality each id keyword implies, for models published without labels.
+#: Modality each id keyword implies, for models the server under-describes.
 #: Ordered: a translation-only model is name-matched before everything else,
 #: because "TranslateGemma" would otherwise land in chat on the "gemma" keyword
 #: and displace a planner that can actually hold a conversation.
-_HEURISTIC_MODALITIES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+#:
+#: These name a *product*, so they say something real about capability — a
+#: "whisper" model transcribes, an "sd" model both generates and edits images.
+#: They may therefore add modalities a model's labels left out.
+_PRODUCT_MODALITIES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("whisper",), ("transcription", "asr")),
     (("kokoro", "tts"), ("tts", "text-to-speech")),
     (("flux", "sd", "stable-diffusion"), ("image", "edit")),
     (("vision", "vl", "qwen-vl"), ("vision",)),
+)
+
+#: These name a model *family*, which implies nothing about what a given
+#: member can do — "qwen" spans chat, embedding, transcription and image
+#: models. Applied only to a model the server published with no labels at all,
+#: as a rough guess in the absence of anything better. Trusting them over a
+#: model's own labels is how an embedding model ends up claiming chat, and how
+#: the list rots every time a new family ships.
+_FAMILY_MODALITIES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("qwen", "llama", "mistral", "gemma"), ("chat", "tool-calling", "reasoning")),
 )
+
+#: Kept for callers that want the whole set in priority order.
+_HEURISTIC_MODALITIES = _PRODUCT_MODALITIES + _FAMILY_MODALITIES
 
 
 def is_translation_only_model(model_id: str | None) -> bool:
@@ -228,12 +250,25 @@ class OmniModelRouter:
                 continue
             claim(label)
 
-        # Models published without useful labels are placed by name.
         if mt_only:
             claim("translation")
             return
+
+        # A product name fills in what the labels left out — an "sd" model
+        # listed only as `image` still edits — but never contradicts them.
         lower_id = model_id.lower()
-        for keywords, modalities in _HEURISTIC_MODALITIES:
+        for keywords, modalities in _PRODUCT_MODALITIES:
+            if any(kw in lower_id for kw in keywords):
+                for modality in modalities:
+                    claim(modality)
+                return
+
+        # A family name is a guess of last resort, for a model the server
+        # published with no labels at all. Once a model has said what it does,
+        # that is the answer.
+        if labels:
+            return
+        for keywords, modalities in _FAMILY_MODALITIES:
             if any(kw in lower_id for kw in keywords):
                 for modality in modalities:
                     claim(modality)
@@ -343,6 +378,17 @@ class OmniModelRouter:
     def npu_model_ids(self) -> list[str]:
         return [m["id"] for m in self._downloaded_models if self.is_npu_model(m) and "id" in m]
 
+    def _npu_ids_without_vision(self) -> set[str]:
+        """NPU models that would fail an image request, by their own labels."""
+        vision_labels, _keywords = MODALITY_MATCHERS["vision"]
+        return {
+            m["id"]
+            for m in self._downloaded_models
+            if self.is_npu_model(m)
+            and "id" in m
+            and not any(label in (m.get("labels") or []) for label in vision_labels)
+        }
+
     def _wants_npu(self, modality: str) -> bool:
         """Whether this modality should be steered to the NPU."""
         if modality not in NPU_MODALITIES:
@@ -354,6 +400,12 @@ class OmniModelRouter:
         # two highest-frequency calls in the app — freeing the GPU for the
         # vision model is exactly what live mode needs. Moving the *chat* LLM is
         # a quality trade-off, so that one stays opt-in.
+        #
+        # Vision stays opt-in for the same reason in reverse: a discrete or
+        # integrated GPU generally runs a multi-billion-parameter VLM faster
+        # than the NPU does, and auto mode is already using the NPU to keep the
+        # GPU clear for exactly that. Users who measure otherwise on their own
+        # hardware select the "npu" preference.
         return self.backend_preference == BACKEND_AUTO and modality in ("asr", "translation")
 
     #: Keywords that disqualify a model from a modality it otherwise matches.
@@ -426,6 +478,13 @@ class OmniModelRouter:
 
     def vision(self, active_model: str | None = None) -> str:
         """Returns the best vision-capable model id."""
+        # First, exactly as in llm(): an explicit backend preference is the
+        # user's instruction about their own hardware, and outranks a
+        # collection's bundled component.
+        npu = self._npu_override("vision")
+        if npu:
+            return npu
+
         model = active_model or self.active_model
         if model and self.is_omni_model(model):
             resolved = self.resolve_omni_component(model, "vision")
@@ -440,21 +499,22 @@ class OmniModelRouter:
         if self._models.get("vision"):
             return self._models["vision"]
 
-        # Falling back to the LLM must not pick up an NPU model: FastFlowLM
-        # has no vision path, so such a request would fail at the server.
-        # Every candidate below is re-checked, because the label map and the
-        # downloaded list both contain NPU models on a machine that has them.
-        npu_ids = set(self.npu_model_ids())
+        # Falling back to a chat model must not pick up an NPU model that
+        # cannot see: such a request fails at the server. Only the ones that
+        # never claimed vision are excluded — an NPU model the server labels
+        # `vision` is a legitimate candidate, and blanket-excluding every NPU id
+        # here is what previously made a vision-capable NPU unreachable.
+        blocked = self._npu_ids_without_vision()
         fallback = self.llm(active_model)
-        if fallback and fallback not in npu_ids:
+        if fallback and fallback not in blocked:
             return fallback
 
         for candidate in (self._models.get("tool-calling"), self._models.get("chat")):
-            if candidate and candidate not in npu_ids:
+            if candidate and candidate not in blocked:
                 return candidate
         for m in self._downloaded_models:
             model_id = m.get("id")
-            if model_id and model_id not in npu_ids and not is_translation_only_model(model_id):
+            if model_id and model_id not in blocked and not is_translation_only_model(model_id):
                 return model_id
         return ""
 

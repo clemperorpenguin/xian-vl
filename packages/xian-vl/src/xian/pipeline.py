@@ -529,13 +529,27 @@ class VLProcessor:
 
         return image
 
-    def encode_image(self, image: Image.Image) -> str:
-        """Convert PIL Image to lossless PNG for OCR accuracy."""
-        # Ensure RGBA is converted for compatibility
-        if image.mode == "RGBA":
+    def encode_image(self, image: Image.Image, fmt: str = "PNG", quality: int = 85) -> str:
+        """Base64-encode a PIL image for an image_url payload.
+
+        Defaults to lossless PNG, which is what the one-shot paths want: they
+        encode once and fidelity is free. Continuous paths pass ``fmt="JPEG"``
+        instead — on a full-size game frame PNG costs an extra ~200ms and ~3MB
+        per frame, which on a repeating loop is the difference between tracking
+        the screen and lagging behind it.
+
+        ``quality`` is ignored for PNG.
+        """
+        # JPEG has no alpha channel and no palette; PNG only objects to the
+        # former. Normalizing here keeps every caller from having to care.
+        if image.mode == "RGBA" or (fmt.upper() != "PNG" and image.mode not in ("RGB", "L")):
             image = image.convert("RGB")
+
         buffered = io.BytesIO()
-        image.save(buffered, format="PNG")
+        if fmt.upper() == "JPEG":
+            image.save(buffered, format="JPEG", quality=quality)
+        else:
+            image.save(buffered, format=fmt)
         return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
     async def _prompt_reference_sections(self, rag_query: str | None) -> str:

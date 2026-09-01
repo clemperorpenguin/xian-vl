@@ -39,12 +39,24 @@ from dataclasses import dataclass
 
 from PIL import Image, ImageFilter
 
-from shared_types.constants import QWEN_MAX_DIMENSION
+from shared_types.constants import (
+    LIVE_IMAGE_FORMAT,
+    LIVE_IMAGE_QUALITY,
+    LIVE_MAX_DIMENSION,
+    QWEN_MAX_DIMENSION,
+)
 from xian.timeout import vision_timeout_for_mode
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["TextRegion", "parse_regions", "preprocess_for_grounding", "ground_and_translate"]
+__all__ = [
+    "TextRegion",
+    "parse_regions",
+    "preprocess_for_grounding",
+    "ground_and_translate",
+    "scan_json_objects",
+    "suppress_overlapping_regions",
+]
 
 #: The grounding coordinate space: boxes are integers 0-1000 on each axis.
 GROUNDING_SCALE = 1000.0
@@ -72,11 +84,22 @@ class TextRegion:
         return self.width > 0 and self.height > 0 and bool(self.translated.strip())
 
 
-def preprocess_for_grounding(image: Image.Image, max_dimension: int = QWEN_MAX_DIMENSION) -> Image.Image:
-    """Scale and sharpen a frame without padding it to a square.
+def preprocess_for_grounding(
+    image: Image.Image,
+    max_dimension: int = QWEN_MAX_DIMENSION,
+    *,
+    sharpen: bool = True,
+) -> Image.Image:
+    """Scale a frame for the model without padding it to a square.
 
     Deliberately not `VLProcessor.preprocess_pil`: that pads to a square for
     the bubble path, which would shift every box the model reports.
+
+    ``sharpen`` is a convolution over the whole image — 17-19ms at 1920×1200,
+    paid on every frame. It earns that on a one-shot capture of small or soft
+    text; on the live path it is switched off, where the frame is downscaled
+    and JPEG-encoded straight afterwards and the sharpened edges largely do not
+    survive the trip anyway.
     """
     if image.mode not in ("RGB", "L"):
         image = image.convert("RGB")
@@ -89,7 +112,7 @@ def preprocess_for_grounding(image: Image.Image, max_dimension: int = QWEN_MAX_D
             new_size = (max(1, int(width * max_dimension / height)), max_dimension)
         image = image.resize(new_size, Image.Resampling.LANCZOS)
 
-    return image.filter(ImageFilter.SHARPEN)
+    return image.filter(ImageFilter.SHARPEN) if sharpen else image
 
 
 def parse_regions(raw: str, width: int, height: int) -> list[TextRegion]:
@@ -145,6 +168,123 @@ def _clamp(value: float, low: int, high: int) -> int:
     return int(max(low, min(high, value)))
 
 
+def _covered_fraction(inner: tuple, outer: tuple) -> float:
+    """How much of ``inner``'s area ``outer`` covers, 0-1."""
+    overlap_x = min(inner[2], outer[2]) - max(inner[0], outer[0])
+    overlap_y = min(inner[3], outer[3]) - max(inner[1], outer[1])
+    if overlap_x <= 0 or overlap_y <= 0:
+        return 0.0
+    inner_area = (inner[2] - inner[0]) * (inner[3] - inner[1])
+    return overlap_x * overlap_y / inner_area if inner_area > 0 else 0.0
+
+
+def suppress_overlapping_regions(
+    regions: list[TextRegion], max_cover: float = 0.5
+) -> list[TextRegion]:
+    """Drop regions that a larger one already covers.
+
+    The overlay fills each region's box and then draws its translation, in list
+    order, so two boxes over the same pixels means the later fill paints out
+    the earlier translation. Detectors produce these routinely on tightly
+    stacked UI — a chat log, a character list — and measured over the
+    screenshot corpus, 12 box pairs covered each other by more than half, one
+    of them completely.
+
+    Largest first, so the survivor is the box most likely to hold the whole
+    line rather than a fragment of it.
+    """
+    def area(region: TextRegion) -> int:
+        return region.width * region.height
+
+    kept: list[TextRegion] = []
+    for region in sorted(regions, key=area, reverse=True):
+        if any(_covered_fraction(region.box, other.box) > max_cover for other in kept):
+            continue
+        kept.append(region)
+
+    # Restore the caller's ordering: reading order is what the overlay and the
+    # session recorder expect, not descending area.
+    order = {id(region): index for index, region in enumerate(regions)}
+    return sorted(kept, key=lambda region: order[id(region)])
+
+
+def scan_json_objects(buffer: str, start: int = 0) -> tuple[list[str], int]:
+    """Pull complete ``{...}`` objects out of a partly-received JSON array.
+
+    Streaming the grounding call lets the overlay paint each line as it arrives
+    instead of waiting for the model to finish the whole screen, which is the
+    difference between text appearing in a few hundred milliseconds and after
+    several seconds.  The catch is that a partial response is not valid JSON,
+    so this walks the buffer tracking brace depth and string state, and returns
+    only the objects that are definitely complete.
+
+    Returns the complete object substrings found from ``start``, and the index
+    to resume scanning from next time.
+    """
+    objects: list[str] = []
+    depth = 0
+    object_start = -1
+    in_string = False
+    escaped = False
+    consumed = start
+
+    for index in range(start, len(buffer)):
+        char = buffer[index]
+
+        if in_string:
+            # A backslash escapes the next character, including a quote; a
+            # brace inside a string must never move the depth counter.
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                object_start = index
+            depth += 1
+        elif char == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and object_start >= 0:
+                    objects.append(buffer[object_start:index + 1])
+                    consumed = index + 1
+                    object_start = -1
+
+    return objects, consumed
+
+
+def region_from_entry(entry: dict, width: int, height: int) -> TextRegion | None:
+    """Turn one parsed grounding object into a pixel-space region."""
+    box = entry.get("box")
+    if not isinstance(box, (list, tuple)) or len(box) < 4:
+        return None
+    try:
+        x1, y1, x2, y2 = (float(v) for v in box[:4])
+    except (TypeError, ValueError):
+        return None
+
+    original = str(entry.get("original") or "")
+    translated = str(entry.get("translated") or "") or original
+
+    region = TextRegion(
+        (
+            _clamp(min(x1, x2) / GROUNDING_SCALE * width, 0, width),
+            _clamp(min(y1, y2) / GROUNDING_SCALE * height, 0, height),
+            _clamp(max(x1, x2) / GROUNDING_SCALE * width, 0, width),
+            _clamp(max(y1, y2) / GROUNDING_SCALE * height, 0, height),
+        ),
+        original,
+        translated,
+    )
+    return region if region.is_valid() else None
+
+
 def build_grounding_prompt(source_lang: str, target_lang: str, glossary: dict[str, str] | None = None) -> str:
     prompt = (
         "You are an OCR and translation engine for a single screenshot. "
@@ -172,32 +312,66 @@ async def ground_and_translate(
     *,
     glossary: dict[str, str] | None = None,
     max_tokens: int = 2048,
+    max_dimension: int = LIVE_MAX_DIMENSION,
+    sharpen: bool = False,
+    on_region=None,
 ) -> list[TextRegion]:
-    """Locate and translate every text region in a frame, in one vision call."""
+    """Locate and translate every text region in a frame, in one vision call.
+
+    Defaults are the live overlay's: this runs once per changed frame, so the
+    frame is downscaled and JPEG-encoded to keep the round trip short. A caller
+    that only grounds once can pass ``QWEN_MAX_DIMENSION`` and ``sharpen=True``
+    to trade the latency back for fidelity.
+
+    ``on_region`` opts into streaming: the response is consumed as it arrives
+    and the callback is invoked with the regions decoded so far, so the first
+    lines can be painted long before the model has finished describing the
+    screen. The full list is still returned either way. A stream that fails
+    part-way falls back to whatever it managed to decode.
+    """
     if not processor.client:
         raise RuntimeError("Engine not initialized.")
 
-    prepared = preprocess_for_grounding(image)
-    b64_image = processor.encode_image(prepared)
+    prepared = preprocess_for_grounding(image, max_dimension, sharpen=sharpen)
+    b64_image = processor.encode_image(
+        prepared, fmt=LIVE_IMAGE_FORMAT, quality=LIVE_IMAGE_QUALITY
+    )
+    mime = "jpeg" if LIVE_IMAGE_FORMAT.upper() == "JPEG" else LIVE_IMAGE_FORMAT.lower()
+
+    request = {
+        "model": processor.get_vision_model_name(),
+        "messages": [
+            {"role": "system", "content": build_grounding_prompt(source_lang, target_lang, glossary)},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"OCR every text region and translate it to {target_lang}. Respond with the JSON array only."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/{mime};base64,{b64_image}"}},
+                ],
+            },
+        ],
+        "max_tokens": max_tokens,
+        "temperature": 0.1,
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+    }
+    timeout = vision_timeout_for_mode("Game")
+
+    def finish(regions: list[TextRegion]) -> list[TextRegion]:
+        """Deduplicate and map back to the caller's coordinate space."""
+        regions = suppress_overlapping_regions(regions)
+        if prepared.size != image.size:
+            regions = rescale_regions(regions, prepared.size, image.size)
+        return regions
+
+    if on_region is not None:
+        regions = await asyncio.wait_for(
+            _stream_regions(processor, request, prepared, finish, on_region),
+            timeout=timeout,
+        )
+        return finish(regions)
 
     response = await asyncio.wait_for(
-        processor.client.chat.completions.create(
-            model=processor.get_vision_model_name(),
-            messages=[
-                {"role": "system", "content": build_grounding_prompt(source_lang, target_lang, glossary)},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": f"OCR every text region and translate it to {target_lang}. Respond with the JSON array only."},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_image}"}},
-                    ],
-                },
-            ],
-            max_tokens=max_tokens,
-            temperature=0.1,
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-        ),
-        timeout=vision_timeout_for_mode("Game"),
+        processor.client.chat.completions.create(**request), timeout=timeout
     )
 
     choice = response.choices[0] if response.choices else None
@@ -205,9 +379,52 @@ async def ground_and_translate(
 
     # Boxes are relative to the *prepared* image, so map them back to the
     # caller's coordinate space before returning.
-    regions = parse_regions(content, prepared.width, prepared.height)
-    if prepared.size != image.size:
-        regions = rescale_regions(regions, prepared.size, image.size)
+    return finish(parse_regions(content, prepared.width, prepared.height))
+
+
+async def _stream_regions(processor, request: dict, prepared, finish, on_region) -> list[TextRegion]:
+    """Consume a streamed grounding response, publishing regions as they land.
+
+    Anything that goes wrong mid-stream keeps the regions already decoded: a
+    partial screen of translations is worth more than an exception, and the
+    next tick will try again anyway.
+    """
+    regions: list[TextRegion] = []
+    buffer = ""
+    consumed = 0
+
+    try:
+        stream = await processor.client.chat.completions.create(**request, stream=True)
+        async for chunk in stream:
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                continue
+            piece = getattr(choices[0].delta, "content", None)
+            if not piece:
+                continue
+
+            buffer += piece
+            found, consumed = scan_json_objects(buffer, consumed)
+            new_regions = []
+            for raw in found:
+                try:
+                    entry = json.loads(raw)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                region = region_from_entry(entry, prepared.width, prepared.height)
+                if region is not None:
+                    new_regions.append(region)
+
+            if new_regions:
+                regions.extend(new_regions)
+                on_region(finish(list(regions)))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("Grounding stream ended early (%s); keeping %d regions", exc, len(regions))
+
     return regions
 
 

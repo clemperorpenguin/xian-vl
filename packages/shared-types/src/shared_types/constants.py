@@ -59,8 +59,10 @@ DEFAULT_OVERLAY_TOGGLE_KEY = "rshift"
 DEFAULT_GPU_MEMORY_UTILIZATION = "Default"
 
 # ── NPU (AMD Ryzen AI / XDNA) ────────────────────────────────────────
-# Which accelerator text and speech inference prefers. Vision always stays on
-# the GPU: the Linux NPU backend (FastFlowLM) serves no vision models.
+# Which accelerator text and speech inference prefers. Vision may also run on
+# the NPU where the server offers a vision-capable NPU model — FastFlowLM does
+# now — but only under an explicit "npu" preference; "auto" leaves vision on
+# the GPU and moves the small, high-frequency speech and translation calls.
 DEFAULT_BACKEND_PREFERENCE = "auto"
 BACKEND_PREFERENCES = ("auto", "gpu", "npu")
 # FastFlowLM power profiles, slowest/coolest to fastest/hottest.
@@ -70,6 +72,22 @@ DEFAULT_NPU_POWER_MODE = "balanced"
 # ── Image Processing ─────────────────────────────────────────────────
 QWEN_MAX_DIMENSION = 1920
 IMAGE_HASH_SIZE = 16  # 16×16 perceptual hash
+
+# The live overlay re-sends a frame every time the screen changes, so it is
+# sized and encoded for latency rather than for fidelity.
+#
+# Dimension: a vision model's prefill cost scales with image *area*, so 1024
+# against 1920 is roughly a third of the vision tokens. Game text is large and
+# high-contrast; it survives the downscale, and the boxes come back normalized
+# so nothing depends on the pixel size.
+LIVE_MAX_DIMENSION = 1024
+
+# Format: PNG on a 1920×1200 game frame measures 176-213ms to encode and 3.8MB
+# on the wire, against 5ms and ~700KB for JPEG. Lossless buys nothing here —
+# the frame came from a lossy display pipeline and is about to be downscaled.
+# Document mode still uses PNG, where fidelity is the point.
+LIVE_IMAGE_FORMAT = "JPEG"
+LIVE_IMAGE_QUALITY = 85
 
 # ── Context ──────────────────────────────────────────────────────────
 # Frames kept in the sliding window. Chat history references frames by id,
