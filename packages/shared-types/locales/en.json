@@ -714,5 +714,41 @@
   "model_choice.note": {
     "value": "Downloading starts right away and continues in the background.",
     "context": "Note below the options warning that the download begins immediately"
+  },
+  "model_choice.heading.models": {
+    "value": "Models to download",
+    "context": "Section heading above the model options in the first-run picker"
+  },
+  "model_choice.heading.mode": {
+    "value": "How MAGE works",
+    "context": "Section heading above the architecture options in the first-run picker"
+  },
+  "model_choice.mode.classic": {
+    "value": "Classic Xian",
+    "context": "The original translate-on-demand architecture"
+  },
+  "model_choice.mode.classic.detail": {
+    "value": "Frame a region, translate it, read the result. One capture, one answer.",
+    "context": "Explains the classic architecture"
+  },
+  "model_choice.mode.realtime": {
+    "value": "Real-time Xian (experimental)",
+    "context": "The continuous in-place translation architecture"
+  },
+  "model_choice.mode.realtime.detail": {
+    "value": "Keeps a locked region translated in place as it changes. Heavier, and newer — you can turn it on or off later under Experimental in Settings.",
+    "context": "Explains the real-time architecture"
+  },
+  "settings.heading.experimental": {
+    "value": "Experimental",
+    "context": "Section heading for experimental features in settings"
+  },
+  "settings.checkbox.experimental_live": {
+    "value": "Real-time translation (live overlay)",
+    "context": "Checkbox enabling continuous in-place translation"
+  },
+  "settings.tooltip.experimental_live": {
+    "value": "Adds a Live button to the lens overlay, which keeps the selected region translated in place as it changes. Costs a vision call on every change.",
+    "context": "Tooltip for the real-time translation checkbox"
   }
 }

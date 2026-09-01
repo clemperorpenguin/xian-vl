@@ -75,7 +75,7 @@ from mage.settings_keys import (
     KEY_FAMILIAR_ENABLED, KEY_FAMILIAR_TTS, KEY_FAMILIAR_TYPE,
     KEY_FAMILIAR_CUSTOM_RECIPE, KEY_MEMORY_ENABLED, KEY_MEMORY_RETENTION_DAYS,
     KEY_BACKEND_PREFERENCE, KEY_NPU_POWER_MODE, KEY_LIVE_INTERVAL_MS,
-    KEY_COLLECTION_TIER, is_true,
+    KEY_COLLECTION_TIER, KEY_EXPERIMENTAL_LIVE, is_true,
 )
 from mage.utils.window_binder import WindowBinder
 from shared_types.state import state, t
@@ -324,6 +324,17 @@ class SettingsDialog(QDialog):
         self.auto_speak_cb.setChecked(is_true(speak_val))
         features_layout.addRow(self.auto_speak_cb)
 
+        experimental_heading = QLabel(t("settings.heading.experimental"))
+        experimental_heading.setStyleSheet("font-weight: bold;")
+        features_layout.addRow(experimental_heading)
+
+        self.experimental_live_cb = QCheckBox(t("settings.checkbox.experimental_live"))
+        self.experimental_live_cb.setToolTip(t("settings.tooltip.experimental_live"))
+        self.experimental_live_cb.setChecked(
+            is_true(settings.value(KEY_EXPERIMENTAL_LIVE, "false"))
+        )
+        features_layout.addRow(self.experimental_live_cb)
+
         self.live_interval_spin = QSpinBox()
         self.live_interval_spin.setRange(200, 5000)
         self.live_interval_spin.setSingleStep(100)
@@ -333,6 +344,10 @@ class SettingsDialog(QDialog):
         )))
         self.live_interval_spin.setToolTip(t("settings.tooltip.live_interval"))
         features_layout.addRow(t("settings.label.live_interval"), self.live_interval_spin)
+
+        # The interval only means anything while the live overlay is running.
+        self.live_interval_spin.setEnabled(self.experimental_live_cb.isChecked())
+        self.experimental_live_cb.toggled.connect(self.live_interval_spin.setEnabled)
 
 
         self.memory_enabled_cb = QCheckBox(t("settings.checkbox.memory_enabled"))
@@ -533,6 +548,7 @@ class SettingsDialog(QDialog):
         self.settings.setValue(KEY_AUTO_CONTINUE, "true" if self.auto_continue_cb.isChecked() else "false")
         self.settings.setValue(KEY_AUTO_SPEAK, "true" if self.auto_speak_cb.isChecked() else "false")
         self.settings.setValue(KEY_LIVE_INTERVAL_MS, self.live_interval_spin.value())
+        self.settings.setValue(KEY_EXPERIMENTAL_LIVE, self.experimental_live_cb.isChecked())
         self.settings.setValue(KEY_MEMORY_ENABLED, "true" if self.memory_enabled_cb.isChecked() else "false")
         self.settings.setValue(KEY_MEMORY_RETENTION_DAYS, self.memory_retention_spin.value())
         self.settings.setValue(KEY_FAMILIAR_ENABLED, "true" if self.familiar_enabled_cb.isChecked() else "false")
@@ -844,17 +860,21 @@ class XianApp(QWidget):
             recommended_tier(memory_gb) if memory_gb else constants.DEFAULT_COLLECTION_TIER
         )
 
-        tier, model = self._ask_for_models(recommended, memory_gb)
+        tier, model, live_enabled = self._ask_for_models(recommended, memory_gb)
 
         if tier is not None:
             self.settings.setValue(KEY_COLLECTION_TIER, tier)
         self.settings.setValue(KEY_API_MODEL, model)
+        self.settings.setValue(KEY_EXPERIMENTAL_LIVE, live_enabled)
         # Only the settings are written: this runs before ``self.processor``
         # exists, and the processor is constructed from KEY_API_MODEL on the
         # next line of __init__, so it picks the choice up from here.
-        logger.info("First run: chose %s (tier %s)", model, tier or "none")
+        logger.info(
+            "First run: chose %s (tier %s), live mode %s",
+            model, tier or "none", "on" if live_enabled else "off",
+        )
 
-    def _ask_for_models(self, recommended: str, memory_gb: float) -> tuple[str | None, str]:
+    def _ask_for_models(self, recommended: str, memory_gb: float) -> tuple[str | None, str, bool]:
         """Show the first-run picker; fall back to the recommendation if it fails.
 
         A dialog that cannot be shown — no display, a Qt problem — must not
@@ -865,7 +885,7 @@ class XianApp(QWidget):
 
             dialog = ModelChoiceDialog(recommended)
             dialog.exec()
-            return dialog.chosen_tier, dialog.chosen_model
+            return dialog.chosen_tier, dialog.chosen_model, dialog.live_mode_enabled
         except Exception as e:
             logger.warning("Model picker unavailable (%s); using the recommendation", e)
             collection = get_collection(recommended)
@@ -873,7 +893,7 @@ class XianApp(QWidget):
                 "First run: %.0f GB of memory detected, choosing collection %s.",
                 memory_gb, collection.name,
             )
-            return recommended, collection.name
+            return recommended, collection.name, False
 
     def _init_session_memory(self):
         """Open the durable play-session log and hand it to the processor.
@@ -1274,7 +1294,8 @@ class XianApp(QWidget):
                 logger.debug("Error closing previous lens overlay", exc_info=True)
 
         self._lens = LensOverlayWindow(
-            previous_rect=LensOverlayWindow._last_rect
+            previous_rect=LensOverlayWindow._last_rect,
+            live_enabled=is_true(self.settings.value(KEY_EXPERIMENTAL_LIVE, "false")),
         )
         self._lens.action_requested.connect(self._on_lens_action)
         self._lens.closed.connect(self._on_lens_closed)

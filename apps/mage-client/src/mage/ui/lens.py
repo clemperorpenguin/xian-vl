@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class ActionBarWidget(QWidget):
     action_triggered = pyqtSignal(str, QRect) # action name, selected rect
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, live_enabled: bool = False):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
@@ -65,16 +65,21 @@ class ActionBarWidget(QWidget):
         btn_dialogue = QPushButton(t("lens.button.dialogue"))
         btn_dialogue.clicked.connect(lambda: self._on_click("dialogue"))
         
-        btn_live = QPushButton(t("lens.button.live"))
-        btn_live.setToolTip(t("lens.tooltip.live"))
-        btn_live.clicked.connect(lambda: self._on_click("live"))
-
         btn_chat = QPushButton(t("lens.button.chat_context"))
         btn_chat.clicked.connect(lambda: self._on_click("chat"))
 
         layout.addWidget(btn_translate)
         layout.addWidget(btn_dialogue)
-        layout.addWidget(btn_live)
+
+        # Continuous translation is opt-in (Settings → Features → Experimental),
+        # so the button only exists when the feature is on. Offering it
+        # otherwise advertises a mode the user has not enabled.
+        if live_enabled:
+            btn_live = QPushButton(t("lens.button.live"))
+            btn_live.setToolTip(t("lens.tooltip.live"))
+            btn_live.clicked.connect(lambda: self._on_click("live"))
+            layout.addWidget(btn_live)
+
         layout.addWidget(btn_chat)
         
         self.selected_rect = QRect()
@@ -89,8 +94,9 @@ class LensOverlayWindow(QWidget):
     # Persists across instances so the next overlay can recall it
     _last_rect: ClassVar[QRect | None] = None
     
-    def __init__(self, previous_rect: QRect | None = None):
+    def __init__(self, previous_rect: QRect | None = None, live_enabled: bool = False):
         super().__init__()
+        self._live_enabled = live_enabled
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
@@ -114,7 +120,7 @@ class LensOverlayWindow(QWidget):
         self.selecting = False
         self.selected_rect = QRect()
         
-        self.action_bar = ActionBarWidget(self)
+        self.action_bar = ActionBarWidget(self, live_enabled=self._live_enabled)
         self.action_bar.hide()
         self.action_bar.action_triggered.connect(self._handle_action)
 

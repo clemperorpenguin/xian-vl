@@ -55,3 +55,7 @@ KEY_BACKEND_PREFERENCE = "backend_preference"
 KEY_NPU_POWER_MODE = "npu_power_mode"
 KEY_LIVE_INTERVAL_MS = "live_interval_ms"
 KEY_COLLECTION_TIER = "collection_tier"
+
+# Continuous in-place translation. Off by default: it is the newer of the
+# two architectures and still experimental.
+KEY_EXPERIMENTAL_LIVE = "experimental_live_mode"

@@ -40,6 +40,18 @@ DEFAULT_COLLECTION_TIER = "ultra"
 # several gigabytes of download.
 SINGLE_MODEL_NAME = "Qwen3.5-0.8B-GGUF"
 SINGLE_MODEL_SIZE_GB = 0.8
+
+# ── Architecture ─────────────────────────────────────────────────────
+# Two ways of working, offered on first run.
+#
+# "classic" is the original design: frame a region, translate it, read the
+# result in a bubble. One capture, one answer, nothing running between.
+#
+# "realtime" keeps a locked region continuously translated in place. It costs
+# a vision call on every change and is newer, so it stays opt-in and is
+# presented as experimental.
+ARCHITECTURES = ("classic", "realtime")
+DEFAULT_ARCHITECTURE = "classic"
 DEFAULT_MAX_TOKENS = 2048
 MODE_MAX_TOKENS: dict[str, int] = {
     "Game": 4096,

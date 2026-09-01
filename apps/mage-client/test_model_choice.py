@@ -96,6 +96,84 @@ def test_every_option_label_resolves_a_localized_string():
         assert not button.text().startswith("model_choice.")
 
 
+# ── architecture choice ──────────────────────────────────────────────
+
+def test_both_architectures_are_offered():
+    dialog = ModelChoiceDialog("ultra")
+    assert {arch for _b, arch in dialog._modes} == set(constants.ARCHITECTURES)
+
+
+def test_classic_is_the_default_architecture():
+    """Real-time is newer and heavier; it is offered, not assumed."""
+    dialog = ModelChoiceDialog("ultra")
+
+    assert dialog.chosen_architecture == constants.DEFAULT_ARCHITECTURE == "classic"
+    assert dialog.live_mode_enabled is False
+
+
+def test_choosing_realtime_enables_live_mode():
+    dialog = ModelChoiceDialog("ultra")
+    realtime = next(b for b, arch in dialog._modes if arch == "realtime")
+    realtime.setChecked(True)
+
+    assert dialog.chosen_architecture == "realtime"
+    assert dialog.live_mode_enabled is True
+
+
+def test_the_architecture_choice_is_independent_of_the_model_choice():
+    """A collection with real-time, or the single model with classic, are both
+    reasonable; neither choice should constrain the other."""
+    dialog = ModelChoiceDialog("ultra")
+    single = next(b for b, tier, _m in dialog._options if tier is None)
+    single.setChecked(True)
+    realtime = next(b for b, arch in dialog._modes if arch == "realtime")
+    realtime.setChecked(True)
+
+    assert dialog.chosen_model == constants.SINGLE_MODEL_NAME
+    assert dialog.chosen_tier is None
+    assert dialog.live_mode_enabled is True
+
+
+def test_mode_labels_resolve_localized_strings():
+    dialog = ModelChoiceDialog("ultra")
+    for button, _arch in dialog._modes:
+        assert button.text()
+        assert not button.text().startswith("model_choice.")
+
+
+# ── the Live button is gated on the setting ──────────────────────────
+
+def _live_button_present(live_enabled: bool) -> bool:
+    from mage.ui.lens import ActionBarWidget
+    from shared_types.state import t
+
+    bar = ActionBarWidget(live_enabled=live_enabled)
+    labels = [
+        bar.layout().itemAt(i).widget().text()
+        for i in range(bar.layout().count())
+        if bar.layout().itemAt(i).widget() is not None
+    ]
+    return t("lens.button.live") in labels
+
+
+def test_the_lens_hides_live_until_the_feature_is_enabled():
+    """Offering it while off advertises a mode the user has not turned on."""
+    assert _live_button_present(False) is False
+
+
+def test_enabling_the_feature_adds_the_live_button():
+    assert _live_button_present(True) is True
+
+
+def test_the_other_lens_actions_are_unaffected_by_the_gate():
+    from mage.ui.lens import ActionBarWidget
+
+    for enabled in (False, True):
+        bar = ActionBarWidget(live_enabled=enabled)
+        count = bar.layout().count()
+        assert count == (4 if enabled else 3), "translate, dialogue, chat always present"
+
+
 # ── first-run seeding ────────────────────────────────────────────────
 
 def test_seeding_only_writes_settings_not_the_processor():

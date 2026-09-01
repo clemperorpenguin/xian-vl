@@ -16,7 +16,7 @@
 #
 # Contact: clem@pendragon.systems (Clementine Pendragon, c/o Xian Project Development)
 
-"""First-run choice of what to download.
+"""First-run choices: what to download, and how MAGE should work.
 
 MAGE needs models before it can translate anything, and the first launch used
 to pick a collection from installed memory and start fetching it — up to 25.8
@@ -27,6 +27,12 @@ So the choice is put to the user, with the sizes stated plainly: one of the
 three collections, or a single vision model that covers screen translation
 alone and downloads in minutes. Memory still picks the *default* selection —
 it is a reasonable guess — but it no longer decides silently.
+
+The second choice is the architecture. Classic is the original design and the
+default: frame a region, translate it, read the result. Real-time keeps a
+locked region continuously translated in place — newer, heavier, and still
+experimental, so it is offered rather than assumed. It can be switched on and
+off later under Experimental in Settings.
 """
 
 from __future__ import annotations
@@ -66,12 +72,17 @@ class ModelChoiceDialog(QDialog):
 
         self._group = QButtonGroup(self)
         self._options: list[tuple[QRadioButton, str | None, str]] = []
+        self._modes: list[tuple[QRadioButton, str]] = []
 
         layout = QVBoxLayout(self)
 
         intro = QLabel(t("model_choice.intro"))
         intro.setWordWrap(True)
         layout.addWidget(intro)
+
+        models_heading = QLabel(t("model_choice.heading.models"))
+        models_heading.setStyleSheet("font-weight: bold;")
+        layout.addWidget(models_heading)
 
         for tier, collection in COLLECTIONS.items():
             label = t("model_choice.option.collection").format(
@@ -114,6 +125,25 @@ class ModelChoiceDialog(QDialog):
         note.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(note)
 
+        mode_heading = QLabel(t("model_choice.heading.mode"))
+        mode_heading.setStyleSheet("font-weight: bold;")
+        layout.addWidget(mode_heading)
+
+        self._mode_group = QButtonGroup(self)
+        for architecture in constants.ARCHITECTURES:
+            button = QRadioButton(t(f"model_choice.mode.{architecture}"))
+            self._mode_group.addButton(button)
+            layout.addWidget(button)
+
+            detail = QLabel(t(f"model_choice.mode.{architecture}.detail"))
+            detail.setWordWrap(True)
+            detail.setIndent(24)
+            detail.setEnabled(False)
+            layout.addWidget(detail)
+
+            button.setChecked(architecture == constants.DEFAULT_ARCHITECTURE)
+            self._modes.append((button, architecture))
+
         # Default to the memory-recommended tier, falling back to the first
         # option so there is always exactly one selection to accept.
         for button, tier, _model in self._options:
@@ -144,3 +174,16 @@ class ModelChoiceDialog(QDialog):
             if button.isChecked():
                 return model
         return constants.SINGLE_MODEL_NAME
+
+    @property
+    def chosen_architecture(self) -> str:
+        """"classic" or "realtime"."""
+        for button, architecture in self._modes:
+            if button.isChecked():
+                return architecture
+        return constants.DEFAULT_ARCHITECTURE
+
+    @property
+    def live_mode_enabled(self) -> bool:
+        """Whether continuous translation should be switched on."""
+        return self.chosen_architecture == "realtime"
