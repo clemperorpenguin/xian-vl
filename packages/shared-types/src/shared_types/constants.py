@@ -101,6 +101,20 @@ IMAGE_HASH_SIZE = 16  # 16×16 perceptual hash
 # so nothing depends on the pixel size.
 LIVE_MAX_DIMENSION = 1024
 
+# ...but 1024 was chosen for a *locked region*, where the text fills a good part
+# of the frame. Whole-screen capture is a different problem. Measured on the
+# corpus: JX3's quest tracker draws 23px glyphs on a 2880-wide capture, which
+# the 1024 budget delivers to the model as 8.2px. A Chinese character carrying
+# ten or more strokes has no legible form at that size — the strokes merge into
+# a blob — and the failure is silent: the request succeeds and boxes come back
+# in plausible places holding nothing useful.
+#
+# So the budget grows with the capture: never shrink a frame below this fraction
+# of its captured size, up to QWEN_MAX_DIMENSION. 0.6 puts the same glyph at
+# 13.8px. Vision cost scales with area, so this trades latency for legibility,
+# and only captures large enough to need it pay it.
+LIVE_MIN_SCALE = 0.6
+
 # Format: PNG on a 1920×1200 game frame measures 176-213ms to encode and 3.8MB
 # on the wire, against 5ms and ~700KB for JPEG. Lossless buys nothing here —
 # the frame came from a lossy display pipeline and is about to be downscaled.

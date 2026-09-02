@@ -52,7 +52,13 @@ from PyQt6.QtGui import QGuiApplication, QImage, QScreen
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["FrameStream", "map_region_to_frame", "screen_for_rect", "screen_capture_supported"]
+__all__ = [
+    "FrameStream",
+    "map_region_to_frame",
+    "frame_region_to_logical",
+    "screen_for_rect",
+    "screen_capture_supported",
+]
 
 
 def screen_capture_supported() -> bool:
@@ -127,6 +133,29 @@ def map_region_to_frame(
 
     clipped = mapped.intersected(QRect(0, 0, frame_width, frame_height))
     return clipped if not clipped.isEmpty() else None
+
+
+def frame_region_to_logical(
+    region: QRect, screen_geometry: QRect, frame_size: tuple[int, int]
+) -> QRect:
+    """Invert :func:`map_region_to_frame`, back to global logical coordinates.
+
+    Needed because that mapping can *clip*: a region hanging off the edge of
+    the screen, or spanning onto a second monitor, comes back smaller than it
+    was asked for. Everything downstream — the pixels-per-logical-pixel scale,
+    and the rectangle the overlay covers — has to describe what was actually
+    captured, not what was requested, or every box is placed against the wrong
+    width and lands somewhere else on screen.
+    """
+    frame_width, frame_height = frame_size
+    scale_x = frame_width / screen_geometry.width()
+    scale_y = frame_height / screen_geometry.height()
+    return QRect(
+        screen_geometry.left() + int(region.left() / scale_x),
+        screen_geometry.top() + int(region.top() / scale_y),
+        max(1, int(region.width() / scale_x)),
+        max(1, int(region.height() / scale_y)),
+    )
 
 
 class FrameStream(QObject):
@@ -230,6 +259,17 @@ class FrameStream(QObject):
         ``None`` means "no frame yet, use the screenshot path" — during portal
         negotiation, or after the session has failed.
         """
+        served = self.grab_region(rect)
+        return served[0] if served is not None else None
+
+    def grab_region(self, rect: QRect) -> tuple[QImage, QRect] | None:
+        """:meth:`grab`, plus the logical rect the returned frame covers.
+
+        A session captures one whole screen, so a request reaching past its
+        edge is clipped. Callers that scale coordinates against the region, or
+        position anything over it, need the rect that came back rather than the
+        one they asked for.
+        """
         if self._failed:
             return None
 
@@ -238,9 +278,9 @@ class FrameStream(QObject):
         if frame is None or frame.isNull() or self._screen is None:
             return None
 
-        region = map_region_to_frame(
-            rect, self._screen.geometry(), (frame.width(), frame.height())
-        )
+        geometry = self._screen.geometry()
+        frame_size = (frame.width(), frame.height())
+        region = map_region_to_frame(rect, geometry, frame_size)
         if region is None:
             return None
-        return frame.copy(region)
+        return frame.copy(region), frame_region_to_logical(region, geometry, frame_size)

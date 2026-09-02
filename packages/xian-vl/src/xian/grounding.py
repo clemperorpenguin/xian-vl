@@ -43,6 +43,7 @@ from shared_types.constants import (
     LIVE_IMAGE_FORMAT,
     LIVE_IMAGE_QUALITY,
     LIVE_MAX_DIMENSION,
+    LIVE_MIN_SCALE,
     QWEN_MAX_DIMENSION,
 )
 from xian.timeout import vision_timeout_for_mode
@@ -56,10 +57,36 @@ __all__ = [
     "ground_and_translate",
     "scan_json_objects",
     "suppress_overlapping_regions",
+    "drop_container_regions",
+    "drop_frame_sized_regions",
+    "live_max_dimension",
 ]
 
 #: The grounding coordinate space: boxes are integers 0-1000 on each axis.
 GROUNDING_SCALE = 1000.0
+
+#: How much of one box another must cover before they count as the same
+#: detection rather than two neighbouring lines.
+DEFAULT_MAX_COVER = 0.5
+
+#: Smaller boxes a region must contain before it is treated as a container.
+CONTAINER_CHILD_COUNT = 2
+
+#: A child has to be meaningfully smaller than the box containing it; two
+#: boxes of nearly equal size are competing detections of one line, not
+#: nesting, and belong to the deduplication pass instead.
+CONTAINER_CHILD_AREA_RATIO = 0.9
+
+#: Fraction of the frame above which a box is the model boxing the whole
+#: picture rather than locating a line of text.
+MAX_FRAME_COVER = 0.8
+
+#: Generation cap for one grounding call. Each region costs roughly 40-60
+#: tokens once its box, source text and translation are written out, so a busy
+#: whole-screen frame runs past 2048 and gets cut off part-way down the screen.
+#: Only a ceiling: the model stops when it closes the array, so raising it
+#: costs nothing on the frames that never reach it.
+GROUNDING_MAX_TOKENS = 4096
 
 _JSON_ARRAY_RE = re.compile(r"\[.*\]", re.DOTALL)
 
@@ -82,6 +109,26 @@ class TextRegion:
 
     def is_valid(self) -> bool:
         return self.width > 0 and self.height > 0 and bool(self.translated.strip())
+
+
+def live_max_dimension(size: tuple[int, int]) -> int:
+    """Pick the longest edge to send for a frame of this size.
+
+    A locked region around a dialogue box gets :data:`LIVE_MAX_DIMENSION`,
+    which is what that constant was measured for. A whole-screen capture gets
+    more, because the text on it is a far smaller fraction of the frame: a 23px
+    glyph on a 2880-wide capture arrives at the model as 8.2px under the 1024
+    budget, too small for a Chinese character to hold its strokes, and the
+    request still looks like it succeeded.
+
+    Growth is proportional and capped, so this never exceeds what the one-shot
+    path already sends.
+    """
+    longest = max(size)
+    if longest <= 0:
+        return LIVE_MAX_DIMENSION
+    needed = int(longest * LIVE_MIN_SCALE)
+    return max(LIVE_MAX_DIMENSION, min(needed, QWEN_MAX_DIMENSION))
 
 
 def preprocess_for_grounding(
@@ -115,6 +162,43 @@ def preprocess_for_grounding(
     return image.filter(ImageFilter.SHARPEN) if sharpen else image
 
 
+def _parse_entries(raw: str) -> list:
+    """Decode the array of grounding objects, whole or partial.
+
+    A whole-screen frame can hold more text regions than ``max_tokens`` leaves
+    room for, and the response is then cut off mid-array. The array pattern
+    cannot match an unterminated array, so every region the model *did* produce
+    was being thrown away along with the truncated one — the screen came back
+    empty rather than partly translated.
+    """
+    match = _JSON_ARRAY_RE.search(raw)
+    if match:
+        try:
+            entries = json.loads(match.group(0))
+        except (ValueError, TypeError):
+            entries = None
+        if isinstance(entries, list):
+            return entries
+
+    # Fall back to the streaming scanner, which reads complete objects out of
+    # an incomplete array and simply stops at the truncation point.
+    objects, _ = scan_json_objects(raw)
+    recovered = []
+    for chunk in objects:
+        try:
+            entry = json.loads(chunk)
+        except (ValueError, TypeError):
+            continue
+        recovered.append(entry)
+    if not recovered and raw.strip():
+        # Neither a whole array nor a single complete object. The small models
+        # do this — one answered a whole-screen frame with
+        # ``{"box":[[326,11,656,207], "WORLD OF WARCRAFT"}``, unbalanced braces
+        # and all — and the overlay's only symptom is that it stays blank.
+        logger.warning("Grounding response could not be decoded: %.300s", raw)
+    return recovered
+
+
 def parse_regions(raw: str, width: int, height: int) -> list[TextRegion]:
     """Parse the model's JSON array into pixel-space regions.
 
@@ -126,46 +210,90 @@ def parse_regions(raw: str, width: int, height: int) -> list[TextRegion]:
     if "</think>" in raw:
         raw = raw.split("</think>", 1)[1]
 
-    match = _JSON_ARRAY_RE.search(raw)
-    if not match:
-        return []
-    try:
-        entries = json.loads(match.group(0))
-    except (ValueError, TypeError):
-        logger.debug("Grounding response was not valid JSON: %.200s", raw)
-        return []
-    if not isinstance(entries, list):
-        return []
+    entries = _parse_entries(raw)
 
     regions: list[TextRegion] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        box = entry.get("box")
-        if not isinstance(box, (list, tuple)) or len(box) < 4:
+        coordinates = _entry_box(entry)
+        if coordinates is None:
             continue
-        try:
-            x1, y1, x2, y2 = (float(v) for v in box[:4])
-        except (TypeError, ValueError):
-            continue
+        x1, y1, x2, y2 = coordinates
 
         left = _clamp(min(x1, x2) / GROUNDING_SCALE * width, 0, width)
         right = _clamp(max(x1, x2) / GROUNDING_SCALE * width, 0, width)
         top = _clamp(min(y1, y2) / GROUNDING_SCALE * height, 0, height)
         bottom = _clamp(max(y1, y2) / GROUNDING_SCALE * height, 0, height)
 
-        original = str(entry.get("original") or "")
-        translated = str(entry.get("translated") or "") or original
+        original, translated = _entry_text(entry)
 
         region = TextRegion((left, top, right, bottom), original, translated)
         if region.is_valid():
             regions.append(region)
+
+    if entries and not regions:
+        # The model answered, and none of it fitted the schema. Distinct from
+        # "no text on screen", and otherwise indistinguishable from it: the
+        # overlay simply stays blank while the loop keeps paying for calls.
+        logger.warning(
+            "Grounding returned %d object(s) but none held a usable box: %.200s",
+            len(entries), raw,
+        )
 
     return regions
 
 
 def _clamp(value: float, low: int, high: int) -> int:
     return int(max(low, min(high, value)))
+
+
+def _entry_box(entry: dict) -> tuple[float, float, float, float] | None:
+    """Read the four coordinates out of one grounding object.
+
+    The prompt asks for ``box``, but the Qwen-VL grounding convention these
+    models are trained on names it ``bbox_2d``, and a model reaching for that
+    training rather than the prompt is a schema mismatch we can simply accept.
+    The same convention nests the coordinates one level deep when it expects to
+    return several boxes, so a single-element wrapper is unwrapped too.
+    """
+    box = None
+    for key in ("box", "bbox_2d", "bbox"):
+        value = entry.get(key)
+        if isinstance(value, (list, tuple)) and value:
+            box = value
+            break
+    if box is None:
+        return None
+
+    if isinstance(box[0], (list, tuple)):
+        box = box[0]
+    if len(box) < 4:
+        return None
+    try:
+        x1, y1, x2, y2 = (float(v) for v in box[:4])
+    except (TypeError, ValueError):
+        return None
+    return x1, y1, x2, y2
+
+
+def _entry_text(entry: dict) -> tuple[str, str]:
+    """Source and target text, under whichever key the model used."""
+    original = ""
+    for key in ("original", "text", "source"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            original = value
+            break
+
+    translated = ""
+    for key in ("translated", "translation", "target"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            translated = value
+            break
+
+    return original, translated or original
 
 
 def _covered_fraction(inner: tuple, outer: tuple) -> float:
@@ -178,10 +306,93 @@ def _covered_fraction(inner: tuple, outer: tuple) -> float:
     return overlap_x * overlap_y / inner_area if inner_area > 0 else 0.0
 
 
-def suppress_overlapping_regions(
-    regions: list[TextRegion], max_cover: float = 0.5
+def _area(region: TextRegion) -> int:
+    return region.width * region.height
+
+
+def drop_container_regions(
+    regions: list[TextRegion], max_cover: float = DEFAULT_MAX_COVER
 ) -> list[TextRegion]:
-    """Drop regions that a larger one already covers.
+    """Drop boxes that swallow several smaller ones.
+
+    Asked for "one element per visual line", a model will still sometimes hand
+    back the panel *and* the lines inside it — or, on a whole-screen frame, one
+    box around the entire picture. Keeping the container is the worst of the
+    options: the overlay fills it, which paints an opaque slab over everything
+    the smaller boxes were going to say.
+
+    Two children is the threshold because one is ambiguous. A box containing a
+    single smaller box is far more often two attempts at the same line, where
+    the larger one is the better answer, and that case is left to the
+    deduplication pass below.
+    """
+    children: dict[int, int] = {}
+    for region in regions:
+        count = 0
+        for other in regions:
+            if other is region:
+                continue
+            if _area(other) >= _area(region) * CONTAINER_CHILD_AREA_RATIO:
+                continue
+            if _covered_fraction(other.box, region.box) > max_cover:
+                count += 1
+        children[id(region)] = count
+
+    kept = [r for r in regions if children[id(r)] < CONTAINER_CHILD_COUNT]
+    dropped = len(regions) - len(kept)
+    if dropped:
+        logger.debug("Dropped %d container box(es) covering smaller regions", dropped)
+    return kept
+
+
+def drop_frame_sized_regions(
+    regions: list[TextRegion],
+    frame_size: tuple[int, int],
+    max_cover: float = MAX_FRAME_COVER,
+) -> list[TextRegion]:
+    """Drop boxes that cover most of the frame, when anything else survives.
+
+    A box this size is the model boxing the picture rather than finding a line,
+    and it is the single most destructive thing the overlay can be handed: the
+    fill covers the whole capture, so the game disappears behind one flat
+    rectangle with one line of text on it.
+
+    It is not dropped unconditionally. On a locked region drawn tightly around
+    a single line, a box covering nearly all of the frame is the *correct*
+    answer, and there is nothing else to fall back to.
+
+    That reprieve is only available to a frame small enough for the claim to be
+    true. The size that separates them is the one :func:`live_max_dimension`
+    already draws: at or below the locked-region budget, "this whole frame is
+    one line of text" is plausible; above it, the same box asserts that one line
+    fills a screen, and it is dropped even if nothing survives it. Painting
+    nothing is recoverable — the next tick tries again — while painting it hides
+    the game behind a slab.
+    """
+    frame_area = frame_size[0] * frame_size[1]
+    if frame_area <= 0:
+        return regions
+
+    kept = [r for r in regions if _area(r) < frame_area * max_cover]
+    if len(kept) == len(regions):
+        return kept
+    if not kept and max(frame_size) <= LIVE_MAX_DIMENSION:
+        return regions
+
+    logger.debug(
+        "Dropped %d frame-sized box(es), leaving %d region(s)",
+        len(regions) - len(kept), len(kept),
+    )
+    return kept
+
+
+def suppress_overlapping_regions(
+    regions: list[TextRegion],
+    max_cover: float = DEFAULT_MAX_COVER,
+    *,
+    frame_size: tuple[int, int] | None = None,
+) -> list[TextRegion]:
+    """Reduce the model's boxes to a set the overlay can paint without conflict.
 
     The overlay fills each region's box and then draws its translation, in list
     order, so two boxes over the same pixels means the later fill paints out
@@ -190,14 +401,22 @@ def suppress_overlapping_regions(
     screenshot corpus, 12 box pairs covered each other by more than half, one
     of them completely.
 
-    Largest first, so the survivor is the box most likely to hold the whole
-    line rather than a fragment of it.
+    Three passes, in this order:
+
+    1. frame-sized boxes, which obscure the entire capture;
+    2. containers, which obscure everything inside them;
+    3. duplicates, largest first, so the survivor is the box most likely to
+       hold the whole line rather than a fragment of it.
+
+    Ordering matters: a container has to be identified against the full set of
+    boxes, before deduplication has removed the very children that reveal it.
     """
-    def area(region: TextRegion) -> int:
-        return region.width * region.height
+    if frame_size is not None:
+        regions = drop_frame_sized_regions(regions, frame_size, MAX_FRAME_COVER)
+    candidates = drop_container_regions(regions, max_cover)
 
     kept: list[TextRegion] = []
-    for region in sorted(regions, key=area, reverse=True):
+    for region in sorted(candidates, key=_area, reverse=True):
         if any(_covered_fraction(region.box, other.box) > max_cover for other in kept):
             continue
         kept.append(region)
@@ -261,16 +480,12 @@ def scan_json_objects(buffer: str, start: int = 0) -> tuple[list[str], int]:
 
 def region_from_entry(entry: dict, width: int, height: int) -> TextRegion | None:
     """Turn one parsed grounding object into a pixel-space region."""
-    box = entry.get("box")
-    if not isinstance(box, (list, tuple)) or len(box) < 4:
+    coordinates = _entry_box(entry)
+    if coordinates is None:
         return None
-    try:
-        x1, y1, x2, y2 = (float(v) for v in box[:4])
-    except (TypeError, ValueError):
-        return None
+    x1, y1, x2, y2 = coordinates
 
-    original = str(entry.get("original") or "")
-    translated = str(entry.get("translated") or "") or original
+    original, translated = _entry_text(entry)
 
     region = TextRegion(
         (
@@ -295,6 +510,11 @@ def build_grounding_prompt(source_lang: str, target_lang: str, glossary: dict[st
         "Box coordinates are integers normalized to 0-1000, where x runs along the image "
         "width and y along its height. Give one element per visual line or label, tight to "
         "the text itself.\n"
+        # Both of these are failures seen on whole-screen captures, and both are
+        # also caught in code — a model that ignores the instruction still gets
+        # its container and frame-sized boxes dropped before they are painted.
+        "Never return one box around a group of lines, a panel, a window, or the whole "
+        "image: box each line on its own. A box must not cover most of the image.\n"
         "Skip icons, decorative symbols, and graphics that contain no text. "
         "If there is no text at all, return []."
     )
@@ -311,17 +531,20 @@ async def ground_and_translate(
     target_lang: str,
     *,
     glossary: dict[str, str] | None = None,
-    max_tokens: int = 2048,
-    max_dimension: int = LIVE_MAX_DIMENSION,
+    max_tokens: int = GROUNDING_MAX_TOKENS,
+    max_dimension: int | None = None,
     sharpen: bool = False,
     on_region=None,
 ) -> list[TextRegion]:
     """Locate and translate every text region in a frame, in one vision call.
 
     Defaults are the live overlay's: this runs once per changed frame, so the
-    frame is downscaled and JPEG-encoded to keep the round trip short. A caller
-    that only grounds once can pass ``QWEN_MAX_DIMENSION`` and ``sharpen=True``
-    to trade the latency back for fidelity.
+    frame is downscaled and JPEG-encoded to keep the round trip short. How far
+    it is downscaled depends on how big the capture is — see
+    :func:`live_max_dimension` — because a budget that suits a locked region
+    makes whole-screen text unreadable. A caller that only grounds once can
+    pass ``QWEN_MAX_DIMENSION`` and ``sharpen=True`` to trade the latency back
+    for fidelity.
 
     ``on_region`` opts into streaming: the response is consumed as it arrives
     and the callback is invoked with the regions decoded so far, so the first
@@ -332,6 +555,8 @@ async def ground_and_translate(
     if not processor.client:
         raise RuntimeError("Engine not initialized.")
 
+    if max_dimension is None:
+        max_dimension = live_max_dimension(image.size)
     prepared = preprocess_for_grounding(image, max_dimension, sharpen=sharpen)
     b64_image = processor.encode_image(
         prepared, fmt=LIVE_IMAGE_FORMAT, quality=LIVE_IMAGE_QUALITY
@@ -358,7 +583,7 @@ async def ground_and_translate(
 
     def finish(regions: list[TextRegion]) -> list[TextRegion]:
         """Deduplicate and map back to the caller's coordinate space."""
-        regions = suppress_overlapping_regions(regions)
+        regions = suppress_overlapping_regions(regions, frame_size=prepared.size)
         if prepared.size != image.size:
             regions = rescale_regions(regions, prepared.size, image.size)
         return regions

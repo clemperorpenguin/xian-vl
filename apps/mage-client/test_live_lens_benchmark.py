@@ -237,3 +237,134 @@ def test_a_locked_region_gates_more_reliably_than_a_whole_desktop(screenshot_pat
     assert min(p[1] for p in pairs) > DEFAULT_CHANGE_THRESHOLD, (
         "even on a locked region the gate missed a change between consecutive frames"
     )
+
+
+# ── per-region retention: can a box tell "same text" from "new text"? ─
+
+#: Region-sized crops, taken where a locked overlay's boxes fall: a line of
+#: text is wide and short.
+REGION_BOXES = [
+    (0.05, 0.06, 0.35, 0.09),
+    (0.30, 0.45, 0.62, 0.49),
+    (0.55, 0.80, 0.90, 0.84),
+    (0.10, 0.88, 0.48, 0.92),
+    (0.62, 0.20, 0.95, 0.24),
+    (0.05, 0.60, 0.40, 0.65),
+]
+
+#: Below this standard deviation a crop is flat background — no text, and
+#: nothing for the retention gate to decide. Including them measures the
+#: comparison against noise and says nothing about the question.
+REGION_CONTENT_STDEV = 20.0
+
+
+def _same_region_again(crop: Image.Image):
+    """A second capture of a region whose text has not changed.
+
+    Narrower than :func:`_recaptures`, and deliberately so. That models two
+    grabs of a whole desktop, where the compositor may hand back a buffer
+    shifted by a pixel. This models one fixed rectangle across two frames of a
+    running capture session milliseconds apart: the pixels are re-encoded and
+    levels may drift, but the rectangle does not move — and if it ever did,
+    every box would move together and the frame gate would fire anyway.
+    """
+    buffer = io.BytesIO()
+    crop.save(buffer, "JPEG", quality=85)
+    buffer.seek(0)
+    reencoded = Image.open(buffer).convert("RGB")
+    yield "re-encode", reencoded
+    yield "gamma drift", ImageEnhance.Brightness(crop).enhance(1.03)
+    yield "both", ImageEnhance.Brightness(reencoded).enhance(1.03)
+
+
+def _fingerprint(crop: Image.Image) -> Image.Image:
+    from mage.live_lens import REGION_COMPARE_SIZE
+
+    return crop.convert("L").resize((REGION_COMPARE_SIZE, REGION_COMPARE_SIZE))
+
+
+@pytest.fixture(scope="session")
+def region_crops(screenshot_paths) -> dict[tuple, list[Image.Image]]:
+    """Text-bearing crops from every frame, grouped by where they were taken."""
+    from PIL import ImageStat
+
+    grouped: dict[tuple, list[Image.Image]] = {}
+    for path in screenshot_paths:
+        with Image.open(path) as opened:
+            image = opened.convert("RGB")
+        for box in REGION_BOXES:
+            pixels = (
+                int(box[0] * image.width), int(box[1] * image.height),
+                int(box[2] * image.width), int(box[3] * image.height),
+            )
+            if pixels[2] - pixels[0] < 16 or pixels[3] - pixels[1] < 16:
+                continue
+            crop = image.crop(pixels)
+            if ImageStat.Stat(crop.convert("L")).stddev[0] > REGION_CONTENT_STDEV:
+                grouped.setdefault(box, []).append(crop)
+    if not grouped:
+        pytest.skip("corpus produced no text-bearing region crops")
+    return grouped
+
+
+def test_a_recaptured_region_keeps_its_translation(region_crops, record_property):
+    """The direction the retention exists for.
+
+    Every unchanged region wrongly judged changed is a translation thrown away
+    and re-read, which is the cost this whole mechanism is here to avoid.
+    """
+    from mage.live_lens import REGION_CHANGE_THRESHOLD, region_difference
+
+    noise = []
+    for crops in region_crops.values():
+        for crop in crops:
+            reference = _fingerprint(crop)
+            for _label, again in _same_region_again(crop):
+                noise.append(region_difference(_fingerprint(again), reference))
+
+    ordered = sorted(noise)
+    p99 = ordered[int(len(ordered) * 0.99) - 1]
+    retained = sum(1 for d in noise if d <= REGION_CHANGE_THRESHOLD) / len(noise)
+
+    record_property("samples", len(noise))
+    record_property("recapture_median", round(statistics.median(noise), 2))
+    record_property("recapture_p99", round(p99, 2))
+    record_property("recapture_max", round(max(noise), 2))
+    record_property("retained_fraction", round(retained, 3))
+    record_property("shipped_threshold", REGION_CHANGE_THRESHOLD)
+
+    assert retained > 0.95, (
+        f"only {retained:.1%} of unchanged regions kept their translation; "
+        f"the threshold of {REGION_CHANGE_THRESHOLD} is below the noise floor (p99 {p99:.2f})"
+    )
+
+
+def test_a_region_whose_text_changed_is_not_retained(region_crops, record_property):
+    """The direction that would paint the wrong words over live text.
+
+    Same box, different frame. A residue of pairs sits below the threshold and
+    always will: the corpus holds several captures of one session, so the same
+    box genuinely does hold the same chat panel or action bar in both — those
+    are unchanged regions, correctly retained, not failures. The assertion
+    bounds the residue rather than demanding perfect separation.
+    """
+    from mage.live_lens import REGION_CHANGE_THRESHOLD, region_difference
+
+    differences = []
+    for crops in region_crops.values():
+        prints = [_fingerprint(crop) for crop in crops]
+        for first, second in itertools.combinations(prints, 2):
+            differences.append(region_difference(first, second))
+
+    retained = sum(1 for d in differences if d <= REGION_CHANGE_THRESHOLD) / len(differences)
+
+    record_property("pairs", len(differences))
+    record_property("differing_median", round(statistics.median(differences), 2))
+    record_property("wrongly_retained_fraction", round(retained, 4))
+
+    assert statistics.median(differences) > REGION_CHANGE_THRESHOLD * 4, (
+        "different content should sit far above the threshold, not beside it"
+    )
+    assert retained < 0.02, (
+        f"{retained:.2%} of differing regions would keep a stale translation"
+    )

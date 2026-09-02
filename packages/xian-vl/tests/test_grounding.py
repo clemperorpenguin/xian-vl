@@ -436,3 +436,271 @@ def test_the_non_streaming_path_is_unchanged_without_a_callback():
 
     assert [r.translated for r in result] == ["only"]
     assert "stream" not in processor.client.chat.completions.create.call_args.kwargs
+
+
+# ── container and frame-sized boxes ──────────────────────────────────
+
+def test_a_panel_box_does_not_delete_the_lines_inside_it():
+    """The bug that emptied a whole-screen capture.
+
+    Asked for one box per line, the model returns the panel as well. Selecting
+    largest-first then kept the panel and dropped every line it covered, so the
+    overlay painted one opaque slab carrying a single translation where five
+    lines should have been.
+    """
+    from xian.grounding import suppress_overlapping_regions
+
+    panel = TextRegion((0, 0, 400, 300), "面板", "panel")
+    lines = [
+        TextRegion((10, 10 + row * 50, 380, 50 + row * 50), f"第{row}", f"line {row}")
+        for row in range(5)
+    ]
+
+    kept = suppress_overlapping_regions([panel, *lines])
+
+    assert [r.translated for r in kept] == [f"line {row}" for row in range(5)]
+
+
+def test_a_box_containing_only_one_other_is_still_the_survivor():
+    """One nested box is two attempts at the same line, not a container.
+
+    The larger of the pair is the better answer — it is the one likely to hold
+    the whole line rather than a fragment — so this case must stay as it was.
+    """
+    from xian.grounding import suppress_overlapping_regions
+
+    outer = TextRegion((10, 10, 200, 60), "外", "outer")
+    inner = TextRegion((20, 20, 80, 50), "内", "inner")
+
+    assert [r.translated for r in suppress_overlapping_regions([outer, inner])] == ["outer"]
+
+
+def test_a_box_covering_the_whole_frame_is_dropped():
+    """"World of Warcraft" over a screen filled with one flat colour.
+
+    A box this size is the model boxing the picture. The overlay fills every
+    box it is given, so painting this one hides the entire game behind a
+    rectangle — the single worst thing the overlay can do.
+    """
+    from xian.grounding import suppress_overlapping_regions
+
+    whole_frame = TextRegion((0, 0, 1000, 620), "魔獸世界", "World of Warcraft")
+    line = TextRegion((40, 500, 300, 530), "背包已滿", "Bag is full")
+
+    kept = suppress_overlapping_regions([whole_frame, line], frame_size=(1024, 640))
+
+    assert [r.translated for r in kept] == ["Bag is full"]
+
+
+def test_a_frame_sized_box_survives_when_it_is_the_only_one():
+    """A region drawn tightly around one line is legitimately almost all frame.
+
+    There is nothing else to show in that case, so the rule only fires where a
+    frame-sized box is demonstrably spurious: alongside smaller ones.
+    """
+    from xian.grounding import suppress_overlapping_regions
+
+    only = TextRegion((2, 2, 298, 58), "背包已滿", "Bag is full")
+
+    kept = suppress_overlapping_regions([only], frame_size=(300, 60))
+
+    assert [r.translated for r in kept] == ["Bag is full"]
+
+
+def test_frame_sized_suppression_needs_a_frame_to_measure_against():
+    """Without a frame size there is no such thing as "frame-sized".
+
+    The same pair is then an ordinary overlap, and the larger box wins as it
+    always did — which is why the one caller that knows the frame passes it.
+    """
+    from xian.grounding import suppress_overlapping_regions
+
+    big = TextRegion((0, 0, 1000, 620), "魔獸世界", "World of Warcraft")
+    line = TextRegion((40, 500, 300, 530), "背包已滿", "Bag is full")
+
+    assert [r.translated for r in suppress_overlapping_regions([big, line])] == [
+        "World of Warcraft"
+    ]
+    assert [r.translated for r in suppress_overlapping_regions(
+        [big, line], frame_size=(1024, 640)
+    )] == ["Bag is full"]
+
+
+# ── frame-size-aware downscaling ─────────────────────────────────────
+
+def test_a_locked_region_keeps_the_measured_live_budget():
+    from shared_types.constants import LIVE_MAX_DIMENSION
+    from xian.grounding import live_max_dimension
+
+    assert live_max_dimension((800, 600)) == LIVE_MAX_DIMENSION
+    assert live_max_dimension((291, 442)) == LIVE_MAX_DIMENSION
+
+
+def test_a_whole_screen_capture_gets_a_larger_budget():
+    """1024 across 2880 renders a measured 23px glyph as 8.2px.
+
+    Too small for a ten-stroke character to stay distinct, and the failure is
+    silent — boxes come back in plausible places carrying useless text — so the
+    budget has to grow with the capture instead.
+    """
+    from xian.grounding import live_max_dimension
+
+    assert live_max_dimension((2880, 1800)) > 1024
+
+
+def test_the_live_budget_never_exceeds_the_one_shot_path():
+    from shared_types.constants import QWEN_MAX_DIMENSION
+    from xian.grounding import live_max_dimension
+
+    assert live_max_dimension((7680, 4320)) == QWEN_MAX_DIMENSION
+
+
+def test_grounding_sizes_the_frame_from_the_capture_it_was_given():
+    """Both sizes go through one call, so the wiring is what is under test."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from PIL import Image
+
+    from xian.grounding import ground_and_translate, live_max_dimension
+
+    def prepared_width(source_size):
+        processor = MagicMock()
+        choice = MagicMock()
+        choice.message.content = "[]"
+        response = MagicMock()
+        response.choices = [choice]
+        processor.client.chat.completions.create = AsyncMock(return_value=response)
+        processor.get_vision_model_name.return_value = "test-vlm"
+        sizes = []
+        processor.encode_image.side_effect = lambda img, **kw: sizes.append(img.size) or "B64"
+
+        asyncio.run(ground_and_translate(
+            processor, Image.new("RGB", source_size), "Chinese", "English"
+        ))
+        return sizes[0][0]
+
+    assert prepared_width((800, 600)) == 800  # never upscaled
+    assert prepared_width((2880, 1800)) == live_max_dimension((2880, 1800))
+
+
+# ── truncated responses ──────────────────────────────────────────────
+
+def test_a_truncated_array_keeps_the_regions_it_did_contain():
+    """A whole screen can hold more regions than max_tokens has room for.
+
+    The array pattern cannot match an unterminated array, so a response cut off
+    mid-region used to discard every region before it too, and the screen came
+    back blank instead of partly translated.
+    """
+    raw = (
+        '[{"box":[0,0,100,20],"original":"一","translated":"one"},'
+        '{"box":[0,30,100,50],"original":"二","translated":"two"},'
+        '{"box":[0,60,100,'
+    )
+
+    regions = parse_regions(raw, 1000, 1000)
+
+    assert [r.translated for r in regions] == ["one", "two"]
+
+
+def test_a_complete_array_is_still_parsed_whole():
+    raw = '[{"box":[0,0,100,20],"original":"一","translated":"one"}]'
+
+    assert [r.translated for r in parse_regions(raw, 1000, 1000)] == ["one"]
+
+
+def test_grounding_asks_for_enough_tokens_to_describe_a_screen():
+    from xian.grounding import GROUNDING_MAX_TOKENS
+
+    assert GROUNDING_MAX_TOKENS >= 4096
+
+
+def test_the_prompt_rules_out_the_boxes_the_code_has_to_drop():
+    """Asking is cheaper than filtering, and the filter still runs regardless."""
+    from xian.grounding import build_grounding_prompt
+
+    prompt = build_grounding_prompt("Chinese", "English").lower()
+
+    assert "whole image" in prompt
+    assert "box each line on its own" in prompt
+
+
+def test_a_lone_frame_sized_box_is_dropped_on_a_whole_screen_capture():
+    """"This entire screen is one line of text" is never true.
+
+    Painting nothing costs one tick; painting the box hides the game behind a
+    single flat rectangle, which is what was reported.
+    """
+    from xian.grounding import suppress_overlapping_regions
+
+    whole = TextRegion((0, 0, 1700, 1050), "魔獸世界", "World of Warcraft")
+
+    assert suppress_overlapping_regions([whole], frame_size=(1728, 1080)) == []
+
+
+# ── schema variation ─────────────────────────────────────────────────
+
+def test_the_qwen_grounding_key_is_accepted():
+    """Qwen-VL is trained to emit ``bbox_2d``, whatever the prompt asks for."""
+    raw = '[{"bbox_2d":[0,0,500,100],"text":"文","translation":"text"}]'
+
+    regions = parse_regions(raw, 1000, 1000)
+
+    assert len(regions) == 1
+    assert regions[0].box == (0, 0, 500, 100)
+    assert regions[0].original == "文"
+    assert regions[0].translated == "text"
+
+
+def test_a_box_nested_one_level_deep_is_unwrapped():
+    """The same convention nests coordinates when it expects several boxes."""
+    raw = '[{"box":[[326,11,656,207]],"original":"魔獸世界","translated":"World of Warcraft"}]'
+
+    regions = parse_regions(raw, 1000, 1000)
+
+    assert [r.box for r in regions] == [(326, 11, 656, 207)]
+
+
+def test_objects_with_no_usable_box_are_reported_not_swallowed(caplog):
+    """A model answering off-schema looks exactly like an empty screen.
+
+    Zero regions from a non-empty response leaves the overlay blank while the
+    loop keeps paying for calls, with nothing anywhere saying why.
+    """
+    import logging
+
+    raw = '[{"label":"魔獸世界"},{"label":"時光"}]'
+
+    with caplog.at_level(logging.WARNING):
+        assert parse_regions(raw, 1000, 1000) == []
+
+    assert any("none held a usable box" in r.message for r in caplog.records)
+
+
+def test_an_empty_array_is_not_reported_as_a_schema_failure(caplog):
+    """"No text on this screen" is a legitimate answer."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        assert parse_regions("[]", 1000, 1000) == []
+
+    assert not caplog.records
+
+
+def test_an_undecodable_response_is_reported(caplog):
+    """Small models emit broken JSON, and a blank overlay is the only sign."""
+    import logging
+
+    raw = '```json\n[\n{"box":[[326, 11, 656, 207], "WORLD OF WARCRAFT"},\n'
+
+    with caplog.at_level(logging.WARNING):
+        assert parse_regions(raw, 1000, 1000) == []
+
+    assert any("could not be decoded" in r.message for r in caplog.records)
+
+
+def test_an_empty_response_is_not_reported():
+    """A model that returned nothing at all is the caller's problem, not a
+    decode failure, and the timeout path already covers it."""
+    assert parse_regions("", 1000, 1000) == []

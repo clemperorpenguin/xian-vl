@@ -282,3 +282,106 @@ async def test_streaming_paints_the_first_line_well_before_the_last(
     record_property("regions", len(regions))
 
     assert first_region_at[0] < total_ms, "the first region should land before the last"
+
+
+# ── whole-screen capture ─────────────────────────────────────────────
+
+#: Frames at or above this many megapixels stand in for a whole-screen capture.
+SCREEN_MEGAPIXELS = 4.0
+
+
+@pytest.fixture(scope="session")
+def screen_frames() -> list[Path]:
+    """Corpus frames big enough to stand in for a whole-screen capture.
+
+    A different problem from a locked region, and the one that broke in
+    practice: the text is a far smaller fraction of the frame, so the downscale
+    that a region tolerates renders whole-screen glyphs unreadable.
+    """
+    frames = []
+    for path in corpus_paths():
+        with Image.open(path) as image:
+            if image.width * image.height / 1e6 >= SCREEN_MEGAPIXELS:
+                frames.append(path)
+    if not frames:
+        pytest.skip("corpus has no screen-sized frames")
+    return frames
+
+
+async def test_no_region_ever_covers_the_whole_screen(
+    vision_model, screen_frames, record_property
+):
+    """The reported failure: a screen filled with one flat colour.
+
+    The overlay fills every box it is handed, so a box the size of the frame
+    hides the entire game behind a single rectangle carrying one line of text.
+    Whatever the model returns, nothing that large may reach the caller.
+    """
+    from xian.grounding import MAX_FRAME_COVER
+
+    worst = 0.0
+    async with open_processor(vision_model) as processor:
+        for path in screen_frames[:3]:
+            with Image.open(path) as opened:
+                frame = opened.convert("RGB")
+            regions = await ground_and_translate(processor, frame, "Chinese", "English")
+            frame_area = frame.width * frame.height
+            for region in regions:
+                worst = max(worst, region.width * region.height / frame_area)
+
+    record_property("largest_region_frame_cover", round(worst, 3))
+    assert worst < MAX_FRAME_COVER, (
+        f"a region covered {worst:.0%} of the frame; the overlay would paint over the game"
+    )
+
+
+async def test_a_whole_screen_reads_better_than_at_the_locked_region_budget(
+    vision_model, screen_frames, record_property
+):
+    """Why :data:`LIVE_MIN_SCALE` exists, measured rather than asserted.
+
+    1024 across a 2880-wide capture leaves a measured 23px UI glyph at 8.2px.
+    The request still succeeds and boxes still come back, so the only way to
+    see the damage is to count what survives at each budget.
+
+    Totalled over several frames rather than compared per frame: region counts
+    from a generative model move around, and the sum is the stable statistic.
+    """
+    from shared_types.constants import LIVE_MAX_DIMENSION
+    from xian.grounding import live_max_dimension
+
+    flat_total = adaptive_total = 0
+    flat_ms: list[float] = []
+    adaptive_ms: list[float] = []
+
+    async with open_processor(vision_model) as processor:
+        for path in screen_frames[:3]:
+            with Image.open(path) as opened:
+                frame = opened.convert("RGB")
+
+            started = time.perf_counter()
+            flat = await ground_and_translate(
+                processor, frame, "Chinese", "English", max_dimension=LIVE_MAX_DIMENSION
+            )
+            flat_ms.append((time.perf_counter() - started) * 1000)
+
+            started = time.perf_counter()
+            adaptive = await ground_and_translate(processor, frame, "Chinese", "English")
+            adaptive_ms.append((time.perf_counter() - started) * 1000)
+
+            flat_total += sum(1 for r in flat if r.translated.strip() != r.original.strip())
+            adaptive_total += sum(
+                1 for r in adaptive if r.translated.strip() != r.original.strip()
+            )
+
+    record_property("budget_flat_px", LIVE_MAX_DIMENSION)
+    record_property("budget_adaptive_px", live_max_dimension((2880, 1800)))
+    record_property("translated_regions_flat", flat_total)
+    record_property("translated_regions_adaptive", adaptive_total)
+    record_property("ground_ms_flat_median", round(statistics.median(flat_ms), 1))
+    record_property("ground_ms_adaptive_median", round(statistics.median(adaptive_ms), 1))
+
+    assert adaptive_total >= flat_total, (
+        f"the larger budget found fewer translated regions ({adaptive_total}) than "
+        f"the flat {LIVE_MAX_DIMENSION}px one ({flat_total}) — LIVE_MIN_SCALE is not earning its latency"
+    )

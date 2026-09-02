@@ -145,3 +145,48 @@ def test_the_live_worker_falls_back_when_the_stream_is_empty(monkeypatch):
 
     assert LiveLensWorker._grab(worker) is None
     assert captured["rect"] == worker.rect, "the screenshot path should still be tried"
+
+
+# ── what was captured, not what was asked for ────────────────────────
+
+def test_the_logical_mapping_round_trips_an_unclipped_region():
+    from mage.capture.stream import frame_region_to_logical, map_region_to_frame
+
+    screen = QRect(0, 0, 1920, 1080)
+    asked = QRect(100, 200, 400, 300)
+
+    mapped = map_region_to_frame(asked, screen, (3840, 2160))
+
+    assert frame_region_to_logical(mapped, screen, (3840, 2160)) == asked
+
+
+def test_a_clipped_region_reports_the_area_actually_served():
+    """The bug this exists for: a selection reaching past the screen edge.
+
+    The frame comes back narrower than the request, so scaling boxes against
+    the requested width places every one of them wrongly.
+    """
+    from mage.capture.stream import frame_region_to_logical, map_region_to_frame
+
+    screen = QRect(0, 0, 1920, 1080)
+    asked = QRect(1800, 1000, 400, 300)
+
+    mapped = map_region_to_frame(asked, screen, (1920, 1080))
+    served = frame_region_to_logical(mapped, screen, (1920, 1080))
+
+    assert served == QRect(1800, 1000, 120, 80)
+    assert served.width() < asked.width()
+
+
+def test_the_worker_scales_against_the_served_region(monkeypatch):
+    """A clipped grab must not be measured against the requested width."""
+    from PIL import Image
+
+    from mage.live_lens import LiveLensWorker
+
+    worker = LiveLensWorker.__new__(LiveLensWorker)
+    worker.rect = QRect(1800, 1000, 400, 300)
+    worker._served_rect = QRect(1800, 1000, 120, 80)
+
+    # 240 captured pixels across 120 logical ones is a 2× HiDPI screen.
+    assert LiveLensWorker._capture_scale(worker, Image.new("RGB", (240, 160))) == 2.0

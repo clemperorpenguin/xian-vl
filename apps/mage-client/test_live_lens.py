@@ -21,10 +21,12 @@
 These are the pure decision functions — no Qt event loop, no screen capture.
 """
 
+import io
 import os
 import sys
 
 import imagehash
+
 from PIL import Image, ImageDraw
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
@@ -193,7 +195,13 @@ class _Publisher(LiveLensWorker):
         self._last_signature = ()
         self._warned_untranslated = False
         self._session_recorder = None
+        self._fill_frame = None
+        self._fill_cache = {}
+        self._region_hash_cache = {}
+        self._retained = []
+        self._carry = []
         self.rect = None
+        self._served_rect = None
         self.errors = []
         self.emitted = []
 
@@ -267,3 +275,158 @@ def test_publishing_records_the_boxes_the_change_gate_must_mask():
     worker._publish([_region("前往", "Go")], frame)
 
     assert worker._painted_boxes == [(10, 10, 100, 40)]
+
+
+def test_background_is_sampled_once_per_box_per_frame():
+    """Streaming republishes the whole list on every batch.
+
+    Each batch re-sampled every box already published, so the sampling cost
+    grew with the square of the region count — worst exactly where there are
+    most regions, which is a whole-screen capture.
+    """
+    import mage.live_lens as live_lens
+
+    worker = _Publisher()
+    frame = Image.new("RGB", (400, 300), (30, 30, 30))
+
+    calls = []
+    original = live_lens.sample_background
+
+    def counting(image, box):
+        calls.append(box)
+        return original(image, box)
+
+    live_lens.sample_background = counting
+    try:
+        from xian.grounding import TextRegion
+
+        first = _region("一", "one")
+        second = TextRegion((10, 60, 100, 90), "二", "two")
+        worker._publish([first], frame)
+        worker._publish([first, second], frame)
+    finally:
+        live_lens.sample_background = original
+
+    assert calls == [first.box, second.box]
+
+
+def test_a_new_frame_resamples_its_own_backgrounds():
+    """The cache is per frame; the next capture has different pixels."""
+    worker = _Publisher()
+    region = _region("一", "one")
+
+    worker._publish([region], Image.new("RGB", (400, 300), (10, 10, 10)))
+    dark = worker.emitted[-1][0][0].fill
+
+    worker._last_signature = ()
+    worker._publish([region], Image.new("RGB", (400, 300), (240, 240, 240)))
+    light = worker.emitted[-1][0][0].fill
+
+    assert dark != light
+
+
+# ── region retention ─────────────────────────────────────────────────
+
+def _text_frame(colour=(30, 30, 30), mark=None):
+    """A frame with enough structure that a crop of it is not flat."""
+    frame = Image.new("RGB", (400, 300), colour)
+    draw = ImageDraw.Draw(frame)
+    draw.rectangle((10, 10, 100, 40), fill=(200, 200, 200))
+    draw.rectangle((20, 18, 40, 32), fill=(20, 20, 20))
+    if mark:
+        draw.rectangle(mark, fill=(255, 0, 0))
+    return frame
+
+
+def test_an_unchanged_region_keeps_its_translation_without_inference():
+    """The tooltip case: read once, then kept while its pixels stay put."""
+    worker = _Publisher()
+    frame = _text_frame()
+
+    worker._publish([_region("前往", "Go")], frame)
+
+    # A second capture of the same screen, re-encoded as the capture path does.
+    buffer = io.BytesIO()
+    frame.save(buffer, "JPEG", quality=85)
+    buffer.seek(0)
+    again = Image.open(buffer).convert("RGB")
+
+    survivors = worker._surviving_regions(again)
+
+    assert [r.translated for r in survivors] == ["Go"]
+
+
+def test_a_region_whose_text_changed_is_not_retained():
+    worker = _Publisher()
+    worker._publish([_region("前往", "Go")], _text_frame())
+
+    # The same box now holds something else entirely.
+    replaced = _text_frame(mark=(10, 10, 100, 40))
+
+    assert worker._surviving_regions(replaced) == []
+
+
+def test_a_failed_call_keeps_the_regions_that_are_still_valid():
+    """Blanking the overlay because one call timed out throws away work that
+    is demonstrably still correct — the pixels have not moved."""
+    worker = _Publisher()
+    frame = _text_frame()
+    worker._publish([_region("前往", "Go")], frame)
+
+    worker._carry = worker._surviving_regions(frame)
+    worker._remember(worker._carry, frame)
+
+    assert [r.translated for r in worker._carry] == ["Go"]
+    assert len(worker._retained) == 1
+
+
+def test_carried_regions_are_painted_alongside_fresh_ones():
+    from xian.grounding import TextRegion
+
+    worker = _Publisher()
+    frame = _text_frame()
+    worker._publish([_region("前往", "Go")], frame)
+    worker._carry = worker._surviving_regions(frame)
+
+    worker._last_signature = ()
+    worker._publish([TextRegion((200, 200, 300, 240), "確定", "Confirm")], frame)
+
+    painted = {r.translated for r in worker.emitted[-1][0]}
+    assert painted == {"Confirm", "Go"}
+
+
+def test_a_carried_region_never_paints_over_a_fresh_one():
+    """The overlay fills before it draws, so two boxes over the same pixels
+    means one translation is painted out. A fresh reading wins.
+
+    The fresh box here overlaps the carried one without being the same line —
+    a box that *is* the same line takes the retention path below instead.
+    """
+    from xian.grounding import TextRegion
+
+    worker = _Publisher()
+    frame = _text_frame()
+    worker._publish([_region("前往", "Go")], frame)
+    worker._carry = worker._surviving_regions(frame)
+    assert worker._carry, "the carried region should have survived"
+
+    worker._last_signature = ()
+    worker._publish([TextRegion((60, 10, 160, 40), "確定", "Confirm")], frame)
+
+    assert [r.translated for r in worker.emitted[-1][0]] == ["Confirm"]
+
+
+def test_unchanged_text_keeps_the_wording_it_already_had():
+    """The same pixels re-read come back worded differently each time, and the
+    overlay shimmers. Identical text should not change its translation."""
+    from xian.grounding import TextRegion
+
+    worker = _Publisher()
+    frame = _text_frame()
+    worker._publish([_region("前往", "Go")], frame)
+    worker._carry = worker._surviving_regions(frame)
+
+    worker._last_signature = ()
+    worker._publish([TextRegion((11, 11, 99, 39), "前往", "Head over")], frame)
+
+    assert [r.translated for r in worker.emitted[-1][0]] == ["Go"]
