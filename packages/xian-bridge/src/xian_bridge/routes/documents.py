@@ -66,9 +66,12 @@ def _safe_filename(name: Optional[str], fallback: str) -> str:
     ``os.path.join`` discards its prefix entirely when handed an absolute path,
     and honours ``..`` — so a multipart filename is never usable as-is.
     """
-    base = os.path.basename((name or "").replace("\\", "/"))
-    cleaned = re.sub(r"[^\w.\-]", "_", base).strip(".")
-    return cleaned or fallback
+    for candidate in (name, fallback):
+        base = os.path.basename((candidate or "").replace("\\", "/"))
+        cleaned = re.sub(r"[^\w.\-]", "_", base).strip(".")
+        if cleaned:
+            return cleaned
+    return "document"
 
 
 class DocumentRequest(BaseModel):
@@ -313,7 +316,12 @@ async def start_document_job(
     # the job's own directory.
     job_id = str(uuid.uuid4())
     tmpdir = tempfile.mkdtemp(prefix="masha_doc_")
-    file_path = os.path.join(tmpdir, _safe_filename(file.filename, f"document.{format}"))
+    # The fallback carries the client's ``format`` field, so it is cleaned too.
+    file_path = os.path.realpath(
+        os.path.join(tmpdir, _safe_filename(file.filename, f"document.{format}"))
+    )
+    if not file_path.startswith(os.path.realpath(tmpdir) + os.sep):
+        raise HTTPException(status_code=400, detail="Invalid filename")
     content = await file.read()
     with open(file_path, "wb") as f:
         f.write(content)

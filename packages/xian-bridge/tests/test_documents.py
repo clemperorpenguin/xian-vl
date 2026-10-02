@@ -76,3 +76,11 @@ def test_pause_resume_cancel():
     resp = client.post(f"/documents/{job_id}/cancel")
     assert resp.status_code == 200
     assert resp.json()["status"] == "cancelled"
+
+
+def test_upload_name_cannot_escape_job_dir():
+    from xian_bridge.routes.documents import _safe_filename
+    assert _safe_filename("../../etc/passwd", "x") == "passwd"
+    # A name that cleans to nothing falls back, and the fallback is cleaned too.
+    assert _safe_filename("...", "document./../../tmp/evil") == "evil"
+    assert _safe_filename("..", "..") == "document"
