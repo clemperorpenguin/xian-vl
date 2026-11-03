@@ -26,11 +26,13 @@ import pytest
 from xian.translate import (
     BATCH_SEPARATOR,
     MAX_TERMS_PER_REQUEST,
+    NPU_TRANSLATION_MODEL,
     TRANSLATION_MODEL,
     LineTranslator,
     TranslationModelUnavailable,
     build_translation_prompt,
     relevant_terms,
+    translation_pull_body,
 )
 
 
@@ -149,6 +151,36 @@ def test_concurrency_is_bounded():
     asyncio.run(translator.translate_lines([str(index) for index in range(20)], "zh", "en"))
 
     assert completions.peak_concurrent <= 4
+
+
+def test_the_npu_model_is_sent_one_line_at_a_time():
+    """The NPU serves requests in turn; a fan-out only queues them, slower."""
+    processor, completions = fake_processor(installed=[NPU_TRANSLATION_MODEL])
+    translator = LineTranslator(processor=processor, model=NPU_TRANSLATION_MODEL, concurrency=8)
+
+    result = asyncio.run(translator.translate_lines(["a", "b", "c"], "zh", "en"))
+
+    assert result == ["[a]", "[b]", "[c]"]
+    assert completions.peak_concurrent == 1
+    assert {request["model"] for request in completions.requests} == {NPU_TRANSLATION_MODEL}
+
+
+def test_the_npu_model_is_registered_with_its_flm_checkpoint():
+    """It is not in Lemonade's catalogue, so a pull by name finds nothing."""
+    body = translation_pull_body(NPU_TRANSLATION_MODEL)
+
+    assert body["model_name"] == NPU_TRANSLATION_MODEL
+    assert body["recipe"] == "flm"
+    assert body["checkpoints"] == {"main": "hy-mt2-flash:1.8b"}
+    assert translation_pull_body(TRANSLATION_MODEL) is None
+
+
+def test_a_missing_npu_model_says_how_to_register_it():
+    processor, _ = fake_processor(installed=["Some-Chat-Model"])
+    translator = LineTranslator(processor=processor, model=NPU_TRANSLATION_MODEL)
+
+    with pytest.raises(TranslationModelUnavailable, match="--recipe flm"):
+        asyncio.run(translator.translate_lines(["a"], "zh", "en"))
 
 
 def test_nothing_to_translate_makes_no_requests():

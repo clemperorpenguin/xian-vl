@@ -88,3 +88,43 @@ def test_an_installed_model_clears_the_missing_note():
     _health(app, INSTALLED + [{"id": "Xian-Halo", "downloaded": True}])
     assert app._missing_model is None
     assert app.pulls == []
+
+
+# ── the translation model chosen in Settings ─────────────────────────
+
+def _settings_app(translation_model, installed):
+    from mage.settings_keys import KEY_TRANSLATION_MODEL
+
+    app = SimpleNamespace(
+        settings=_Settings({KEY_TRANSLATION_MODEL: translation_model}),
+        processor=SimpleNamespace(router=SimpleNamespace(downloaded_model_ids=list(installed))),
+        pulls=[],
+    )
+    app._pull_model = lambda name, body=None: app.pulls.append((name, body))
+    return app
+
+
+def test_choosing_the_npu_model_registers_and_downloads_it():
+    """It is not in Lemonade's catalogue: a pull by name alone finds nothing."""
+    from xian.translate import NPU_TRANSLATION_MODEL
+
+    app = _settings_app(NPU_TRANSLATION_MODEL, ["Hy-MT2-1.8B-GGUF-Q4_K_M"])
+    XianApp._install_translation_model_if_missing(app)
+
+    [(name, body)] = app.pulls
+    assert name == NPU_TRANSLATION_MODEL
+    assert body["recipe"] == "flm"
+
+
+def test_an_installed_translation_model_is_left_alone():
+    app = _settings_app("Hy-MT2-1.8B-GGUF-Q4_K_M", ["Hy-MT2-1.8B-GGUF-Q4_K_M"])
+    XianApp._install_translation_model_if_missing(app)
+    assert app.pulls == []
+
+
+def test_an_unasked_server_is_not_taken_to_be_empty():
+    from xian.translate import NPU_TRANSLATION_MODEL
+
+    app = _settings_app(NPU_TRANSLATION_MODEL, [])
+    XianApp._install_translation_model_if_missing(app)
+    assert app.pulls == []

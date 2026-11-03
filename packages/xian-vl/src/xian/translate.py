@@ -57,10 +57,13 @@ __all__ = [
     "LineTranslator",
     "TRANSLATION_MODEL",
     "TRANSLATION_MODELS",
+    "NPU_TRANSLATION_MODEL",
     "TranslationModelUnavailable",
     "build_translation_prompt",
+    "install_hint",
     "is_supported_translation_model",
     "relevant_terms",
+    "translation_pull_body",
 ]
 
 #: The line translator, pinned to Hy-MT2.  A specific model rather than a
@@ -70,17 +73,60 @@ __all__ = [
 #: produces quality problems that read as OCR problems.
 TRANSLATION_MODEL = "Hy-MT2-1.8B-GGUF-Q4_K_M"
 
-#: The two sizes, fastest first.  Every text translation in the app uses one of
-#: these; nothing else is offered, because the pipeline is built around them.
+#: The 1.8B again, built for the AMD NPU by FastFlowLM.  Slower per line than
+#: the GPU build, but it leaves the GPU to the game, which is the point: on an
+#: APU the game and the translator otherwise share one GPU.  Not in Lemonade's
+#: catalogue, so it is registered as a user model; see
+#: :func:`translation_pull_body`.
+NPU_TRANSLATION_MODEL = "user.Hy-MT2-Flash-1.8B"
+NPU_TRANSLATION_CHECKPOINT = "hy-mt2-flash:1.8b"
+
+#: The models on offer, GPU sizes fastest first, then the NPU build.  Every
+#: text translation in the app uses one of these; nothing else is offered,
+#: because the pipeline is built around them.
 TRANSLATION_MODELS = (
     "Hy-MT2-1.8B-GGUF-Q4_K_M",
     "Hy-MT2-7B-GGUF-Q4_K_M",
+    NPU_TRANSLATION_MODEL,
 )
+
+#: Models served one request at a time.  The NPU runs requests in turn, so the
+#: per-line fan-out only queues them, and the queueing costs: eight lines took
+#: 4.6 s sent together against 2.5 s sent one after another.  The batched path
+#: is no help either — this build copies the delimiter instruction into its
+#: first line.
+SERIAL_TRANSLATION_MODELS = frozenset({NPU_TRANSLATION_MODEL})
 
 
 def is_supported_translation_model(model_id: str | None) -> bool:
     """True for a model this pipeline is willing to translate with."""
     return model_id in TRANSLATION_MODELS
+
+
+def translation_pull_body(model_id: str) -> dict | None:
+    """The ``POST /v1/pull`` body that registers a model the server lacks.
+
+    ``None`` for the catalogue models, which the server pulls by name.
+    """
+    if model_id != NPU_TRANSLATION_MODEL:
+        return None
+    return {
+        "model_name": NPU_TRANSLATION_MODEL,
+        "recipe": "flm",
+        "checkpoints": {"main": NPU_TRANSLATION_CHECKPOINT},
+        "labels": [],
+        "recipe_options": {},
+    }
+
+
+def install_hint(model_id: str) -> str:
+    """The command that installs a translation model by hand."""
+    if model_id == NPU_TRANSLATION_MODEL:
+        return (
+            f"lemonade pull {NPU_TRANSLATION_MODEL} --recipe flm "
+            f"--checkpoint main {NPU_TRANSLATION_CHECKPOINT}"
+        )
+    return f"lemonade pull {model_id}"
 
 #: In-flight requests.  Local serving may or may not parallelise; see
 #: ``batched`` below for what happens when it does not.
@@ -233,7 +279,7 @@ class LineTranslator:
 
         raise TranslationModelUnavailable(
             f"{self.model} is not installed on the server. "
-            f"Install it from Settings, or run: lemonade-server pull {self.model}"
+            f"Install it from Settings, or run: {install_hint(self.model)}"
         )
 
     # ── requests ─────────────────────────────────────────────────────
@@ -313,7 +359,8 @@ class LineTranslator:
             self.resolve_model()
 
             if self._semaphore is None:
-                self._semaphore = asyncio.Semaphore(self.concurrency)
+                serial = self.resolve_model() in SERIAL_TRANSLATION_MODELS
+                self._semaphore = asyncio.Semaphore(1 if serial else self.concurrency)
 
             missing = [texts[index] for index in pending]
             if self.batched:

@@ -1874,6 +1874,24 @@ class XianApp(QWidget):
         else:
             logger.warning("Model pull failed: %s", message)
 
+    def _install_translation_model_if_missing(self):
+        """Download the chosen translation model when the server lacks it.
+
+        Choosing it in Settings is asking for it.  The NPU build is not in
+        Lemonade's catalogue, so it goes up with its registration body.
+        """
+        from mage.translation import translation_model_for
+        from xian.translate import translation_pull_body
+
+        model = translation_model_for(self.settings)
+        installed = self.processor.router.downloaded_model_ids
+        # An empty list means the server has not been asked yet, not that
+        # nothing is installed.
+        if not installed or model in installed:
+            return
+        logger.info("Translation model '%s' not installed, pulling...", model)
+        self._pull_model(model, body=translation_pull_body(model))
+
     # Settings
     def _open_settings(self):
         dlg = SettingsDialog(self.settings, self._available_models, app=self)
@@ -1884,6 +1902,9 @@ class XianApp(QWidget):
         dlg.layout_edit_requested.connect(_handle_layout_edit)
         
         if dlg.exec():
+            # Before the router is rebuilt below: the new one knows no models
+            # until the next health check.
+            self._install_translation_model_if_missing()
             # Apply changed settings to processor
             self.processor.config.api_url = normalized_api_url_from_settings(self.settings)
             self.processor.config.model_name = self.settings.value(KEY_API_MODEL, constants.DEFAULT_MODEL)

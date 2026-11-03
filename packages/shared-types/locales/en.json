@@ -880,8 +880,8 @@
     "context": "Label for choosing which translation model size is used for all text translation"
   },
   "settings.tooltip.translation_model": {
-    "value": "All text translation uses Hy-MT2. The smaller model keeps up with a fast-moving screen; the larger one reads better on long or difficult lines.",
-    "context": "Tooltip explaining the choice between the two Hy-MT2 translation model sizes"
+    "value": "All text translation uses Hy-MT2. The smaller model keeps up with a fast-moving screen; the larger one reads better on long or difficult lines. The NPU option runs the small model on the AMD NPU, which is slower per line but leaves the graphics card to the game.",
+    "context": "Tooltip explaining the choice between the Hy-MT2 translation models: two sizes on the graphics card, and one on the AMD NPU (neural processing unit). Keep 'NPU' as is."
   },
   "settings.option.translation_model.Hy-MT2-1.8B-GGUF-Q4_K_M": {
     "value": "Fast (1.8B, recommended)",
@@ -890,6 +890,10 @@
   "settings.option.translation_model.Hy-MT2-7B-GGUF-Q4_K_M": {
     "value": "Accurate (7B)",
     "context": "Dropdown option: the larger, more accurate translation model"
+  },
+  "settings.option.translation_model.user.Hy-MT2-Flash-1.8B": {
+    "value": "NPU (1.8B, leaves the GPU to the game)",
+    "context": "Dropdown option: the small translation model running on the AMD NPU (neural processing unit) instead of the graphics card, so games run faster. Keep 'NPU' and 'GPU' as is."
   },
   "newui.orb.button.translate_once": {
     "value": "Translate once",
