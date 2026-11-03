@@ -3,7 +3,7 @@ name = "xian-ecosystem"
 version = "2.0.0"
 description = "Hub-and-Spoke AI Translation Ecosystem — powered by Lemonade"
 readme = "README.md"
-requires-python = ">=3.10, <3.14"
+requires-python = ">=3.11, <3.14"
 license = {text = "GPL-3.0-or-later"}
 
 [tool.uv.workspace]
@@ -35,7 +35,7 @@ markers = [
 python_files = ["test_*.py"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 120
 extend-exclude = ["lemonade", "familiar", "*.ipynb"]
 

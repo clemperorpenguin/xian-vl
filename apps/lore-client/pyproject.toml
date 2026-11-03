@@ -2,7 +2,7 @@
 name = "lore-client"
 version = "0.1.0"
 description = "LORE — Interactive CLI tool for researching Chinese entities and compiling localized English Markdown wiki"
-requires-python = ">=3.10, <3.14"
+requires-python = ">=3.11, <3.14"
 license = {text = "GPL-3.0-or-later"}
 dependencies = [
     "typer>=0.12",

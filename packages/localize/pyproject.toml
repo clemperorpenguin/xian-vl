@@ -2,7 +2,7 @@
 name = "xuan"
 version = "1.0.0"
 description = "XUAN - Xian's Universal Automated Native-linguist"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "pyqt6>=6.0",
 ]

@@ -2,7 +2,7 @@
 name = "shared-types"
 version = "2.0.0"
 description = "Canonical data models and enums for the Xian ecosystem"
-requires-python = ">=3.10, <3.14"
+requires-python = ">=3.11, <3.14"
 license = {text = "GPL-3.0-or-later"}
 dependencies = [
     "pydantic>=2.0",
