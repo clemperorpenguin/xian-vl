@@ -297,6 +297,6 @@ async def test_prewarm_never_loads_a_collection_that_is_not_downloaded(monkeypat
     client.__aexit__ = AsyncMock(return_value=False)
     monkeypatch.setattr("xian.pipeline.LemonadeClient", lambda **kwargs: client)
 
-    await processor.prewarm_model()
+    assert await processor.prewarm_model() is False
 
     client.load_model.assert_not_awaited()

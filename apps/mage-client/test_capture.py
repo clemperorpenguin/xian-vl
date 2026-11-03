@@ -254,3 +254,39 @@ def test_the_region_image_path_still_prefers_grim():
 
 def test_the_region_image_path_rejects_an_empty_rect():
     assert ScreenCapture.capture_region_image(QRect()) == (None, False)
+
+
+def _scaled_desktop_png(logical: QRect, scale: float, mark: QRect) -> bytes:
+    """A desktop screenshot in device pixels, as Spectacle returns one on a
+    scaled display, with ``mark`` (logical coordinates) painted green."""
+    from PyQt6.QtGui import QColor
+
+    image = QImage(round(logical.width() * scale), round(logical.height() * scale), QImage.Format.Format_RGB32)
+    image.fill(QColor(200, 30, 30))
+    for y in range(round(mark.top() * scale), round((mark.bottom() + 1) * scale)):
+        for x in range(round(mark.left() * scale), round((mark.right() + 1) * scale)):
+            image.setPixelColor(x, y, QColor(30, 200, 30))
+    buffer = QBuffer()
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    image.save(buffer, "PNG")
+    return bytes(buffer.buffer())
+
+
+def test_a_dialogue_crop_on_a_scaled_desktop_maps_to_device_pixels():
+    from mage.workers import CaptureWorker
+
+    desktop = QRect(0, 0, 1800, 1125)
+    mark = QRect(300, 200, 100, 50)
+    png = _scaled_desktop_png(desktop, 1.6, mark)
+
+    worker = CaptureWorker("dialogue", [mark], desktop)
+    results = []
+    worker.capture_done.connect(lambda img, rect: results.append(img))
+    worker.error.connect(lambda msg: pytest.fail(msg))
+    with patch.object(ScreenCapture, "capture_region", return_value=(png, False)):
+        worker.run()
+
+    (img,) = results
+    assert img.size == (160, 80)
+    colours = img.getcolors()
+    assert colours == [(160 * 80, (30, 200, 30))]

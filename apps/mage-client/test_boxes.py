@@ -23,11 +23,13 @@ import os
 import sys
 
 import pytest
-from PyQt6.QtCore import QRect, QSettings
+from PyQt6.QtCore import QObject, QRect, QSettings
 from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtTest import QTest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
+from shared_types.state import t  # noqa: E402
 from mage.ui.new.boxes import MAX_BOXES, BoxManager, BoxMode, BoxState, TranslationBox  # noqa: E402
 
 
@@ -310,6 +312,7 @@ class _FakeStream:
         self.parent = parent
         self.starts = starts
         self.stopped = False
+        self.waiting = False
         _FakeStream.opened.append(self)
 
     def start(self):
@@ -317,6 +320,10 @@ class _FakeStream:
 
     def stop(self):
         self.stopped = True
+
+    @property
+    def active(self):
+        return self.starts and not self.stopped
 
 
 @pytest.fixture
@@ -432,3 +439,144 @@ def test_changing_a_mode_tells_whoever_is_listing_the_boxes(manager):
     box.set_mode(BoxMode.IGNORE)
 
     assert seen
+
+
+# ── threading ────────────────────────────────────────────────────────
+
+def test_a_translation_recorded_off_the_gui_thread_reaches_the_shell_on_it(manager):
+    """The live worker records from the async engine's thread; the orb's log
+    is a widget, so the shell must only ever hear about it on the GUI thread."""
+    import threading
+
+    from PyQt6.QtCore import QThread
+
+    seen = []
+
+    class Shell:
+        def on_translation(self, original, translated):
+            seen.append((original, translated, QThread.currentThread()))
+
+    class Processor:
+        def record_event(self, *args):
+            pass
+
+    manager.app.processor = Processor()
+    manager.app._shell = Shell()
+
+    thread = threading.Thread(target=manager._record, args=("你好", "hello"))
+    thread.start()
+    thread.join()
+    assert seen == []  # queued, not called from the worker thread
+
+    QApplication.processEvents()
+    assert seen == [("你好", "hello", QApplication.instance().thread())]
+
+
+def test_a_session_that_failed_after_starting_is_asked_for_again(manager, fake_streams):
+    """A declined share prompt leaves a dead session; reusing it reads nothing."""
+    first = manager._stream_for(QRect(0, 0, 400, 300))
+    first.stopped = True  # what a portal refusal leaves behind
+
+    second = manager._stream_for(QRect(0, 0, 400, 300))
+
+    assert second is not first
+    assert len(fake_streams.opened) == 2
+
+
+class _FakeOnceWorker(QObject):
+    from PyQt6.QtCore import pyqtSignal as _signal
+
+    regions_ready = _signal(object, object, float)
+    nothing_read = _signal()
+    error = _signal(str)
+
+    def start(self):
+        pass
+
+    def stop(self):
+        self.stopped = True
+
+    def requestInterruption(self):
+        pass
+
+    def wait(self, ms):
+        return True
+
+
+def _run_once(manager, monkeypatch, *, prompting=False):
+    from mage.ui.new import boxes
+
+    screen = _FakeScreen("DP-1")
+    monkeypatch.setattr("mage.capture.stream.screen_for_rect", lambda rect: screen)
+    monkeypatch.setattr("mage.capture.stream.FrameStream", _FakeStream)
+    manager._stream_for(QRect(0, 0, 400, 300)).waiting = prompting
+    monkeypatch.setattr(boxes, "ONCE_PROMPT_SETTLE_MS", 50)
+    worker = _FakeOnceWorker()
+    overlay = QWidget()
+    monkeypatch.setattr(manager, "_build_worker_for_rect", lambda rect, settle_now: (worker, overlay))
+    monkeypatch.setattr(boxes, "ONCE_STREAM_GRACE_MS", 60_000)
+    notices, finished = [], []
+    monkeypatch.setattr(manager, "_notify", notices.append)
+    manager.once_finished.connect(lambda: finished.append(True))
+    manager.translate_once(QRect(0, 0, 400, 300), hold_ms=60_000)
+    return worker, notices, finished
+
+
+def test_a_one_off_that_reads_nothing_finishes_and_says_so(manager, monkeypatch):
+    """It used to wait forever, the orb reading, with nothing on screen."""
+    worker, notices, finished = _run_once(manager, monkeypatch)
+
+    worker.nothing_read.emit()
+    QApplication.processEvents()
+
+    assert manager._workers == {}
+    assert finished == [True]
+    assert notices == [t("newui.once.no_text")]
+
+
+def test_a_first_empty_read_after_the_share_prompt_is_not_the_answer(manager, monkeypatch):
+    """Picking a screen in KDE's prompt, then a blank first frame, said "no text"."""
+    worker, notices, finished = _run_once(manager, monkeypatch, prompting=True)
+
+    worker.nothing_read.emit()
+    worker.nothing_read.emit()  # the prompt still closing over the area
+    QApplication.processEvents()
+    assert finished == [] and notices == []
+
+    worker.regions_ready.emit([], QRect(), 1.0)
+    QApplication.processEvents()
+    assert finished == [True]
+    assert notices == []
+
+
+def test_after_the_share_prompt_an_empty_area_still_says_so(manager, monkeypatch):
+    worker, notices, finished = _run_once(manager, monkeypatch, prompting=True)
+
+    worker.nothing_read.emit()
+    QTest.qWait(150)
+
+    assert finished == [True]
+    assert notices == [t("newui.once.no_text")]
+
+
+def test_a_one_off_that_translates_finishes_once(manager, monkeypatch):
+    worker, notices, finished = _run_once(manager, monkeypatch)
+
+    worker.regions_ready.emit([], QRect(), 1.0)
+    worker.nothing_read.emit()  # a late signal from the same pass
+    QApplication.processEvents()
+
+    assert finished == [True]
+    assert notices == []
+
+
+def test_a_one_off_keeps_its_capture_session_for_the_next(manager, monkeypatch, fake_streams):
+    """On Wayland each new session is another share-your-screen prompt."""
+    stream = manager._stream_for(QRect(0, 0, 400, 300))
+    worker, _notices, _finished = _run_once(manager, monkeypatch)
+
+    worker.regions_ready.emit([], QRect(), 1.0)
+    QApplication.processEvents()
+
+    assert stream.stopped is False
+    assert manager._stream_for(QRect(0, 0, 400, 300)) is stream

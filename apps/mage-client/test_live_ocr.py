@@ -28,7 +28,7 @@ import sys
 
 import numpy as np
 from PIL import Image
-from PyQt6.QtCore import QRect
+from PyQt6.QtCore import QRect, QThread
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
@@ -89,6 +89,7 @@ class Worker(LiveOcrWorker):
     """_translate_frame without a QThread or an event loop of its own."""
 
     def __init__(self, engine, translator, *, text_filter=None, gate=None, excludes=()):
+        QThread.__init__(self)  # for the signals; nothing is started
         self.source_lang = "Chinese"
         self.target_lang = "English"
         self._engine = engine
@@ -156,6 +157,15 @@ def test_an_empty_read_translates_nothing():
 
     assert run(Worker(FakeEngine([]), translator)) is None
     assert translator.calls == []
+
+
+def test_an_empty_read_says_so():
+    """A one-off finishes on this; without it, an empty read waited forever."""
+    worker = Worker(FakeEngine([]), FakeTranslator())
+    heard = []
+    worker.nothing_read.connect(lambda: heard.append(True))
+    run(worker)
+    assert heard == [True]
 
 
 # ── the gate ─────────────────────────────────────────────────────────
@@ -397,3 +407,61 @@ def test_readiness_checks_the_recognizer_for_the_chosen_language(monkeypatch):
     live_engine.ocr_models_ready(_FakeSettings({KEY_SOURCE_LANG: "Korean"}))
 
     assert any("korean" in model_id for model_id in asked), asked
+
+
+# ── one-shot capture ─────────────────────────────────────────────────
+
+class _GlossaryProcessor:
+    async def load_glossary_from_wiki(self):
+        return {"锁": "lock"}
+
+
+def _oneshot(engine, translator, image=None):
+    from mage.workers import OcrInferenceWorker
+
+    return OcrInferenceWorker(
+        _GlossaryProcessor(),
+        image_data=image if image is not None else frame(),
+        engine=engine,
+        translator=translator,
+        source_lang="Chinese",
+        target_lang="English",
+        text_filter=TextFilter(),
+    )
+
+
+def test_a_one_shot_capture_reads_locally_and_translates_each_block():
+    translator = FakeTranslator()
+    engine = FakeEngine([_line(10, 10, 200, 24, "这扇门被锁住了")])
+
+    results = asyncio.run(_oneshot(engine, translator)._read_and_translate())
+
+    assert engine.language == "Chinese"
+    assert translator.calls == [["这扇门被锁住了"]]
+    (result,) = results
+    assert result.original_text == "这扇门被锁住了"
+    assert result.translated_text == "<这扇门被锁住了>"
+    assert (result.x, result.y, result.width, result.height) == (10, 10, 200, 24)
+    assert result.confidence == 0.95
+    # The wiki glossary reaches the translator, as it does for live boxes.
+    assert translator.glossary == {"锁": "lock"}
+
+
+def test_a_one_shot_capture_with_no_text_translates_nothing():
+    translator = FakeTranslator()
+    assert asyncio.run(_oneshot(FakeEngine([]), translator)._read_and_translate()) == []
+    assert translator.calls == []
+
+
+def test_a_one_shot_capture_accepts_encoded_bytes():
+    """The lens hands over PNG bytes; the dialogue re-capture a PIL image."""
+    import io
+
+    buffer = io.BytesIO()
+    frame().save(buffer, "PNG")
+    translator = FakeTranslator()
+    engine = FakeEngine([_line(10, 10, 200, 24, "你好")])
+
+    results = asyncio.run(_oneshot(engine, translator, buffer.getvalue())._read_and_translate())
+
+    assert [r.translated_text for r in results] == ["<你好>"]

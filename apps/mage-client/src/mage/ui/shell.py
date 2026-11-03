@@ -99,6 +99,7 @@ class NewShell(Shell):
         self.panel.box_removed.connect(self._remove_box_by_id)
         self.panel.boxes_cleared.connect(self.boxes.clear)
         self.boxes.boxes_changed.connect(self._refresh_boxes)
+        self.boxes.once_finished.connect(lambda: self.orb.set_state(self._OrbState.IDLE))
 
         self.boxes.load()
         self.boxes.start_all()

@@ -295,6 +295,98 @@ class InferenceWorker(QThread):
             self.error.emit(str(e))
 
 
+class OcrInferenceWorker(QThread):
+    """One capture, read locally with PP-OCRv5 and translated with Hy-MT2.
+
+    The one-shot counterpart of :class:`mage.live_ocr.LiveOcrWorker`, used
+    when the OCR engine is selected: the same reader and the same translator,
+    so a region translated once reads the same as one watched live, and
+    neither needs the vision model.
+
+    Emits the same signals as :class:`InferenceWorker`, so the bubbles that
+    show a translation do not care which engine produced it.  There is no
+    stream: a line translator answers in one piece, so ``translation_partial``
+    never fires.
+    """
+
+    translation_done = pyqtSignal(list, str)
+    translation_partial = pyqtSignal(str, str)
+    thinking = pyqtSignal()
+    error = pyqtSignal(str)
+
+    def __init__(self, processor, *, image_data, engine, translator,
+                 source_lang: str = "Chinese", target_lang: str = "English",
+                 text_filter=None, action: str = "translate",
+                 anchor_rect: QRect = None, timeout: float = 120.0):
+        super().__init__()
+        self.processor = processor
+        self.image_data = image_data
+        self.engine = engine
+        self.translator = translator
+        self.source_lang = source_lang
+        self.target_lang = target_lang
+        self.text_filter = text_filter
+        self.action = action
+        self.anchor_rect = anchor_rect or QRect()
+        self.timeout = timeout
+
+    def _frame(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        if isinstance(self.image_data, Image.Image):
+            return self.image_data
+        return Image.open(BytesIO(self.image_data))
+
+    async def _read_and_translate(self) -> list:
+        from mage.live_ocr import read_blocks
+        from shared_types.models import TranslationResult
+
+        blocks = await read_blocks(self.engine, self._frame(), self.source_lang, self.text_filter)
+        if not blocks:
+            return []
+
+        if not self.translator.glossary:
+            try:
+                self.translator.glossary = await self.processor.load_glossary_from_wiki()
+            except Exception:
+                pass
+
+        texts = [block.text for block in blocks]
+        translations = await self.translator.translate_lines(texts, self.source_lang, self.target_lang)
+
+        results = []
+        for block, text, translation in zip(blocks, texts, translations):
+            left, top, right, bottom = block.box
+            results.append(TranslationResult(
+                translated_text=translation,
+                original_text=text,
+                x=left, y=top, width=right - left, height=bottom - top,
+                confidence=block.confidence,
+            ))
+        return results
+
+    def run(self):
+        self.thinking.emit()
+        future = self.processor.engine.submit(self._read_and_translate())
+        deadline = time.monotonic() + self.timeout
+        try:
+            while not future.done():
+                if self.isInterruptionRequested():
+                    future.cancel()
+                    logger.info("OcrInferenceWorker cancelled by user")
+                    return
+                if time.monotonic() > deadline:
+                    future.cancel()
+                    raise TimeoutError(f"OCR translation timed out after {self.timeout:.0f}s")
+                self.msleep(50)
+            self.translation_done.emit(future.result(), self.action)
+        except Exception as e:
+            logger.error("OcrInferenceWorker error: %s", e)
+            self.error.emit(str(e))
+
+
 class ContinueWorker(QThread):
     """Continue a truncated VLM generation by replaying partial output."""
 
@@ -961,16 +1053,19 @@ class PrewarmWorker(QThread):
 
     def run(self):
         if hasattr(self.processor, "prewarm_model"):
+            from shared_types.state import t
+
             target_model = getattr(self.processor.config, "model_name", "default")
-            self.status_changed.emit(f"Pre-warming/downloading model '{target_model}' on Lemonade server...")
-            
+            self.status_changed.emit(t("prewarm.status.loading").format(model=target_model))
+
             future = self.processor.engine.submit(self.processor.prewarm_model())
             try:
-                future.result(timeout=600)
-                self.status_changed.emit(f"Model '{target_model}' is active and ready.")
+                loaded = future.result(timeout=600)
+                key = "prewarm.status.ready" if loaded else "prewarm.status.skipped"
+                self.status_changed.emit(t(key).format(model=target_model))
             except Exception as e:
                 logger.warning("PrewarmWorker error: %s", e)
-                self.status_changed.emit(f"Failed to pre-warm model: {e}")
+                self.status_changed.emit(t("prewarm.status.failed").format(error=e))
 
 
 class CaptureWorker(QThread):
@@ -991,6 +1086,7 @@ class CaptureWorker(QThread):
 
     def run(self):
         from mage.capture.screen import ScreenCapture
+        from mage.capture.stream import map_region_to_frame
         from mage.utils.images import qimage_to_pil
         from PyQt6.QtGui import QImage, QPainter
 
@@ -1008,9 +1104,11 @@ class CaptureWorker(QThread):
                     return
 
                 if not already_cropped:
-                    safe_rect = rect.translated(-self.total_geo.left(), -self.total_geo.top())
-                    safe_rect = safe_rect.intersected(img.rect())
-                    img = img.copy(safe_rect)
+                    frame_rect = map_region_to_frame(rect, self.total_geo, (img.width(), img.height()))
+                    if frame_rect is None:
+                        self.error.emit("Selected region is off screen")
+                        return
+                    img = img.copy(frame_rect)
 
                 self.capture_done.emit(qimage_to_pil(img), rect)
                 return
@@ -1026,20 +1124,29 @@ class CaptureWorker(QThread):
                 return
 
             if self.mode == "cinematic":
-                total_height = sum(r.height() for r in self.rects)
-                max_width = max(r.width() for r in self.rects)
+                # Crop first and size the composite from the crops: they are in
+                # the frame's device pixels, not the rects' logical ones.
+                frame_size = (img.width(), img.height())
+                crops = []
+                for r in self.rects:
+                    frame_rect = map_region_to_frame(r, self.total_geo, frame_size)
+                    if frame_rect is not None:
+                        crops.append(img.copy(frame_rect))
+                if not crops:
+                    self.error.emit("Selected regions are off screen")
+                    return
+
+                total_height = sum(c.height() for c in crops)
+                max_width = max(c.width() for c in crops)
 
                 composite = QImage(max_width, total_height, QImage.Format.Format_RGB32)
                 composite.fill(0)  # fills with black
 
                 painter = QPainter(composite)
                 y_offset = 0
-                for r in self.rects:
-                    safe_rect = r.translated(-self.total_geo.left(), -self.total_geo.top())
-                    safe_rect = safe_rect.intersected(img.rect())
-                    cropped = img.copy(safe_rect)
+                for cropped in crops:
                     painter.drawImage(0, y_offset, cropped)
-                    y_offset += r.height()
+                    y_offset += cropped.height()
                 painter.end()
 
                 anchor_rect = self.rects[-1] if self.rects else QRect()

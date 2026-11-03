@@ -51,6 +51,15 @@ from shared_types.state import t
 
 logger = logging.getLogger(__name__)
 
+#: How long a capture session outlives the one-off that opened it.
+ONCE_STREAM_GRACE_MS = 120_000
+
+#: How long a one-off that waited on the share prompt keeps reading after an
+#: empty first read.  The first frames after the user picks a screen can be
+#: blank, or still show the prompt closing over the area; the reader re-reads
+#: as soon as the frame changes, so this is only how long "no text" waits.
+ONCE_PROMPT_SETTLE_MS = 2500
+
 __all__ = ["BoxManager", "BoxMode", "BoxState", "TranslationBox", "MAX_BOXES"]
 
 #: RST allows five saved areas and nobody has ever asked for a sixth.  The cap
@@ -314,10 +323,16 @@ class BoxManager(QObject):
     """
 
     boxes_changed = pyqtSignal()
+    #: A one-off translation has finished, whatever its outcome.
+    once_finished = pyqtSignal()
+    #: (original, translated), emitted from the worker's thread so the orb's
+    #: log is written on the GUI thread, where its widgets live.
+    translated = pyqtSignal(str, str)
 
     def __init__(self, app, parent=None):
         super().__init__(parent)
         self.app = app
+        self.translated.connect(self._show_translation)
         self.boxes: list[TranslationBox] = []
         self._workers: dict[str, object] = {}
         self._overlays: dict[str, object] = {}
@@ -365,6 +380,12 @@ class BoxManager(QObject):
         if screen is None:
             return None
         name = screen.name()
+        existing = self._streams.get(name)
+        if existing is not None and not existing.active:
+            # It started and then failed — on Wayland, most often the share
+            # prompt was declined.  Asking again is the only way to recover.
+            existing.stop()
+            del self._streams[name]
         if name not in self._streams:
             stream = FrameStream(screen, parent=self)
             self._streams[name] = stream if stream.start() else None
@@ -572,8 +593,16 @@ class BoxManager(QObject):
             shell.on_error(message)
 
     def _record(self, original: str, translated: str) -> None:
-        """Into session memory, and into the orb's log if there is one."""
+        """Into session memory, and into the orb's log if there is one.
+
+        Called on the async engine's thread, not the GUI thread: the session
+        store is fine with that, but the orb's panel is a widget and must only
+        be touched through the queued signal.
+        """
         self.app.processor.record_event("inpaint", original, translated)
+        self.translated.emit(original, translated)
+
+    def _show_translation(self, original: str, translated: str) -> None:
         shell = getattr(self.app, "_shell", None)
         if shell is not None:
             shell.on_translation(original, translated)
@@ -680,22 +709,57 @@ class BoxManager(QObject):
 
         self._workers[key] = worker
         self._overlays[key] = overlay
+        # Asked now, before the worker starts: a session still waiting on the
+        # share prompt is one whose first frame should not be trusted.
+        stream = self._stream_for(rect)
+        prompted = stream is not None and stream.waiting
+        settling = [False]
 
         def finish(*_args):
             existing = self._workers.pop(key, None)
-            if existing is not None:
-                existing.stop()
-                existing.requestInterruption()
-                if not existing.wait(2000):
-                    existing.finished.connect(existing.deleteLater)
-            self._release_streams_if_idle()
+            if existing is None:
+                return  # already finished by another signal
+            existing.stop()
+            existing.requestInterruption()
+            if not existing.wait(2000):
+                existing.finished.connect(existing.deleteLater)
+            # Held open for a while rather than closed now: on Wayland every
+            # new session asks the user to share their screen again, and a
+            # one-off is rarely the last.
+            QTimer.singleShot(ONCE_STREAM_GRACE_MS, self._release_streams_if_idle)
             # The overlay outlives its reader so the translation stays on
             # screen long enough to be read, then goes on its own.
             QTimer.singleShot(hold_ms, lambda: self._dismiss_once(key))
+            self.once_finished.emit()
+
+        def nothing_read():
+            if key not in self._workers:
+                return
+            if settling[0]:
+                return  # still inside the window; it decides
+            if prompted:
+                # Let the reader see a few more frames; a read with text
+                # finishes it before the window closes.
+                settling[0] = True
+                QTimer.singleShot(ONCE_PROMPT_SETTLE_MS, settled)
+                return
+            finish()
+            self._notify(t("newui.once.no_text"))
+
+        def settled():
+            if key in self._workers:
+                finish()
+                self._notify(t("newui.once.no_text"))
 
         worker.regions_ready.connect(lambda *_a: QTimer.singleShot(0, finish))
+        worker.nothing_read.connect(lambda: QTimer.singleShot(0, nothing_read))
         worker.error.connect(lambda _m: QTimer.singleShot(0, finish))
         worker.start()
+
+    def _notify(self, message: str) -> None:
+        shell = getattr(self.app, "_shell", None)
+        if shell is not None:
+            shell.on_error(message)
 
     def _dismiss_once(self, key: str) -> None:
         overlay = self._overlays.pop(key, None)

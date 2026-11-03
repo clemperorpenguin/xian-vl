@@ -543,6 +543,22 @@
     "value": "Xian-VL — Lens & Chat Assistant",
     "context": "System tray icon tooltip"
   },
+  "prewarm.status.loading": {
+    "value": "Loading model '{model}' on the Lemonade server...",
+    "context": "Tray notification at startup while the AI model is loaded into memory; {model} is the model's name"
+  },
+  "prewarm.status.ready": {
+    "value": "Model '{model}' is loaded and ready.",
+    "context": "Tray notification when the AI model finished loading; {model} is the model's name"
+  },
+  "prewarm.status.skipped": {
+    "value": "Model '{model}' is not installed, so it was not loaded. Local OCR translation still works.",
+    "context": "Tray notification when the configured AI model is missing from the server; {model} is the model's name"
+  },
+  "prewarm.status.failed": {
+    "value": "Could not load the model: {error}",
+    "context": "Tray notification when loading the AI model failed; {error} is the technical reason"
+  },
   "tray.message.setup_title": {
     "value": "MAGE Setup",
     "context": "Title of system tray notifications for MAGE pre-warming and model status"
@@ -687,6 +703,10 @@
     "value": "⏳ The model is still loading — please wait a moment and try again.",
     "context": "Shown when a translation is attempted before the model has finished loading"
   },
+  "model.not_installed": {
+    "value": "⚠ {model} is not installed, so this may not work. Pick a model collection in Settings to download it.",
+    "context": "Shown once when a feature needs the configured AI model and the server does not have it; {model} is the model's name"
+  },
   "model_choice.title": {
     "value": "Xian — Choose your models",
     "context": "Window title for the first-run model download picker"
@@ -790,6 +810,10 @@
   "settings.tooltip.ignore_phrases": {
     "value": "One phrase per line. Text containing a phrase is ignored, so a permanent label such as a clock or a health bar never counts as the screen changing. Prefix a line with exact: to match the whole line, or regex: for a pattern.",
     "context": "Tooltip explaining the ignore-phrases list and its optional exact: and regex: prefixes"
+  },
+  "newui.once.no_text": {
+    "value": "No text found in that area.",
+    "context": "Shown when the user asked to translate a screen area once and no text could be read in it"
   },
   "newui.box.mode.live": {
     "value": "Live",

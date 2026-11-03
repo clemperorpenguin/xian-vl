@@ -1620,8 +1620,12 @@ class VLProcessor:
 
         return [result]
 
-    async def prewarm_model(self) -> None:
-        """Pre-load the target model into Lemonade Server VRAM."""
+    async def prewarm_model(self) -> bool:
+        """Pre-load the target model into Lemonade Server VRAM.
+
+        Returns whether a model was actually loaded, so the caller can tell
+        the user something true: a skipped or failed pre-warm is not "ready".
+        """
         await self.init_engine()
         
         # Discover models
@@ -1641,7 +1645,7 @@ class VLProcessor:
 
         if not model_to_load:
             logger.info("No LLM model resolved for virtual routing. Skipping prewarming.")
-            return
+            return False
 
         base_url = os.environ.get("LEMONADE_API_URL", self.config.api_url)
         base_url_no_v1 = base_url.removesuffix("/v1")
@@ -1675,7 +1679,7 @@ class VLProcessor:
                             "Pulled models: %s. Skipping VRAM pre-warming.",
                             model_to_load, pulled_ids
                         )
-                    return
+                    return False
 
                 logger.info("Pre-warming model '%s' (is_omni=%s) in Lemonade Server...", model_to_load, is_omni)
                 try:
@@ -1690,8 +1694,11 @@ class VLProcessor:
                         )
                     else:
                         logger.warning("Failed to load omni model '%s': %s", model_to_load, load_err)
+                        return False
+                return True
         except Exception as e:
             logger.warning("VRAM Pre-warming failed: %s", e)
+            return False
 
     async def close(self):
         """Close the client properly."""

@@ -43,7 +43,7 @@ from xian.collections import (
     recommended_tier,
 )
 from xian.session_store import SessionStore
-from mage.workers import InferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker, ChatTranslationWorker, RaidWorker, voice_for_language
+from mage.workers import InferenceWorker, OcrInferenceWorker, StatusWorker, ModelPullWorker, CinematicWorker, PrewarmWorker, ContinueWorker, ChatTranslationWorker, RaidWorker, voice_for_language
 from mage.ui.lens import LensOverlayWindow, CinematicLensOverlay
 from mage.ui.chat_sidebar import ChatSidebar
 from mage.ui.how_to_say import HowToSayDialog
@@ -95,6 +95,16 @@ class XianApp(QWidget):
 
         self.settings = QSettings(ORGANIZATION, APP_NAME)
         state.load_locale(self.settings.value(KEY_UI_LANG, "en"))
+
+        # Whether the user asked, this run, for the configured model to be
+        # downloaded: a first-run choice, or a new tier picked in Settings.
+        # Only then does the health check pull it.  Set before the first-run
+        # dialog, which is one of the two places that asks.
+        self._model_pull_requested = False
+        # The configured model, when the server does not have it; the first
+        # feature that needs it says so once.
+        self._missing_model: str | None = None
+        self._missing_model_noted = False
 
         self._seed_collection_tier()
         self._available_models: list = []
@@ -180,7 +190,6 @@ class XianApp(QWidget):
         self._overlays_hidden = False
         # Throttle for the periodic "stay on top" re-assert in the tracking loop.
         self._last_promote_ts = 0.0
-        self._model_pull_attempted: bool = False
 
         self._setup_tray()
 
@@ -313,6 +322,7 @@ class XianApp(QWidget):
         if tier is not None:
             self.settings.setValue(KEY_COLLECTION_TIER, tier)
         self.settings.setValue(KEY_API_MODEL, model)
+        self._model_pull_requested = True
         self.settings.setValue(KEY_EXPERIMENTAL_LIVE, live_enabled)
         # Only the settings are written: this runs before ``self.processor``
         # exists, and the processor is constructed from KEY_API_MODEL on the
@@ -422,7 +432,7 @@ class XianApp(QWidget):
 
     def start_live_lens(self, rect: QRect):
         """Continuously translate a region, painting over the original text."""
-        if not self._ensure_model_ready():
+        if not self._uses_local_ocr() and not self._ensure_model_ready():
             return
         self.stop_live_lens()
 
@@ -653,7 +663,19 @@ class XianApp(QWidget):
 
     def _ensure_model_ready(self) -> bool:
         """Guard for translation operations. If the model is still pre-warming,
-        show a friendly bubble and return False so the caller aborts."""
+        show a friendly bubble and return False so the caller aborts.
+
+        Also where a missing model is first mentioned to the user. Every caller
+        is a feature that uses the configured model, and that is the moment it
+        matters. It does not block: the router may still find another
+        installed model that can do the job.
+        """
+        if self._missing_model and not self._missing_model_noted:
+            self._missing_model_noted = True
+            self._add_bubble(ResultBubble(
+                t("model.not_installed").format(model=self._missing_model),
+                auto_close_ms=8000,
+            ))
         if getattr(self, "_model_warmup_complete", False):
             return True
         bubble = ResultBubble(t("model.loading"), auto_close_ms=4000)
@@ -713,8 +735,13 @@ class XianApp(QWidget):
         msg.exec()
 
     def show_lens(self):
-        """Capture the screen and open the Lens overlay."""
-        if not self._ensure_model_ready():
+        """Capture the screen and open the Lens overlay.
+
+        Gated on the vision model only when it will be the one reading: the
+        OCR engine reads and translates without it, and every action that
+        does need it is gated again when it runs.
+        """
+        if not self._uses_local_ocr() and not self._ensure_model_ready():
             return
         logger.info("Opening Lens overlay")
         # Close any existing lens
@@ -795,29 +822,76 @@ class XianApp(QWidget):
 
         logger.warning("Unknown lens action: %s", action)
 
+    #: Actions the OCR engine can serve: they need the text and its
+    #: translation, nothing more.  "explain" needs a model that can reason
+    #: about what it reads, so it always goes to the vision model.
+    _OCR_ACTIONS = ("translate", "dictionary")
+
+    def _ocr_engine(self):
+        """The OCR engine one-shot captures read with.
+
+        The boxes' engine when there is one, so a capture taken while boxes
+        are running does not load a second copy of the same models.
+        """
+        boxes = getattr(getattr(self, "_shell", None), "boxes", None)
+        if boxes is not None and hasattr(boxes, "engine"):
+            return boxes.engine()
+        if getattr(self, "_oneshot_ocr_engine", None) is None:
+            from xian.ocr import PaddleOcrEngine
+
+            detector = self.settings.value(KEY_OCR_DETECTOR, "") or None
+            self._oneshot_ocr_engine = PaddleOcrEngine(
+                source_language=self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG),
+                **({"detector_model": detector} if detector else {}),
+            )
+        return self._oneshot_ocr_engine
+
+    def _uses_local_ocr(self) -> bool:
+        """Whether translation reads with local OCR rather than the vision model."""
+        from mage.live_engine import resolve_live_engine
+
+        return resolve_live_engine(self.settings) == LIVE_ENGINE_OCR
+
     def _run_inference(self, image_data, action: str, anchor_rect: QRect):
-        """Spawn an InferenceWorker for the given image crop.
+        """Spawn a worker to translate the given image crop.
 
         ``image_data`` is either encoded bytes (lens/chat paths) or an already
-        decoded PIL image (capture worker path).
+        decoded PIL image (capture worker path).  The live-engine setting picks
+        the reader: local OCR plus Hy-MT2, or the vision model.
         """
-        if not self._ensure_model_ready():
-            return
         source_lang = self.settings.value(KEY_SOURCE_LANG, constants.DEFAULT_SOURCE_LANG)
         target_lang = self.settings.value(KEY_TARGET_LANG, constants.DEFAULT_TARGET_LANG)
-        mode = self.settings.value(KEY_MODE, constants.DEFAULT_MODE)
-        styles = parse_styles(self.settings)
 
-        worker = InferenceWorker(
-            self.processor,
-            image_data=image_data,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            mode=mode,
-            styles=styles,
-            action=action,
-            anchor_rect=anchor_rect,
-        )
+        if action in self._OCR_ACTIONS and self._uses_local_ocr():
+            # No warm-up gate: that waits on the vision model, which this path
+            # never calls.  Hy-MT2 is small enough to load on first request.
+            from mage.translation import make_translator
+            from xian.filters import TextFilter
+
+            worker = OcrInferenceWorker(
+                self.processor,
+                image_data=image_data,
+                engine=self._ocr_engine(),
+                translator=make_translator(self.settings, self.processor),
+                source_lang=source_lang,
+                target_lang=target_lang,
+                text_filter=TextFilter.from_settings(self.settings.value(KEY_IGNORE_PHRASES, "")),
+                action=action,
+                anchor_rect=anchor_rect,
+            )
+        else:
+            if not self._ensure_model_ready():
+                return
+            worker = InferenceWorker(
+                self.processor,
+                image_data=image_data,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                mode=self.settings.value(KEY_MODE, constants.DEFAULT_MODE),
+                styles=parse_styles(self.settings),
+                action=action,
+                anchor_rect=anchor_rect,
+            )
 
         worker.thinking.connect(
             lambda w=worker: self._on_inference_thinking(w)
@@ -835,7 +909,7 @@ class XianApp(QWidget):
 
         self._workers.append(worker)
         worker.start()
-        logger.info("InferenceWorker started for action=%s", action)
+        logger.info("%s started for action=%s", type(worker).__name__, action)
 
     def _add_bubble(self, bubble: ResultBubble):
         """Clean up old bubbles, limit maximum tracked bubbles, and append new one."""
@@ -1732,12 +1806,27 @@ class XianApp(QWidget):
                     self.processor.config.model_name = omni_id
                     target_model = omni_id
 
-            # Ensure the default model is installed. A Xian collection needs its
-            # full registration body — it does not exist on the server by name
-            # until we send one (see xian.collections).
+            # Install the configured model, but only when the user just asked
+            # for it. A collection is tens of gigabytes, and the local OCR path
+            # does not use it at all, so a missing one is reported rather than
+            # fetched behind the user's back on every launch.
             all_downloaded = [m.get("id") for m in (raw_models or []) if m.get("downloaded", True)]
-            if target_model not in all_downloaded and not self._model_pull_attempted:
-                self._model_pull_attempted = True
+            if target_model in all_downloaded:
+                self._missing_model = None
+            elif not self._model_pull_requested:
+                if self._missing_model != target_model:
+                    logger.warning(
+                        "Model '%s' is not installed on the Lemonade server. Local OCR "
+                        "translation does not need it; pick a model collection in "
+                        "Settings to download it.",
+                        target_model,
+                    )
+                self._missing_model = target_model
+            else:
+                # A Xian collection needs its full registration body — it does
+                # not exist on the server by name until we send one (see
+                # xian.collections).
+                self._model_pull_requested = False
                 collection = collection_for_name(target_model)
                 if collection is not None:
                     logger.info(
@@ -1814,9 +1903,8 @@ class XianApp(QWidget):
                 backend_preference=self.processor.config.backend_preference,
             )
             if dlg.tier_changed:
-                # Let the health check install the newly chosen collection: the
-                # attempt latch is per-target, not per-session.
-                self._model_pull_attempted = False
+                # Picking a tier is asking for it: let the health check install it.
+                self._model_pull_requested = True
             # Re-run health check
             self._run_health_check()
 

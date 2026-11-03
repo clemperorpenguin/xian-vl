@@ -132,6 +132,12 @@ DEFAULT_INTERVAL_MS = 700
 #: Consecutive capture failures tolerated before giving up.
 MAX_CAPTURE_FAILURES = 5
 
+#: How long a capture session may take to deliver its first frame.  On
+#: Wayland that is the portal's "share your screen?" prompt, and the user is
+#: reading it; five failed ticks — three and a half seconds — gave up on the
+#: session while it was still waiting for them.
+FIRST_FRAME_TIMEOUT_SECONDS = 30.0
+
 #: Consecutive *identical* inference failures tolerated before giving up.
 #:
 #: A missing model, a model that will not load, a backend that is not running:
@@ -272,6 +278,9 @@ class LiveWorkerBase(QThread):
     regions_ready = pyqtSignal(object, object, float)  # (list[LiveRegion], QRect, scale)
     status = pyqtSignal(str)
     error = pyqtSignal(str)
+    #: A frame was read and held no text.  Live boxes ignore it — an empty
+    #: screen is a normal state — but a one-off is finished by it.
+    nothing_read = pyqtSignal()
 
     def __init__(
         self,
@@ -391,6 +400,7 @@ class LiveWorkerBase(QThread):
         failures = 0
         inflight = False
         self._reported_at = time.monotonic()
+        watching_since = self._reported_at
         logger.info(
             "%s watching %s every %d ms via %s",
             type(self).__name__,
@@ -405,6 +415,15 @@ class LiveWorkerBase(QThread):
             self._report(started)
 
             frame = await asyncio.to_thread(self._grab)
+            stream = self._frame_stream
+            if (
+                frame is None
+                and stream is not None
+                and stream.waiting
+                and time.monotonic() - watching_since < FIRST_FRAME_TIMEOUT_SECONDS
+            ):
+                await self._sleep_remainder(started, interval)
+                continue
             if frame is None:
                 failures += 1
                 if failures >= MAX_CAPTURE_FAILURES:
@@ -449,6 +468,8 @@ class LiveWorkerBase(QThread):
                 self._last_error = None
                 self._failures = 0
                 self._tally["translated"] += 1
+                if not regions:
+                    self.nothing_read.emit()
 
             if regions is None:
                 # The call failed. The carry is still valid for this frame, so

@@ -190,3 +190,81 @@ def test_the_worker_scales_against_the_served_region(monkeypatch):
 
     # 240 captured pixels across 120 logical ones is a 2× HiDPI screen.
     assert LiveLensWorker._capture_scale(worker, Image.new("RGB", (240, 160))) == 2.0
+
+
+def test_a_session_with_no_frame_yet_is_waiting():
+    stream = FrameStream()
+    stream._capture = object()  # open, as far as the reader can tell
+    assert stream.waiting is True
+
+    stream._failed = True
+    assert stream.waiting is False
+
+
+def test_frames_faster_than_anyone_reads_them_are_dropped(monkeypatch):
+    """The compositor sends 110 a second; each kept one is a full-screen copy."""
+    from PyQt6.QtGui import QImage
+
+    class _Frame:
+        conversions = 0
+
+        def isValid(self):
+            return True
+
+        def toImage(self):
+            _Frame.conversions += 1
+            return QImage(4, 4, QImage.Format.Format_RGB32)
+
+    clock = [100.0]
+    monkeypatch.setattr("mage.capture.stream.time.monotonic", lambda: clock[0])
+    stream = FrameStream()
+    for _ in range(10):
+        stream._on_frame(_Frame())
+        clock[0] += 0.009
+    assert _Frame.conversions == 2
+
+
+def test_the_live_worker_waits_out_the_share_prompt(monkeypatch):
+    """Five empty ticks used to end the worker while the user read the prompt."""
+    import asyncio
+
+    from PyQt6.QtGui import QImage
+
+    from mage.live_common import MAX_CAPTURE_FAILURES, LiveWorkerBase
+
+    class _PromptedStream:
+        def __init__(self, empty_grabs):
+            self.empty_grabs = empty_grabs
+
+        @property
+        def waiting(self):
+            return self.empty_grabs > 0
+
+        def grab_region(self, rect):
+            if self.empty_grabs > 0:
+                self.empty_grabs -= 1
+                return None
+            image = QImage(rect.width(), rect.height(), QImage.Format.Format_RGB32)
+            image.fill(0xFF336699)
+            return image, rect
+
+    class _Worker(LiveWorkerBase):
+        async def _translate_frame(self, frame):
+            self.read = True
+            self._running = False
+            return []
+
+    monkeypatch.setattr(
+        "mage.capture.screen.ScreenCapture.capture_region_image", staticmethod(lambda rect: (None, False))
+    )
+    worker = _Worker(None, QRect(0, 0, 64, 48), frame_stream=_PromptedStream(MAX_CAPTURE_FAILURES * 3))
+    worker.interval_ms = 1
+    errors, empties = [], []
+    worker.error.connect(errors.append)
+    worker.nothing_read.connect(lambda: empties.append(True))
+
+    asyncio.run(worker._run_async())
+
+    assert errors == []
+    assert getattr(worker, "read", False) is True
+    assert empties == [True]

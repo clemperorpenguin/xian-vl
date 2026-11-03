@@ -46,11 +46,17 @@ mutex.
 from __future__ import annotations
 
 import logging
+import time
 
 from PyQt6.QtCore import QMutex, QMutexLocker, QObject, QRect
 from PyQt6.QtGui import QGuiApplication, QImage, QScreen
 
 logger = logging.getLogger(__name__)
+
+#: The fastest a delivered frame is converted and kept.  The compositor sends
+#: frames at display rate — 110 a second on a laptop panel — and each one is a
+#: full-screen copy on the GUI thread; the fastest reader polls every 200 ms.
+MIN_FRAME_INTERVAL_SECONDS = 0.05
 
 __all__ = [
     "FrameStream",
@@ -170,6 +176,7 @@ class FrameStream(QObject):
         self._screen = screen or QGuiApplication.primaryScreen()
         self._mutex = QMutex()
         self._frame: QImage | None = None
+        self._frame_at = 0.0
         self._failed = False
         self._capture = None
         self._session = None
@@ -231,12 +238,29 @@ class FrameStream(QObject):
         """Whether the session is still expected to deliver frames."""
         return self._capture is not None and not self._failed
 
+    @property
+    def waiting(self) -> bool:
+        """Open, but no frame yet.
+
+        On Wayland this is the portal asking the user which screen to share,
+        which takes as long as the user takes.  A reader should wait it out
+        rather than count it as capture failing.
+        """
+        if not self.active:
+            return False
+        with QMutexLocker(self._mutex):
+            return self._frame is None
+
     # ── frame plumbing (GUI thread) ──────────────────────────────────
 
     def _on_frame(self, frame) -> None:
         """Keep the newest frame. Runs on the GUI thread."""
         if not frame.isValid():
             return
+        now = time.monotonic()
+        if now - self._frame_at < MIN_FRAME_INTERVAL_SECONDS:
+            return
+        self._frame_at = now
         image = frame.toImage()
         if image.isNull():
             return

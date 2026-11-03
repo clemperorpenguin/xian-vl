@@ -48,7 +48,35 @@ from mage.live_common import LiveWorkerBase
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["LiveOcrWorker"]
+__all__ = ["LiveOcrWorker", "read_blocks"]
+
+
+async def read_blocks(engine, frame: Image.Image, source_lang: str, text_filter=None) -> list:
+    """Read a frame into translation blocks, in reading order.
+
+    The reading half of the OCR engine, shared by the live worker and the
+    one-shot capture: detect and recognize off the event loop, drop what the
+    filter says to ignore, and group what is left into blocks.
+    """
+    from xian.ocr.grouping import group_lines
+    from xian.text_gate import is_cjk_text
+
+    engine.set_source_language(source_lang)
+
+    # BGR, because that is what OpenCV and the Paddle models expect; a
+    # channel swap here is much cheaper than the wrong colours everywhere.
+    image = np.asarray(frame.convert("RGB"))[:, :, ::-1]
+    lines = await asyncio.to_thread(engine.read, np.ascontiguousarray(image))
+    if text_filter is not None:
+        lines = text_filter.apply(lines)
+    if not lines:
+        return []
+
+    # Decided from what was read rather than from the language setting: a
+    # Chinese game still has English item names in it, and "auto" tells us
+    # nothing at all.
+    space_delimited = not any(is_cjk_text(line.text) for line in lines)
+    return group_lines(lines, space_delimited=space_delimited)
 
 
 class LiveOcrWorker(LiveWorkerBase):
@@ -160,26 +188,12 @@ class LiveOcrWorker(LiveWorkerBase):
         already handles correctly: it keeps carrying what is on screen.
         """
         from xian.grounding import TextRegion, suppress_overlapping_regions
-        from xian.ocr.grouping import group_lines
-        from xian.text_gate import is_cjk_text
 
-        engine = self._ensure_engine()
-        engine.set_source_language(self.source_lang)
-
-        # BGR, because that is what OpenCV and the Paddle models expect; a
-        # channel swap here is much cheaper than the wrong colours everywhere.
-        image = np.asarray(frame.convert("RGB"))[:, :, ::-1]
-        lines = await asyncio.to_thread(engine.read, np.ascontiguousarray(image))
-        lines = self._ensure_filter().apply(lines)
-        if not lines:
-            return None
-
-        # Decided from what was read rather than from the language setting: a
-        # Chinese game still has English item names in it, and "auto" tells us
-        # nothing at all.
-        space_delimited = not any(is_cjk_text(line.text) for line in lines)
-        blocks = group_lines(lines, space_delimited=space_delimited)
+        blocks = await read_blocks(
+            self._ensure_engine(), frame, self.source_lang, self._ensure_filter()
+        )
         if not blocks:
+            self.nothing_read.emit()
             return None
 
         texts = [block.text for block in blocks]

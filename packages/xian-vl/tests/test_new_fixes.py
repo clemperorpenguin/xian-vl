@@ -163,11 +163,11 @@ async def test_prewarm_model_collection(monkeypatch):
 
     # Registered, but its components are not all downloaded: skip.
     pulled = [{"id": "Qwen3.5-4B-MTP-GGUF"}]
-    await processor.prewarm_model()
+    assert await processor.prewarm_model() is False
     assert loaded_model_id is None
 
     # Fully downloaded: the collection loads by name, and the server cascades
     # the load across its components.
     pulled = [{"id": "LMX-Omni-5.5B-Lite"}, {"id": "Qwen3.5-4B-MTP-GGUF"}]
-    await processor.prewarm_model()
+    assert await processor.prewarm_model() is True
     assert loaded_model_id == "LMX-Omni-5.5B-Lite"

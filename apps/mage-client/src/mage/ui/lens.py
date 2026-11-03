@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton
 from PyQt6.QtCore import Qt, QRect, QPoint, QBuffer, QIODevice, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent, QPixmap, QImage
 from mage.capture.screen import ScreenCapture
+from mage.capture.stream import map_region_to_frame
 from mage.ui.theme import accent_hex, accent_qcolor
 from mage.utils.window_binder import keep_window_above
 from shared_types.state import t
@@ -144,11 +145,15 @@ class LensOverlayWindow(QWidget):
         
         # Crop the image
         if not self.pixmap.isNull():
-            # Ensure rect is within bounds
-            safe_rect = rect.translated(-self.total_geo.left(), -self.total_geo.top())
-            safe_rect = safe_rect.intersected(self.pixmap.rect())
-            
-            cropped_pixmap = self.pixmap.copy(safe_rect)
+            # The selection is in logical pixels; the screenshot is in device
+            # pixels (Spectacle and grim return the scaled-up buffer on HiDPI).
+            frame_rect = map_region_to_frame(
+                rect, self.total_geo, (self.pixmap.width(), self.pixmap.height())
+            )
+            if frame_rect is None:
+                self.close()
+                return
+            cropped_pixmap = self.pixmap.copy(frame_rect)
             
             # Save to bytes
             buffer = QBuffer()
@@ -209,7 +214,10 @@ class LensOverlayWindow(QWidget):
         painter = QPainter(self)
         
         if not self.pixmap.isNull():
-            painter.drawPixmap(0, 0, self.pixmap)
+            # Stretch to the window: on a scaled display the screenshot is
+            # larger than the window's logical size, and drawing it 1:1 shows
+            # only its top-left corner, magnified.
+            painter.drawPixmap(self.rect(), self.pixmap)
             
         # Dimming overlay
         dim_color = QColor(0, 0, 0, 150)
@@ -341,7 +349,10 @@ class CinematicLensOverlay(QWidget):
         painter = QPainter(self)
         
         if not self.pixmap.isNull():
-            painter.drawPixmap(0, 0, self.pixmap)
+            # Stretch to the window: on a scaled display the screenshot is
+            # larger than the window's logical size, and drawing it 1:1 shows
+            # only its top-left corner, magnified.
+            painter.drawPixmap(self.rect(), self.pixmap)
             
         dim_color = QColor(0, 0, 0, 150)
         painter.fillRect(self.rect(), dim_color)
